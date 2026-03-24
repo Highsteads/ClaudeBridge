@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<PluginConfig>
+    <!-- Anthropic Configuration -->
+    <Field id="anthropic_api_key" type="textfield" defaultValue="" secure="true"
+           tooltip="Required for Claude AI capabilities">
+        <Label>Anthropic API Key:</Label>
+    </Field>
+
+    <Field id="api_key_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
+        <Label>Enter your Anthropic API key to enable Claude AI. Get your API key from
+            https://console.anthropic.com/settings/keys
+        </Label>
+    </Field>
+
+    <Field id="separator1" type="separator"/>
+
+    <!-- Model Configuration -->
+    <Field id="large_model" type="menu" defaultValue="claude-sonnet-4-6">
+        <Label>Large Model:</Label>
+        <List>
+            <Option value="claude-sonnet-4-6">claude-sonnet-4-6 (Recommended)</Option>
+            <Option value="claude-opus-4-6">claude-opus-4-6 (Most Capable)</Option>
+        </List>
+    </Field>
+
+    <Field id="small_model" type="menu" defaultValue="claude-haiku-4-5-20251001">
+        <Label>Small Model:</Label>
+        <List>
+            <Option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (Fast)</Option>
+            <Option value="claude-sonnet-4-6">claude-sonnet-4-6</Option>
+        </List>
+    </Field>
+
+    <Field id="separator2" type="separator"/>
+
+    <!-- InfluxDB Configuration -->
+    <Field type="checkbox" id="enable_influxdb" defaultValue="false">
+        <Label>Enable InfluxDB Historical Data:</Label>
+        <Description>Enable access to historical device data stored in InfluxDB</Description>
+    </Field>
+
+    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_url"
+           defaultValue="http://localhost">
+        <Label>InfluxDB URL:</Label>
+        <Description>InfluxDB server URL (e.g., http://localhost or https://influxdb.example.com)</Description>
+    </Field>
+
+    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_port"
+           defaultValue="8086">
+        <Label>InfluxDB Port:</Label>
+        <Description>InfluxDB server port (default: 8086)</Description>
+    </Field>
+
+    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_login"
+           defaultValue="">
+        <Label>InfluxDB Username:</Label>
+        <Description>Username for InfluxDB authentication</Description>
+    </Field>
+
+    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_password"
+           defaultValue="" secure="true">
+        <Label>InfluxDB Password:</Label>
+        <Description>Password for InfluxDB authentication</Description>
+    </Field>
+
+    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_database"
+           defaultValue="indigo">
+        <Label>InfluxDB Database Name:</Label>
+        <Description>Name of the database containing historical data (default: indigo)</Description>
+    </Field>
+
+    <Field id="separator3" type="separator"/>
+
+    <!-- Debug Settings -->
+    <Field id="log_level" type="menu" defaultValue="20">
+        <Label>Event Logging Level:</Label>
+        <List>
+            <Option value="5">Extra Debugging Messages</Option>
+            <Option value="10">Debugging Messages</Option>
+            <Option value="20">Informational Messages</Option>
+            <Option value="30">Warning Messages</Option>
+            <Option value="40">Error Messages</Option>
+            <Option value="50">Critical Errors Only</Option>
+        </List>
+    </Field>
+
+    <Field id="separator4" type="separator"/>
+
+    <!-- Connection Testing -->
+    <Field id="test_connections_button" type="button">
+        <Label>Test Connections</Label>
+        <Title>Test All Connections</Title>
+        <CallbackMethod>test_connections_button</CallbackMethod>
+    </Field>
+
+    <Field id="connection_status_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
+        <Label>Click to test Anthropic API and InfluxDB connections with current configuration</Label>
+    </Field>
+</PluginConfig>

@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<Actions>
+    <!-- MCP Endpoint Action - Hidden from UI -->
+    <Action id="mcp" uiPath="hidden">
+        <Name>MCP Endpoint</Name>
+        <CallbackMethod>handle_mcp_endpoint</CallbackMethod>
+    </Action>
+</Actions>

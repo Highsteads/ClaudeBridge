@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<Devices>
+    <Device type="custom" id="mcpServer">
+        <Name>Claude Bridge</Name>
+        <ConfigUI>
+            <Field id="serverName" type="textfield" defaultValue="Claude Bridge">
+                <Label>Server Name:</Label>
+                <Description>Display name for this Claude Bridge instance</Description>
+            </Field>
+
+            <Field id="separator1" type="separator"/>
+
+            <Field id="iws_info" type="label" fontSize="small" alignWithControl="false" alignText="left">
+                <Label>Claude Bridge is accessible through Indigo's built-in web server.
+The endpoint URL is: /message/com.clives.indigoplugin.claudebridge/mcp/
+
+See README on GitHub for Claude Code proxy setup instructions.
+                </Label>
+            </Field>
+        </ConfigUI>
+        
+        <States>
+            <State id="serverStatus">
+                <ValueType>String</ValueType>
+                <TriggerLabel>Server Status</TriggerLabel>
+                <ControlPageLabel>Status</ControlPageLabel>
+            </State>
+
+            <State id="accessMode">
+                <ValueType>String</ValueType>
+                <TriggerLabel>Access Mode</TriggerLabel>
+                <ControlPageLabel>Access Mode</ControlPageLabel>
+            </State>
+            
+            <State id="lastActivity">
+                <ValueType>String</ValueType>
+                <TriggerLabel>Last Activity</TriggerLabel>
+                <ControlPageLabel>Last Activity</ControlPageLabel>
+            </State>
+        </States>
+    </Device>
+</Devices>
