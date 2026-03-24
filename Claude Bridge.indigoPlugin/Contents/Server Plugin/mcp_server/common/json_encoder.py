@@ -6,19 +6,23 @@ import json
 from datetime import datetime, date
 from typing import Any, Dict, List, Union
 
-# Keys to keep for minimal device representation
+# Keys to keep for slim device representation (fast search results)
 KEYS_TO_KEEP_MINIMAL_DEVICES = [
+    "id",
     "name",
     "class",
-    "id",
     "deviceTypeId",
     "description",
     "model",
+    "protocol",
+    "pluginId",
+    "address",
+    "enabled",
     "onState",
-    "onOffState",
     "brightness",
     "brightnessLevel",
-    "states"
+    "lastChanged",
+    "states",
 ]
 
 

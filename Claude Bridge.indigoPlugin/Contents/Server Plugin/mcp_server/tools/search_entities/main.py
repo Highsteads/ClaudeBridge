@@ -38,11 +38,12 @@ class SearchEntitiesHandler(BaseToolHandler):
         self.result_formatter = ResultFormatter()
     
     def search(
-        self, 
+        self,
         query: str,
         device_types: Optional[List[str]] = None,
         entity_types: Optional[List[str]] = None,
-        state_filter: Optional[Dict[str, Any]] = None
+        state_filter: Optional[Dict[str, Any]] = None,
+        detail: str = "slim"
     ) -> Dict[str, Any]:
         """
         Search for Indigo entities using natural language with optional filtering.
@@ -73,6 +74,10 @@ class SearchEntitiesHandler(BaseToolHandler):
                 similarity_threshold=search_params["threshold"]
             )
 
+            # Short-circuit: strong exact match — return only the top result
+            if raw_results and raw_results[0].get("_similarity_score", 0) >= 0.95:
+                raw_results = raw_results[:1]
+
             # Apply device type filtering if specified
             if device_types is not None and "devices" in search_params["entity_types"]:
                 raw_results = self._filter_devices_by_type(raw_results, device_types)
@@ -91,11 +96,14 @@ class SearchEntitiesHandler(BaseToolHandler):
             action_count = len(grouped_results.get("actions", []))
             self.info_log(f"\t✅ Found: {device_count} devices, {variable_count} variables, {action_count} actions")
 
+            # slim by default; full only when explicitly requested
+            use_minimal = (detail != "full")
+
             # Format results
             formatted_results = self.result_formatter.format_search_results(
                 grouped_results,
                 query,
-                minimal_fields=search_params["minimal_fields"],
+                minimal_fields=use_minimal,
                 search_metadata=search_metadata,
                 state_detected=search_params.get("state_detected", False)
             )

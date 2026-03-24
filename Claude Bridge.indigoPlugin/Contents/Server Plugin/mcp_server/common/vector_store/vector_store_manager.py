@@ -123,7 +123,7 @@ class VectorStoreManager:
             update_start = time.time()
 
             # Get all entity data
-            self.logger.info("\t📊 Vector store: synchronizing...")
+            self.logger.debug("\t📊 Vector store: synchronizing...")
             entities = self.data_provider.get_all_entities_for_vector_store()
 
             # Count entities
@@ -142,7 +142,7 @@ class VectorStoreManager:
             self._last_update_time = time.time()
             elapsed = self._last_update_time - update_start
 
-            self.logger.info(f"\t📊 Vector store: synchronized {total_entities} entities ({device_count} devices, {variable_count} variables, {action_count} actions) in {elapsed:.1f}s")
+            self.logger.debug(f"\t📊 Vector store: synchronized {total_entities} entities ({device_count} devices, {variable_count} variables, {action_count} actions) in {elapsed:.1f}s")
 
         except Exception as e:
             self.logger.error(f"\t❌ Vector store update failed: {e}")

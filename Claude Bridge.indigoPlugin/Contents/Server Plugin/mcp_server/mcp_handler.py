@@ -542,7 +542,7 @@ class MCPHandler:
         """Register all available tools."""
         # Search entities tool
         self._tools["search_entities"] = {
-            "description": "Search for Indigo entities using natural language",
+            "description": "Search for Indigo entities using natural language. Results are slim by default (id, name, state, lastChanged). Use detail='full' only when you need complete device properties such as Z-Wave config or plugin props.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -563,6 +563,11 @@ class MCPHandler:
                     "state_filter": {
                         "type": "object",
                         "description": "Optional state conditions to filter results"
+                    },
+                    "detail": {
+                        "type": "string",
+                        "enum": ["slim", "full"],
+                        "description": "Result detail level. 'slim' (default) returns id/name/state/lastChanged only — fast. 'full' returns complete device objects including all plugin and Z-Wave properties."
                     }
                 },
                 "required": ["query"]
@@ -636,6 +641,31 @@ class MCPHandler:
             "function": self._tool_device_set_brightness
         }
         
+        # Combined find + control tool (single round trip)
+        self._tools["device_control"] = {
+            "description": "Find a device by name and control it in one step — faster than search_entities + device_turn_on/off. Use this for all simple on/off/brightness commands.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Device name or description (e.g. 'conservatory lamp', 'hall light')"
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["turn_on", "turn_off", "toggle", "set_brightness"],
+                        "description": "Action to perform"
+                    },
+                    "brightness": {
+                        "type": "number",
+                        "description": "Brightness level 0-100 (required only for set_brightness)"
+                    }
+                },
+                "required": ["name", "action"]
+            },
+            "function": self._tool_device_control
+        }
+
         # Variable control
         self._tools["variable_update"] = {
             "description": "Update a variable's value",
@@ -796,7 +826,7 @@ class MCPHandler:
                 "type": "object",
                 "properties": {
                     "device_id": {
-                        "type": "number",
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "The device ID"
                     }
                 },
@@ -804,14 +834,14 @@ class MCPHandler:
             },
             "function": self._tool_get_device_by_id
         }
-        
+
         self._tools["get_variable_by_id"] = {
             "description": "Get a specific variable by ID",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "variable_id": {
-                        "type": "number",
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "The variable ID"
                     }
                 },
@@ -826,7 +856,7 @@ class MCPHandler:
                 "type": "object",
                 "properties": {
                     "action_group_id": {
-                        "type": "number",
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "The action group ID"
                     }
                 },
@@ -957,11 +987,12 @@ class MCPHandler:
     
     # Tool implementation methods
     def _tool_search_entities(
-        self, 
+        self,
         query: str,
         device_types: List[str] = None,
         entity_types: List[str] = None,
-        state_filter: Dict = None
+        state_filter: Dict = None,
+        detail: str = "slim"
     ) -> str:
         """Search entities tool implementation."""
         try:
@@ -1007,7 +1038,7 @@ class MCPHandler:
             )
             
             results = self.search_handler.search(
-                query, device_types, entity_types, state_filter
+                query, device_types, entity_types, state_filter, detail=detail
             )
             return safe_json_dumps(results)
             
@@ -1051,6 +1082,56 @@ class MCPHandler:
             self.logger.error(f"Device set brightness error: {e}")
             return safe_json_dumps({"error": str(e)})
     
+    def _tool_device_control(self, name: str, action: str, brightness: float = None) -> str:
+        """Find device by name and control it in one round trip."""
+        try:
+            t_start = time.perf_counter()
+            # Search for device by name
+            search_result = self.search_handler.search(
+                query=name,
+                entity_types=["devices"],
+                detail="slim"
+            )
+            devices = search_result.get("results", {}).get("devices", [])
+            if not devices:
+                return safe_json_dumps({"error": f"No device found matching '{name}'", "success": False})
+
+            top     = devices[0]
+            score   = top.get("relevance_score", 0)
+            if score < 0.5:
+                suggestions = [d["name"] for d in devices[:3]]
+                return safe_json_dumps({
+                    "error":       f"No confident match for '{name}' (best: '{top['name']}' score={score:.2f})",
+                    "success":     False,
+                    "suggestions": suggestions
+                })
+
+            device_id   = top["id"]
+            device_name = top["name"]
+
+            if action == "turn_on":
+                result = self.device_control_handler.turn_on(device_id)
+            elif action == "turn_off":
+                result = self.device_control_handler.turn_off(device_id)
+            elif action == "toggle":
+                on_state = top.get("onState", False)
+                result   = self.device_control_handler.turn_off(device_id) if on_state else self.device_control_handler.turn_on(device_id)
+            elif action == "set_brightness":
+                if brightness is None:
+                    return safe_json_dumps({"error": "brightness required for set_brightness", "success": False})
+                result = self.device_control_handler.set_brightness(device_id, brightness)
+            else:
+                return safe_json_dumps({"error": f"Unknown action: {action}", "success": False})
+
+            result["matched_device"] = device_name
+            result["match_score"]    = score
+            result["elapsed_ms"]     = round((time.perf_counter() - t_start) * 1000)
+            return safe_json_dumps(result)
+
+        except Exception as e:
+            self.logger.error(f"Device control error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
     def _tool_variable_update(self, variable_id: int, value: str) -> str:
         """Update variable tool implementation."""
         try:
@@ -1175,9 +1256,10 @@ class MCPHandler:
             self.logger.error(f"Get devices by state error: {e}")
             return safe_json_dumps({"error": str(e)})
     
-    def _tool_get_device_by_id(self, device_id: int) -> str:
+    def _tool_get_device_by_id(self, device_id) -> str:
         """Get device by ID tool implementation."""
         try:
+            device_id = int(device_id)
             device = self.data_provider.get_device(device_id)
             if device is None:
                 return safe_json_dumps({
@@ -1188,9 +1270,10 @@ class MCPHandler:
             self.logger.error(f"Get device by ID error: {e}")
             return safe_json_dumps({"error": str(e)})
     
-    def _tool_get_variable_by_id(self, variable_id: int) -> str:
+    def _tool_get_variable_by_id(self, variable_id) -> str:
         """Get variable by ID tool implementation."""
         try:
+            variable_id = int(variable_id)
             variable = self.data_provider.get_variable(variable_id)
             if variable is None:
                 return safe_json_dumps({
@@ -1201,9 +1284,10 @@ class MCPHandler:
             self.logger.error(f"Get variable by ID error: {e}")
             return safe_json_dumps({"error": str(e)})
     
-    def _tool_get_action_group_by_id(self, action_group_id: int) -> str:
+    def _tool_get_action_group_by_id(self, action_group_id) -> str:
         """Get action group by ID tool implementation."""
         try:
+            action_group_id = int(action_group_id)
             action = self.data_provider.get_action_group(action_group_id)
             if action is None:
                 return safe_json_dumps({

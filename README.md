@@ -7,14 +7,16 @@ Once installed, Claude can query device states, turn devices on and off, read an
 **Author:** CliveS & Claude Sonnet 4.6
 **Platform:** Indigo 2025.1, macOS, Python 3.11
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 1.0.3
+**Version:** 1.1.0
 
 ---
 
 ## Features
 
-- **22 MCP tools** — full read/write access to devices, variables, action groups, plugins, and event log
+- **23 MCP tools** — full read/write access to devices, variables, action groups, plugins, and event log
+- **`device_control` — single-call search + action** — find and control a device by name in one round trip (~1s)
 - **Natural language entity search** — find devices by description ("conservatory lamp", "bedroom sensor")
+- **Fast slim search** — returns lightweight results by default; use `detail="full"` only when deep config is needed
 - **Claude-powered** — uses Anthropic's Claude API directly; no OpenAI or third-party embedding services
 - **Local text search** — fast substring/fuzzy matching; no vector database required
 - **Session management** — persistent MCP sessions with per-session access control
@@ -163,6 +165,7 @@ The `indigo-mcp` tools will appear on next session start. You should see 22 tool
 | `get_plugin_by_id` | Get plugin details |
 | `get_plugin_status` | Check if a plugin is enabled/running |
 | `restart_plugin` | Restart an Indigo plugin |
+| `device_control` | Find device by name and turn on/off/toggle in one call |
 | `search_entities` | Natural language search across all entities |
 | `query_event_log` | Query the Indigo event log |
 | `analyze_historical_data` | Analyse historical device/variable data |
@@ -198,6 +201,10 @@ Indigo's web server uses HTTP Bearer token authentication. Claude Code's MCP cli
 **Device control says "expected number"**
 → Using old cached schema. Restart Claude Code to refresh tool definitions.
 
+**Plugin updates — when to restart Claude Code**
+→ Bug fixes to existing tools: restart Indigo plugin only, no Claude Code restart needed.
+→ New tools added: restart Claude Code once to pick up the updated tool list.
+
 ---
 
 ## Project Structure
@@ -231,6 +238,13 @@ README.md
 ---
 
 ## Changelog
+
+### 1.1.0 (2026-03-24)
+- Added `device_control` tool: find and control a device by name in a single MCP call (~1s vs ~5s)
+- Search results now slim by default (id, name, state, score only); use `detail="full"` for complete config
+- Fixed `get_device_by_id`, `get_variable_by_id`, `get_action_group_by_id` rejecting numeric IDs
+- Proxy: added `proxy_elapsed_ms` timing to all tool call responses
+- Reduced vector store sync log verbosity
 
 ### 1.0.3 (2026-03-24)
 - API key field can now be left blank if `secrets.py` provides `ANTHROPIC_API_KEY`

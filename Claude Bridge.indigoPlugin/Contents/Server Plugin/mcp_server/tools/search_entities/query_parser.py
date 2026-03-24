@@ -44,9 +44,9 @@ class QueryParser:
         params = {
             "entity_types": ["devices", "variables", "actions"],
             "device_types": device_types or [],
-            "top_k": 10,  # Reasonable default for most searches
+            "top_k": 3,   # Return top 3 by default; exact matches short-circuit to 1
             "threshold": 0.15,  # Lower threshold to capture more relevant results
-            "minimal_fields": False  # Full fields by default
+            "minimal_fields": True   # Slim by default for speed
         }
         
         # Convert to lowercase for analysis
