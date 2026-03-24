@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<!-- Menu items for the Claude Bridge plugin -->
+<MenuItems>
+    <MenuItem id="show_mcp_status">
+        <Name>Print MCP Client Connection Information</Name>
+        <CallbackMethod>show_mcp_client_info_menu</CallbackMethod>
+    </MenuItem>
+</MenuItems>
