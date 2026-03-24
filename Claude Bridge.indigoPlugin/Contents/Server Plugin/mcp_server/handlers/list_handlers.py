@@ -128,11 +128,22 @@ class ListHandlers(BaseToolHandler):
             Dictionary with matching devices and summary
         """
         try:
-            # Get devices (optionally filtered by type)
-            devices = self.list_all_devices(
-                state_filter=state_conditions,
-                device_types=device_types
-            )
+            # Use full (unfiltered) device data so state properties are available for matching
+            all_devices = self.data_provider.get_all_devices_unfiltered()
+
+            # Apply device type filtering if specified
+            if device_types:
+                type_set = set(device_types)
+                from ..common.indigo_device_types import DeviceClassifier
+                all_devices = [d for d in all_devices if DeviceClassifier.classify_device(d) in type_set]
+
+            # Filter by state using full data
+            from ..common.state_filter import StateFilter
+            devices = StateFilter.filter_by_state(all_devices, state_conditions)
+
+            # Return slim fields in results
+            from ..common.json_encoder import filter_json, KEYS_TO_KEEP_MINIMAL_DEVICES
+            devices = filter_json(devices, KEYS_TO_KEEP_MINIMAL_DEVICES)
             
             # Create summary
             summary = f"Found {len(devices)} devices matching state conditions"

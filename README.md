@@ -7,7 +7,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 **Author:** CliveS & Claude Sonnet 4.6
 **Platform:** Indigo 2025.1, macOS, Python 3.11
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 1.1.0
+**Version:** 1.1.1
 
 ---
 
@@ -249,6 +249,11 @@ README.md
 ---
 
 ## Changelog
+
+### 1.1.1 (2026-03-24)
+- Fixed `get_devices_by_state`: now searches full device data including top-level properties (e.g. `heatIsOn`, `onState`)
+- Fixed `get_devices_by_state` crashing when proxy coerces `state_value` from string to bool
+- `get_devices_by_state` schema changed to flat `state_key` + `state_value` string params (avoids object type validation issues)
 
 ### 1.1.0 (2026-03-24)
 - Added `device_control` tool: find and control a device by name in a single MCP call (~1s vs ~5s)

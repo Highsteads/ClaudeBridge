@@ -800,21 +800,25 @@ class MCPHandler:
 
         # State-based queries
         self._tools["get_devices_by_state"] = {
-            "description": "Get devices by state conditions",
+            "description": "Find devices where a specific state matches a value. E.g. state_key='heatIsOn' state_value='true' to find heating zones, or state_key='onState' state_value='true' for devices that are on.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "state_conditions": {
-                        "type": "object",
-                        "description": "State conditions to match"
+                    "state_key": {
+                        "type": "string",
+                        "description": "The state key to match, e.g. 'heatIsOn', 'onState', 'hvacHeaterIsOn'"
+                    },
+                    "state_value": {
+                        "type": "string",
+                        "description": "The value to match as a string, e.g. 'true', 'false', '21.0'"
                     },
                     "device_types": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional device types to filter. Valid types: dimmer, relay, sensor, multiio, speedcontrol, sprinkler, thermostat, device. Common aliases supported: light→dimmer, switch→relay, motion→sensor, fan→speedcontrol, etc."
+                        "description": "Optional device types to filter, e.g. ['thermostat'], ['relay'], ['dimmer']"
                     }
                 },
-                "required": ["state_conditions"]
+                "required": ["state_key", "state_value"]
             },
             "function": self._tool_get_devices_by_state
         }
@@ -1221,12 +1225,28 @@ class MCPHandler:
             return safe_json_dumps({"error": str(e)})
 
     def _tool_get_devices_by_state(
-        self, 
-        state_conditions: Dict, 
+        self,
+        state_key: str,
+        state_value: str,
         device_types: List[str] = None
     ) -> str:
         """Get devices by state tool implementation."""
         try:
+            # Convert flat key/value params to conditions dict, coercing common types
+            _val = str(state_value).strip()
+            if _val.lower() == "true":
+                _coerced = True
+            elif _val.lower() == "false":
+                _coerced = False
+            else:
+                try:
+                    _coerced = int(_val)
+                except ValueError:
+                    try:
+                        _coerced = float(_val)
+                    except ValueError:
+                        _coerced = _val
+            state_conditions = {state_key: _coerced}
             # Validate device types if provided
             if device_types:
                 resolved_types, invalid_types = DeviceTypeResolver.resolve_device_types(device_types)
