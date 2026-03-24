@@ -7,7 +7,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 **Author:** CliveS & Claude Sonnet 4.6
 **Platform:** Indigo 2025.1, macOS, Python 3.11
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2025.0.3
+**Version:** 1.0.3
 
 ---
 
@@ -232,12 +232,12 @@ README.md
 
 ## Changelog
 
-### 2025.0.3 (2026-03-24)
+### 1.0.3 (2026-03-24)
 - API key field can now be left blank if `secrets.py` provides `ANTHROPIC_API_KEY`
 - Fixed config save erroring when API key field is blank but secrets.py has the key
 - Added `indigo_mcp_proxy.py` to repository
 
-### 2025.0.2 (2026-03-24)
+### 1.0.2 (2026-03-24)
 - Renamed from "MCP Server" to "Claude Bridge"
 - Replaced OpenAI/Voyage AI with Anthropic Claude API throughout
 - Fixed text search: LLM query expansion disabled (broke substring matching)
@@ -246,7 +246,7 @@ README.md
 - Proxy: MCP protocol version translation (2025-11-25 → 2025-06-18)
 - Removed all third-party AI service dependencies
 
-### 2025.0.1
+### 1.0.1
 - Initial release with OpenAI + Voyage AI embeddings
 
 ---
