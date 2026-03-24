@@ -60,11 +60,22 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 Click **Test** to verify the API connection, then **Save**.
 
-> **Tip (advanced):** You can leave the API Key field blank if you store your key in a shared `secrets.py` file:
+> **Tip (advanced users):** You can leave the API Key field blank and use a `secrets.py` file instead.
+> This is useful if you run multiple Indigo plugins — one file holds all your credentials and
+> never moves between Indigo version upgrades.
+>
+> Create the file at:
 > ```
-> /Library/Application Support/Perceptive Automation/Python Scripts/secrets.py
+> /Library/Application Support/Perceptive Automation/secrets.py
 > ```
-> Add the line: `ANTHROPIC_API_KEY = "sk-ant-..."`. The plugin loads from there automatically on startup.
+> Add the line:
+> ```python
+> ANTHROPIC_API_KEY = "sk-ant-..."
+> ```
+> The plugin checks for this file automatically on startup. If found, the API key in `secrets.py`
+> is used even if the config field is left blank.
+>
+> A template (`secrets_example.py`) showing all supported values is included in the repository.
 
 ### 3. Create a Device
 

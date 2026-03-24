@@ -289,7 +289,7 @@ class Plugin(indigo.PluginBase):
                 import importlib.util
                 _spec = importlib.util.spec_from_file_location(
                     "secrets",
-                    "/Library/Application Support/Perceptive Automation/Python Scripts/secrets.py"
+                    "/Library/Application Support/Perceptive Automation/secrets.py"
                 )
                 _secrets = importlib.util.module_from_spec(_spec)
                 _spec.loader.exec_module(_secrets)
@@ -561,7 +561,7 @@ class Plugin(indigo.PluginBase):
                     import importlib.util
                     _spec = importlib.util.spec_from_file_location(
                         "secrets",
-                        "/Library/Application Support/Perceptive Automation/Python Scripts/secrets.py"
+                        "/Library/Application Support/Perceptive Automation/secrets.py"
                     )
                     _mod = importlib.util.module_from_spec(_spec)
                     _spec.loader.exec_module(_mod)
@@ -614,7 +614,7 @@ class Plugin(indigo.PluginBase):
         # Validate Anthropic API key — blank is OK if secrets.py provides it
         api_key = values_dict.get("anthropic_api_key", "")
         if not api_key:
-            secrets_path = "/Library/Application Support/Perceptive Automation/Python Scripts/secrets.py"
+            secrets_path = "/Library/Application Support/Perceptive Automation/secrets.py"
             has_secrets_key = False
             try:
                 import importlib.util
@@ -818,7 +818,7 @@ class Plugin(indigo.PluginBase):
                     import importlib.util
                     _spec = importlib.util.spec_from_file_location(
                         "secrets",
-                        "/Library/Application Support/Perceptive Automation/Python Scripts/secrets.py"
+                        "/Library/Application Support/Perceptive Automation/secrets.py"
                     )
                     _mod = importlib.util.module_from_spec(_spec)
                     _spec.loader.exec_module(_mod)
