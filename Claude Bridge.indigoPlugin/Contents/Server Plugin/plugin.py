@@ -554,8 +554,21 @@ class Plugin(indigo.PluginBase):
         old_influx_database = self.influx_database
 
         try:
-            # Apply values from dialog temporarily
-            self.anthropic_api_key = values_dict.get("anthropic_api_key", "")
+            # Apply values from dialog temporarily — fall back to secrets.py if field is blank
+            dialog_key = values_dict.get("anthropic_api_key", "")
+            if not dialog_key:
+                try:
+                    import importlib.util
+                    _spec = importlib.util.spec_from_file_location(
+                        "secrets",
+                        "/Library/Application Support/Perceptive Automation/Python Scripts/secrets.py"
+                    )
+                    _mod = importlib.util.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)
+                    dialog_key = getattr(_mod, "ANTHROPIC_API_KEY", "")
+                except Exception:
+                    pass
+            self.anthropic_api_key = dialog_key
             self.enable_influxdb = values_dict.get("enable_influxdb", False)
             self.influx_url = values_dict.get("influx_url", "http://localhost")
             self.influx_port = values_dict.get("influx_port", "8086")
@@ -598,10 +611,21 @@ class Plugin(indigo.PluginBase):
         """
         errors_dict = indigo.Dict()
 
-        # Validate Anthropic API key
+        # Validate Anthropic API key — blank is OK if secrets.py provides it
         api_key = values_dict.get("anthropic_api_key", "")
         if not api_key:
-            errors_dict["anthropic_api_key"] = "Please enter a valid Anthropic API key"
+            secrets_path = "/Library/Application Support/Perceptive Automation/Python Scripts/secrets.py"
+            has_secrets_key = False
+            try:
+                import importlib.util
+                _spec = importlib.util.spec_from_file_location("secrets", secrets_path)
+                _mod  = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                has_secrets_key = bool(getattr(_mod, "ANTHROPIC_API_KEY", ""))
+            except Exception:
+                pass
+            if not has_secrets_key:
+                errors_dict["anthropic_api_key"] = "Enter an Anthropic API key (or add ANTHROPIC_API_KEY to secrets.py)"
 
 
         # Validate log level
@@ -787,8 +811,21 @@ class Plugin(indigo.PluginBase):
             self.plugin_file_handler.setLevel(self.log_level)
             logging.getLogger("Plugin").setLevel(self.log_level)
 
-            # Core configuration
-            self.anthropic_api_key = values_dict.get("anthropic_api_key", "")
+            # Core configuration — if key field is blank, fall back to secrets.py
+            dialog_key = values_dict.get("anthropic_api_key", "")
+            if not dialog_key:
+                try:
+                    import importlib.util
+                    _spec = importlib.util.spec_from_file_location(
+                        "secrets",
+                        "/Library/Application Support/Perceptive Automation/Python Scripts/secrets.py"
+                    )
+                    _mod = importlib.util.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)
+                    dialog_key = getattr(_mod, "ANTHROPIC_API_KEY", "")
+                except Exception:
+                    pass
+            self.anthropic_api_key = dialog_key
             self.large_model = values_dict.get("large_model", "claude-sonnet-4-6")
             self.small_model = values_dict.get("small_model", "claude-haiku-4-5-20251001")
 

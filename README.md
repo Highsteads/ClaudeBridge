@@ -7,7 +7,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 **Author:** CliveS & Claude Sonnet 4.6
 **Platform:** Indigo 2025.1, macOS, Python 3.11
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2025.0.2
+**Version:** 2025.0.3
 
 ---
 
@@ -57,6 +57,12 @@ Once installed, Claude can query device states, turn devices on and off, read an
 | Access Mode | Read/Write (recommended) |
 
 Click **Test** to verify the API connection, then **Save**.
+
+> **Tip (advanced):** You can leave the API Key field blank if you store your key in a shared `secrets.py` file:
+> ```
+> /Library/Application Support/Perceptive Automation/Python Scripts/secrets.py
+> ```
+> Add the line: `ANTHROPIC_API_KEY = "sk-ant-..."`. The plugin loads from there automatically on startup.
 
 ### 3. Create a Device
 
@@ -211,19 +217,25 @@ Claude Bridge.indigoPlugin/
 │           ├── mcp_handler.py              # MCP protocol implementation
 │           ├── adapters/                   # Indigo data provider
 │           ├── common/
-│           │   ├── openai_client/          # Claude API client (Anthropic)
+│           │   ├── openai_client/          # Anthropic Claude API client
 │           │   └── vector_store/           # Text search store
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
 │           └── tools/                      # 22 MCP tool handlers
 └── README.md
 
-indigo_mcp_proxy.py                         # Claude Code proxy script
+indigo_mcp_proxy.py                         # Claude Code stdio proxy script
+README.md
 ```
 
 ---
 
 ## Changelog
+
+### 2025.0.3 (2026-03-24)
+- API key field can now be left blank if `secrets.py` provides `ANTHROPIC_API_KEY`
+- Fixed config save erroring when API key field is blank but secrets.py has the key
+- Added `indigo_mcp_proxy.py` to repository
 
 ### 2025.0.2 (2026-03-24)
 - Renamed from "MCP Server" to "Claude Bridge"
