@@ -41,12 +41,6 @@ Once installed, Claude can query device states, turn devices on and off, read an
 1. Go to the [Releases page](https://github.com/Highsteads/ClaudeBridge/releases) and download `Claude.Bridge.indigoPlugin.zip`
 2. Unzip the downloaded file — you will get `Claude Bridge.indigoPlugin`
 3. Double-click `Claude Bridge.indigoPlugin` — Indigo will install it automatically
-
-   *Alternatively*, drag it manually into:
-   ```
-   /Library/Application Support/Perceptive Automation/Indigo 2025.1/Plugins/
-   ```
-
 4. In the Indigo client: **Plugins → Manage Plugins → Enable** Claude Bridge
 
 ### 2. Configure the Plugin

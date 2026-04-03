@@ -84,14 +84,11 @@ SIGENERGY_INVERTER_ADDRESS = 1
 
 # ============================
 # Solcast (Solar Forecast API)
-# Required by: SigenergySolar plugin
+# Required by: SigenEnergyManager plugin
 # ============================
-SOLCAST_API_KEY = ""
-
-SOLCAST_SITES = [
-    {"name": "Site1", "resource_id": ""},
-    {"name": "Site2", "resource_id": ""},
-]
+SOLCAST_API_KEY   = ""
+SOLCAST_SITE_1_ID = ""   # East + South arrays
+SOLCAST_SITE_2_ID = ""   # West + Garage NE arrays
 
 # ============================
 # Octopus Energy - Export rates
@@ -100,6 +97,7 @@ EXPORT_RATE_P = 15.0    # p/kWh flat export rate
 
 # ============================
 # Axle VPP (optional)
-# Required by: SigenergySolar plugin (Axle VPP feature)
+# Required by: SigenEnergyManager plugin (Axle VPP feature)
 # ============================
-AXLE_API_TOKEN = ""
+AXLE_API_KEY   = ""
+AXLE_CLIENT_ID = ""
