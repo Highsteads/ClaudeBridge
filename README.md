@@ -7,7 +7,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 **Author:** CliveS & Claude Sonnet 4.6
 **Platform:** Indigo 2025.1, macOS, Python 3.11
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 1.1.1
+**Version:** 1.2.0
 
 ---
 
@@ -36,14 +36,49 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 ## Installation
 
-### 1. Install the Plugin
+### Quick Install (recommended)
+
+Clone the repo and run the setup script — it handles everything except enabling the plugin in Indigo:
+
+```bash
+git clone https://github.com/Highsteads/ClaudeBridge.git
+cd ClaudeBridge
+python3 setup.py
+```
+
+The script:
+- Copies the plugin bundle to Indigo's Plugins directory
+- Copies the proxy script to Indigo's `Scripts` directory
+- Reads your Bearer token from Indigo's `secrets.json` and patches the proxy automatically
+- Creates/updates `~/.mcp.json` and `~/.claude/settings.json`
+
+Then do these two final steps manually:
+
+1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
+   *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
+
+2. **Restart Claude Code** — you should see 23 `indigo-mcp` tools available
+
+> **Anthropic API key:** If you have a `secrets.py` at
+> `/Library/Application Support/Perceptive Automation/secrets.py`
+> with `ANTHROPIC_API_KEY = "sk-ant-..."`, the plugin picks it up automatically.
+> Otherwise go to **Plugins → Claude Bridge → Configure** and enter it there.
+
+---
+
+### Manual Install
+
+<details>
+<summary>Click to expand manual installation steps</summary>
+
+#### 1. Install the Plugin
 
 1. Go to the [Releases page](https://github.com/Highsteads/ClaudeBridge/releases) and download `Claude.Bridge.indigoPlugin.zip`
 2. Unzip the downloaded file — you will get `Claude Bridge.indigoPlugin`
 3. Double-click `Claude Bridge.indigoPlugin` — Indigo will install it automatically
 4. In the Indigo client: **Plugins → Manage Plugins → Enable** Claude Bridge
 
-### 2. Configure the Plugin
+#### 2. Configure the Plugin
 
 **Plugins → Claude Bridge → Configure:**
 
@@ -54,65 +89,30 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 Click **Test** to verify the API connection, then **Save**.
 
-> **Tip (advanced users):** You can leave the API Key field blank and use a `secrets.py` file instead.
-> This is useful if you run multiple Indigo plugins — one file holds all your credentials and
-> never moves between Indigo version upgrades.
->
-> Create the file at:
-> ```
-> /Library/Application Support/Perceptive Automation/secrets.py
-> ```
-> Add the line:
-> ```python
-> ANTHROPIC_API_KEY = "sk-ant-..."
-> ```
-> The plugin checks for this file automatically on startup. If found, the API key in `secrets.py`
-> is used even if the config field is left blank.
->
-> A template (`secrets_example.py`) showing all supported values is included in the repository.
+> **Tip:** Leave the API Key field blank and add `ANTHROPIC_API_KEY = "sk-ant-..."` to
+> `/Library/Application Support/Perceptive Automation/secrets.py` instead.
+> The plugin checks for this file automatically on startup.
+> A template (`secrets_example.py`) is included in the repository.
 
-### 3. Create a Device
+#### 3. Device auto-creation
 
-In Indigo: **Devices → New Device → Plugin: Claude Bridge → Type: Claude Bridge**
+From v1.2.0 onwards the plugin auto-creates a Claude Bridge device on first startup.
+No manual "New Device" step is needed. If you need to create it manually:
+**Devices → New Device → Plugin: Claude Bridge → Type: Claude Bridge**
 
-Give it any name (e.g. "Claude Bridge"). This activates the MCP endpoint.
-
-### 4. Find Your Endpoint URL
-
-**Plugins → Claude Bridge → Print MCP Client Connection Information**
-
-The endpoint will be shown in the Indigo event log, e.g.:
-```
-Local:   http://localhost:8176/message/com.clives.indigoplugin.claudebridge/mcp/
-Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridge/mcp/
-```
-
----
-
-## Connecting Claude Code
-
-Claude Code connects via a lightweight Python proxy script that handles authentication and protocol translation.
-
-### 1. Install the Proxy Script
+#### 4. Install the Proxy Script
 
 Save `indigo_mcp_proxy.py` (from this repo) to:
 ```
-/Library/Application Support/Perceptive Automation/Python Scripts/indigo_mcp_proxy.py
+/Library/Application Support/Perceptive Automation/Scripts/indigo_mcp_proxy.py
 ```
 
-Edit the constants at the top of the script:
-```python
-INDIGO_MCP_PATH = "/message/com.clives.indigoplugin.claudebridge/mcp/"
-BEARER_TOKEN    = "your-indigo-api-key"
-```
-
-Your Indigo API key is in:
+Edit the `BEARER_TOKEN` constant at the top of the script — use the first value from:
 ```
 /Library/Application Support/Perceptive Automation/Indigo 2025.1/Preferences/secrets.json
 ```
-(use the first value in the array)
 
-### 2. Register with Claude Code
+#### 5. Register with Claude Code
 
 Add to `~/.mcp.json`:
 ```json
@@ -120,7 +120,7 @@ Add to `~/.mcp.json`:
   "mcpServers": {
     "indigo-mcp": {
       "command": "python3",
-      "args": ["/Library/Application Support/Perceptive Automation/Python Scripts/indigo_mcp_proxy.py"]
+      "args": ["/Library/Application Support/Perceptive Automation/Scripts/indigo_mcp_proxy.py"]
     }
   }
 }
@@ -133,17 +133,28 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-Add to `~/.claude.json` under your project's `mcpServers`:
-```json
-"indigo-mcp": {
-  "command": "python3",
-  "args": ["/Library/Application Support/Perceptive Automation/Python Scripts/indigo_mcp_proxy.py"]
-}
+#### 6. Restart Claude Code
+
+The `indigo-mcp` tools will appear on next session start. You should see 23 tools available.
+
+</details>
+
+---
+
+## Connecting Claude Code
+
+Claude Code connects via a lightweight Python proxy script (`indigo_mcp_proxy.py`) that handles
+authentication and protocol translation. The **Quick Install** script above sets this up automatically.
+
+### Find Your Endpoint URL
+
+**Plugins → Claude Bridge → Print MCP Client Connection Information**
+
+The endpoint will be shown in the Indigo event log, e.g.:
 ```
-
-### 3. Restart Claude Code
-
-The `indigo-mcp` tools will appear on next session start. You should see 22 tools available.
+Local:   http://localhost:8176/message/com.clives.indigoplugin.claudebridge/mcp/
+Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridge/mcp/
+```
 
 ---
 

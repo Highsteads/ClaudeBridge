@@ -4,8 +4,8 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Sonnet 4.6
-# Date:        24-03-2026
-# Version:     1.1
+# Date:        03-04-2026
+# Version:     1.2
 
 try:
     import indigo
@@ -354,11 +354,106 @@ class Plugin(indigo.PluginBase):
             for url_info in urls:
                 self.logger.info(f"   {url_info['label']}: {url_info['url']}")
 
+            # Auto-create device if none exists — removes the manual "New Device" step
+            try:
+                existing = [d for d in indigo.devices.iter("self") if d.deviceTypeId == "mcpServer"]
+                if not existing:
+                    indigo.device.create(
+                        protocol=indigo.kProtocol.Plugin,
+                        name="Claude Bridge",
+                        deviceTypeId="mcpServer",
+                        pluginId=self.pluginId,
+                        props={"serverName": "Claude Bridge"}
+                    )
+                    self.logger.info("\t✅ Claude Bridge device auto-created")
+            except Exception as _dev_e:
+                self.logger.warning(f"\t⚠️  Could not auto-create device: {_dev_e}")
+
+            # Auto-configure Claude Code integration (proxy + MCP config files)
+            self._setup_claude_code_integration()
+
         except Exception as e:
             self.logger.error(f"\t❌ MCP handler initialization failed: {e}")
             self.mcp_handler = None
             self.logger.error("\t❌ MCP server unavailable - plugin restart required")
             return
+
+    def _setup_claude_code_integration(self) -> None:
+        """
+        Copy the bundled proxy script to the standard Indigo Scripts directory,
+        patch the Bearer token, and update ~/.mcp.json and ~/.claude/settings.json
+        so Claude Code can connect without any manual Terminal steps.
+        Called from startup() after MCP handler is ready.
+        """
+        import json as _json
+        import re as _re
+        import shutil as _shutil
+        from pathlib import Path as _Path
+
+        # Standard Indigo scripts directory — created if it doesn't exist
+        scripts_dir = _Path("/Library/Application Support/Perceptive Automation/Scripts")
+
+        bundle_proxy  = _Path(os.getcwd()) / "indigo_mcp_proxy.py"
+        dest_proxy    = scripts_dir / "indigo_mcp_proxy.py"
+        secrets_path  = _Path(indigo.server.getInstallFolderPath()) / "Preferences/secrets.json"
+        mcp_json_path = _Path.home() / ".mcp.json"
+        settings_path = _Path.home() / ".claude/settings.json"
+
+        server_entry  = {"command": "python3", "args": [str(dest_proxy)]}
+        changed       = []
+
+        # 1. Copy proxy script from bundle and patch Bearer token
+        if bundle_proxy.exists():
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            _shutil.copy2(bundle_proxy, dest_proxy)
+
+            if secrets_path.exists():
+                try:
+                    secrets = _json.loads(secrets_path.read_text())
+                    if isinstance(secrets, list) and secrets:
+                        token    = secrets[0]
+                        text     = dest_proxy.read_text(encoding="utf-8")
+                        new_text = _re.sub(
+                            r'^(BEARER_TOKEN\s*=\s*")[^"]*(")',
+                            rf'\g<1>{token}\g<2>',
+                            text, flags=_re.MULTILINE
+                        )
+                        dest_proxy.write_text(new_text, encoding="utf-8")
+                except Exception as _e:
+                    self.logger.warning(f"\t⚠️  Bearer token patch failed: {_e}")
+
+            changed.append("proxy script")
+        else:
+            self.logger.warning("\t⚠️  indigo_mcp_proxy.py not found in bundle — skipping proxy setup")
+
+        # 2. Update ~/.mcp.json
+        try:
+            mcp_data = _json.loads(mcp_json_path.read_text()) if mcp_json_path.exists() else {}
+            if mcp_data.get("mcpServers", {}).get("indigo-mcp") != server_entry:
+                mcp_data.setdefault("mcpServers", {})["indigo-mcp"] = server_entry
+                mcp_json_path.write_text(_json.dumps(mcp_data, indent=2) + "\n")
+                changed.append("~/.mcp.json")
+        except Exception as _e:
+            self.logger.warning(f"\t⚠️  Could not update ~/.mcp.json: {_e}")
+
+        # 3. Update ~/.claude/settings.json
+        try:
+            settings_data = _json.loads(settings_path.read_text()) if settings_path.exists() else {}
+            enabled = settings_data.get("enabledMcpjsonServers", [])
+            if "indigo-mcp" not in enabled:
+                enabled.append("indigo-mcp")
+                settings_data["enabledMcpjsonServers"] = enabled
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+                settings_path.write_text(_json.dumps(settings_data, indent=2) + "\n")
+                changed.append("~/.claude/settings.json")
+        except Exception as _e:
+            self.logger.warning(f"\t⚠️  Could not update ~/.claude/settings.json: {_e}")
+
+        if changed:
+            self.logger.info(f"\t✅ Claude Code integration configured: {', '.join(changed)}")
+            self.logger.info("\t   Restart Claude Code to activate the indigo-mcp tools")
+        else:
+            self.logger.info("\t✅ Claude Code integration already up to date")
 
     def shutdown(self) -> None:
         """
