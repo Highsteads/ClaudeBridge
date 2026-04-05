@@ -235,6 +235,160 @@ class ScriptToolsHandler(BaseToolHandler):
     # list_script_backups
     # ────────────────────────────────────────────────────────────────────────
 
+    # ────────────────────────────────────────────────────────────────────────
+    # scaffold_automation_script
+    # ────────────────────────────────────────────────────────────────────────
+
+    def scaffold_automation_script(
+        self,
+        script_name: str,
+        description: str = "",
+        device_ids: Optional[List[int]] = None,
+        variable_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate and save a complete Python script template to the Indigo
+        Scripts folder. The scaffold includes:
+          - Standard file header (CliveS convention)
+          - log() helper function
+          - Named constants for every supplied device/variable ID
+            (names looked up live from Indigo so they're correct)
+          - Skeleton main() function with safe error handling
+        Fails if a script with that name already exists.
+        """
+        self.log_incoming_request("scaffold_automation_script",
+                                  {"script_name": script_name,
+                                   "device_ids": device_ids,
+                                   "variable_ids": variable_ids})
+        try:
+            path = _resolve(script_name)
+            if os.path.isfile(path):
+                return {
+                    "success": False,
+                    "error": (f"Script '{script_name}' already exists. "
+                              "Use write_script to update it."),
+                }
+
+            # Resolve device names from Indigo
+            device_lines: List[str] = []
+            if device_ids:
+                try:
+                    import indigo as _indigo
+                    for did in device_ids:
+                        try:
+                            dname = _indigo.devices[int(did)].name
+                        except Exception:
+                            dname = f"Device_{did}"
+                        const = dname.upper().replace(" ", "_").replace("-", "_")
+                        const = "".join(c if c.isalnum() or c == "_" else "_"
+                                        for c in const)
+                        device_lines.append(
+                            f"DEVICE_{const:<30} = {did}  # {dname}"
+                        )
+                except ImportError:
+                    for did in device_ids:
+                        device_lines.append(f"DEVICE_ID_{did:<25} = {did}")
+
+            # Resolve variable names from Indigo
+            variable_lines: List[str] = []
+            if variable_ids:
+                try:
+                    import indigo as _indigo
+                    for vid in variable_ids:
+                        try:
+                            vname = _indigo.variables[int(vid)].name
+                        except Exception:
+                            vname = f"Variable_{vid}"
+                        const = vname.upper().replace(" ", "_").replace("-", "_")
+                        const = "".join(c if c.isalnum() or c == "_" else "_"
+                                        for c in const)
+                        variable_lines.append(
+                            f"VARIABLE_{const:<28} = {vid}  # {vname}"
+                        )
+                except ImportError:
+                    for vid in variable_ids:
+                        variable_lines.append(f"VARIABLE_ID_{vid:<21} = {vid}")
+
+            now     = datetime.now()
+            stem    = os.path.basename(path)[:-3]
+            desc    = description or f"{stem} automation script"
+
+            ids_block = ""
+            if device_lines or variable_lines:
+                ids_block = "\n# ── Device / Variable IDs ────────────────────────────────────────────────\n"
+                if device_lines:
+                    ids_block += "\n".join(device_lines) + "\n"
+                if variable_lines:
+                    ids_block += "\n".join(variable_lines) + "\n"
+                ids_block += "\n"
+
+            content = f"""\
+#! /usr/bin/env python
+# -*- coding: utf-8 -*-
+# Filename:    {os.path.basename(path)}
+# Description: {desc}
+# Author:      CliveS & Claude Sonnet 4.6
+# Date:        {now.strftime("%d-%m-%Y")}
+# Version:     1.0
+
+# ── Imports ───────────────────────────────────────────────────────────────────
+from datetime import datetime
+import indigo  # noqa
+
+{ids_block}
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def log(message, level="INFO"):
+    indigo.server.log(f"[{{datetime.now().strftime('%H:%M:%S')}}] {{message}}",
+                      level=level)
+
+
+# ── Main logic ────────────────────────────────────────────────────────────────
+
+def main():
+    \"\"\"
+    {desc}
+    \"\"\"
+    try:
+        log("Script started")
+
+        # ── TODO: add your logic here ──────────────────────────────────────
+
+
+        log("Script complete")
+    except Exception as exc:
+        indigo.server.log(f"ERROR in {stem}: {{exc}}", level="ERROR")
+        raise
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    main()
+"""
+
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(content)
+
+            lines_count = content.count("\n") + 1
+            result = {
+                "success":      True,
+                "name":         os.path.basename(path),
+                "path":         path,
+                "lines":        lines_count,
+                "device_ids":   device_ids or [],
+                "variable_ids": variable_ids or [],
+                "message":      (f"Scaffold '{script_name}' created "
+                                 f"({lines_count} lines). "
+                                 f"Edit in Indigo or use write_script to update."),
+            }
+            self.log_tool_outcome("scaffold_automation_script", True,
+                                  result["message"])
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "scaffold_automation_script")
+
     def list_script_backups(self, name: str) -> Dict[str, Any]:
         """List auto-backups available for a given script name."""
         self.log_incoming_request("list_script_backups", {"name": name})

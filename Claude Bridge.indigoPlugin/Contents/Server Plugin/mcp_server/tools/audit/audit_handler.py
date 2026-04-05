@@ -340,6 +340,144 @@ class AuditHandler(BaseToolHandler):
     # dependency_map
     # ────────────────────────────────────────────────────────────────────────
 
+    # ────────────────────────────────────────────────────────────────────────
+    # find_conflicts
+    # ────────────────────────────────────────────────────────────────────────
+
+    def find_conflicts(self) -> Dict[str, Any]:
+        """
+        Detect configuration conflicts in Indigo.
+
+        Device conflicts:
+          - Duplicate device names (two devices with the same name)
+          - Multiple devices sharing the same hardware address
+
+        Automation conflicts:
+          - Triggers with duplicate names
+          - Python scripts referencing IDs that belong to no device or variable
+            (orphaned references — the device/variable was likely deleted)
+          - Multiple scripts writing to the same variable ID via updateValue()
+            (potential race condition)
+        """
+        self.log_incoming_request("find_conflicts", {})
+        try:
+            # ── Collect all device IDs / variable IDs ─────────────────────
+            all_dev_ids = {indigo.devices[d].id for d in indigo.devices}
+            all_var_ids = {indigo.variables[v].id for v in indigo.variables}
+            all_known   = all_dev_ids | all_var_ids
+
+            # ── Device: duplicate names ────────────────────────────────────
+            name_map: Dict[str, List] = {}
+            addr_map: Dict[str, List] = {}
+            for did in indigo.devices:
+                dev = indigo.devices[did]
+                name_map.setdefault(dev.name.lower(), []).append(
+                    {"id": dev.id, "name": dev.name, "enabled": dev.enabled}
+                )
+                addr = getattr(dev, "address", "").strip()
+                if addr:
+                    addr_map.setdefault(addr, []).append(
+                        {"id": dev.id, "name": dev.name, "address": addr}
+                    )
+
+            duplicate_names = [
+                {"name": devs[0]["name"], "devices": devs}
+                for devs in name_map.values() if len(devs) > 1
+            ]
+            shared_addresses = [
+                {"address": addr, "devices": devs}
+                for addr, devs in addr_map.items() if len(devs) > 1
+            ]
+
+            # ── Automation: duplicate trigger names ────────────────────────
+            trig_name_map: Dict[str, List] = {}
+            for tid in indigo.triggers:
+                t = indigo.triggers[tid]
+                trig_name_map.setdefault(t.name.lower(), []).append(
+                    {"id": t.id, "name": t.name, "enabled": t.enabled}
+                )
+            duplicate_trigger_names = [
+                {"name": trigs[0]["name"], "triggers": trigs}
+                for trigs in trig_name_map.values() if len(trigs) > 1
+            ]
+
+            # ── Script analysis ────────────────────────────────────────────
+            scripts_dir = _scripts_dir()
+            id_map      = _scan_scripts_for_ids(scripts_dir)
+
+            # Orphaned: IDs in scripts that aren't any device or variable
+            orphaned_refs = [
+                {"id": iid, "scripts": scripts,
+                 "note": "ID in scripts but no matching device or variable"}
+                for iid, scripts in id_map.items()
+                if iid not in all_known
+            ]
+
+            # Write conflicts: multiple scripts calling updateValue(SAME_VAR_ID)
+            write_map: Dict[int, List[str]] = {}
+            write_pat = re.compile(r"updateValue\s*\(\s*(\d{8,12})\s*[,)]")
+            if os.path.isdir(scripts_dir):
+                for entry in os.scandir(scripts_dir):
+                    if not (entry.name.endswith(".py") and entry.is_file()):
+                        continue
+                    try:
+                        with open(entry.path, "r", encoding="utf-8",
+                                  errors="replace") as fh:
+                            content = fh.read()
+                        for m in write_pat.findall(content):
+                            iid = int(m)
+                            if iid in all_var_ids:
+                                write_map.setdefault(iid, [])
+                                if entry.name not in write_map[iid]:
+                                    write_map[iid].append(entry.name)
+                    except OSError:
+                        pass
+
+            write_conflicts = []
+            for var_id, scripts in write_map.items():
+                if len(scripts) > 1:
+                    vname = ""
+                    try:
+                        vname = indigo.variables[var_id].name
+                    except Exception:
+                        pass
+                    write_conflicts.append({
+                        "variable_id":   var_id,
+                        "variable_name": vname,
+                        "scripts":       scripts,
+                        "note": "Multiple scripts write to this variable — potential race condition",
+                    })
+
+            total_conflicts = (len(duplicate_names) + len(shared_addresses)
+                               + len(duplicate_trigger_names)
+                               + len(orphaned_refs) + len(write_conflicts))
+
+            result = {
+                "success": True,
+                "summary": {
+                    "duplicate_device_names":   len(duplicate_names),
+                    "shared_device_addresses":  len(shared_addresses),
+                    "duplicate_trigger_names":  len(duplicate_trigger_names),
+                    "orphaned_script_refs":     len(orphaned_refs),
+                    "variable_write_conflicts": len(write_conflicts),
+                    "total_conflicts":          total_conflicts,
+                },
+                "device_conflicts": {
+                    "duplicate_names":  duplicate_names[:20],
+                    "shared_addresses": shared_addresses[:20],
+                },
+                "automation_conflicts": {
+                    "duplicate_trigger_names":  duplicate_trigger_names[:20],
+                    "orphaned_script_refs":     orphaned_refs[:30],
+                    "variable_write_conflicts": write_conflicts[:20],
+                },
+            }
+            self.log_tool_outcome("find_conflicts", True,
+                                  f"{total_conflicts} potential conflicts found")
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "find_conflicts")
+
     def dependency_map(self, entity_id: Union[int, str]) -> Dict[str, Any]:
         """
         Build a dependency map for a device or variable.

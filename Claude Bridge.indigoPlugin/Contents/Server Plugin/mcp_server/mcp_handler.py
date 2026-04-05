@@ -1218,6 +1218,17 @@ class MCPHandler:
             },
             "function": self._tool_dependency_map
         }
+        self._tools["find_conflicts"] = {
+            "description": (
+                "Detect configuration conflicts in Indigo. Checks for: duplicate "
+                "device names, devices sharing the same hardware address, triggers "
+                "with duplicate names, Python scripts referencing deleted device/"
+                "variable IDs (orphaned refs), and multiple scripts writing to the "
+                "same variable (potential race condition)."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_find_conflicts
+        }
 
         # ── Memory tools ───────────────────────────────────────────────────
 
@@ -1361,6 +1372,40 @@ class MCPHandler:
             },
             "function": self._tool_list_script_backups
         }
+        self._tools["scaffold_automation_script"] = {
+            "description": (
+                "Generate and save a complete Python script template to the Indigo "
+                "Scripts folder. Pre-fills the standard header, log() helper, and "
+                "named constants for any supplied device/variable IDs (names looked "
+                "up live). Ready to open in Indigo and add logic. "
+                "Fails if the script already exists."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "script_name": {
+                        "type": "string",
+                        "description": "Filename (with or without .py extension)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "One-line description for the file header"
+                    },
+                    "device_ids": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Indigo device IDs to include as named constants"
+                    },
+                    "variable_ids": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Indigo variable IDs to include as named constants"
+                    }
+                },
+                "required": ["script_name"]
+            },
+            "function": self._tool_scaffold_automation_script
+        }
 
         # ── Event subscription tools ───────────────────────────────────────
 
@@ -1468,6 +1513,30 @@ class MCPHandler:
             ),
             "inputSchema": {"type": "object", "properties": {}},
             "function": self._tool_security_status
+        }
+        self._tools["home_status_report"] = {
+            "description": (
+                "Generate a configurable markdown prose report of home status, "
+                "suitable for presenting directly to the user. "
+                "Specify sections to include (any of: energy, heating, security, "
+                "devices, alerts, automation), or omit for the full report. "
+                "Example: home_status_report(sections=['energy','alerts'])"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["energy", "heating", "security",
+                                     "devices", "alerts", "automation"]
+                        },
+                        "description": "Sections to include (omit for all)"
+                    }
+                }
+            },
+            "function": self._tool_home_status_report
         }
 
         # ── Energy intelligence tools ──────────────────────────────────────
@@ -1658,6 +1727,13 @@ class MCPHandler:
             self.logger.error(f"dependency_map error: {e}")
             return safe_json_dumps({"error": str(e)})
 
+    def _tool_find_conflicts(self) -> str:
+        try:
+            return safe_json_dumps(self.audit_handler.find_conflicts())
+        except Exception as e:
+            self.logger.error(f"find_conflicts error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
     # ── Memory dispatch methods ─────────────────────────────────────────────
 
     def _tool_remember(self, topic: str, note: str) -> str:
@@ -1725,6 +1801,23 @@ class MCPHandler:
             self.logger.error(f"list_script_backups error: {e}")
             return safe_json_dumps({"error": str(e)})
 
+    def _tool_scaffold_automation_script(
+        self,
+        script_name: str,
+        description: str = "",
+        device_ids: list = None,
+        variable_ids: list = None,
+    ) -> str:
+        try:
+            return safe_json_dumps(
+                self.script_tools_handler.scaffold_automation_script(
+                    script_name, description, device_ids, variable_ids
+                )
+            )
+        except Exception as e:
+            self.logger.error(f"scaffold_automation_script error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
     # ── Events dispatch methods ─────────────────────────────────────────────
 
     def _tool_subscribe(self, entity_type: str = "all", entity_id: int = None) -> str:
@@ -1743,12 +1836,12 @@ class MCPHandler:
 
     def _tool_get_events(
         self,
-        subscription_id: int = None,
-        max_events: int = 50,
+        since: float = None,
+        limit: int = 50,
     ) -> str:
         try:
             return safe_json_dumps(
-                self.events_handler.get_events(subscription_id, max_events)
+                self.events_handler.get_events(since, limit)
             )
         except Exception as e:
             self.logger.error(f"get_events error: {e}")
@@ -1796,6 +1889,15 @@ class MCPHandler:
             return safe_json_dumps(self.home_status_handler.security_status())
         except Exception as e:
             self.logger.error(f"security_status error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_home_status_report(self, sections: list = None) -> str:
+        try:
+            return safe_json_dumps(
+                self.home_status_handler.home_status_report(sections)
+            )
+        except Exception as e:
+            self.logger.error(f"home_status_report error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     # ── Energy intelligence dispatch methods ────────────────────────────────

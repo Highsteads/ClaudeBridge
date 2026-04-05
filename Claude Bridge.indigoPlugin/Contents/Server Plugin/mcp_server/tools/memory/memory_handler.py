@@ -26,7 +26,7 @@ except ImportError:
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 
-MAX_MEMORIES = 200   # oldest auto-expire beyond this limit
+MAX_MEMORIES = 100   # oldest auto-expire beyond this limit
 
 
 def _memory_path() -> str:
@@ -83,9 +83,17 @@ class MemoryHandler(BaseToolHandler):
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
             })
 
-            # Auto-expire oldest if over limit
+            # Auto-expire: prefer removing oldest of same topic first,
+            # preserving cross-topic diversity. Fall back to overall oldest.
             if len(memories) > MAX_MEMORIES:
-                memories = memories[-MAX_MEMORIES:]
+                same_topic_indices = [
+                    i for i, m in enumerate(memories[:-1])   # exclude just-appended
+                    if m.get("topic", "").lower() == topic.strip().lower()
+                ]
+                if same_topic_indices:
+                    del memories[same_topic_indices[0]]   # oldest same-topic
+                else:
+                    del memories[0]                       # overall oldest
 
             _save(path, memories)
             result = {

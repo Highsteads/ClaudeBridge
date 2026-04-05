@@ -54,14 +54,58 @@ class EventsHandler(BaseToolHandler):
     def queue_event(self, event: Dict[str, Any]) -> None:
         """
         Enqueue an event. Called from Indigo main-thread callbacks.
-        event must have at minimum: type, entity_id, entity_name, timestamp.
+        Accepts "id" or "entity_id" for the entity identifier (normalises both).
+        Stamps every event with timestamp_epoch for since-filtering.
+        Deduplicates rapid state changes for the same entity within 1 second:
+        only the first and last value are kept (merged in-place).
         Only queued if at least one matching subscription exists.
         """
         if not self._subscriptions:
             return   # no active subscriptions — nothing to queue
 
-        entity_id   = event.get("entity_id")
+        # Normalise: accept both "id" and "entity_id" from callers
+        entity_id = event.get("entity_id") or event.get("id")
+        if entity_id is not None:
+            event["entity_id"] = entity_id
+
         entity_type = event.get("type", "")
+
+        # Stamp with epoch for since-filtering and human timestamp
+        now_ts = time.time()
+        event.setdefault("timestamp_epoch", now_ts)
+        event.setdefault(
+            "timestamp",
+            datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d %H:%M:%S"),
+        )
+
+        # Deduplication: merge into the most recent event for the same entity
+        # if it arrived within the last second.
+        DEDUP_WINDOW_S = 1.0
+        if entity_id is not None and entity_type in (
+            "device_updated", "variable_updated"
+        ):
+            for existing in reversed(self._queue):
+                if (
+                    existing.get("entity_id") == entity_id
+                    and existing.get("type") == entity_type
+                ):
+                    age = now_ts - existing.get("timestamp_epoch", 0)
+                    if age < DEDUP_WINDOW_S:
+                        # Merge: keep old "old" values, update "new" values
+                        if entity_type == "device_updated":
+                            merged = dict(existing.get("changed_states", {}))
+                            for k, v in event.get("changed_states", {}).items():
+                                merged[k] = {
+                                    "old": merged[k]["old"] if k in merged else v["old"],
+                                    "new": v["new"],
+                                }
+                            existing["changed_states"] = merged
+                        else:  # variable_updated
+                            existing["new_value"] = event.get("new_value")
+                        existing["timestamp_epoch"] = now_ts
+                        existing["timestamp"]       = event["timestamp"]
+                        return  # merged in-place, no new entry needed
+                    break  # found same entity but outside window — fall through
 
         for sub in self._subscriptions.values():
             sub_type = sub.get("entity_type", "all")
