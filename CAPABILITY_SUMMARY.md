@@ -192,6 +192,46 @@ Search across all entity types simultaneously:
 
 ---
 
+### 12. Plugin Development & Testing Workflow
+
+ClaudeBridge makes Claude a hands-on partner for developing, debugging, and testing Indigo plugins — because it can see your live system at every step.
+
+**Plugin introspection:**
+- List all installed plugins with version, enabled/disabled state, and plugin ID
+- Get full status for a specific plugin — confirms it loaded, shows its bundle ID and version
+- Read the event log filtered by plugin name — see exactly what a plugin is logging in real time
+- Inspect every device the plugin has created, including all custom plugin states, via `get_device_by_id`
+- Watch plugin device states update live using event subscriptions — no manual refreshing
+
+**During development (edit → test → verify loop):**
+- Read the current plugin source file directly from the Scripts or plugin bundle folder
+- Write an updated version back — ClaudeBridge auto-backs up the previous copy before overwriting
+- Restart the plugin immediately after a change — no need to touch Indigo's UI
+- Query the event log straight away to confirm the new version loaded and ran correctly
+- Check device states before and after an action to verify the change had the intended effect
+
+**Debugging:**
+- Pull the last N log lines from the event log to find errors or unexpected output
+- Subscribe to a specific device's state changes and watch what the plugin does when triggered
+- Use `find_conflicts` to check whether a new plugin has introduced naming clashes or address collisions with existing devices
+- Use `dependency_map` to understand everything that depends on a device or variable the plugin manages — so you know the blast radius before making a change
+
+**Testing scripts that interact with plugins:**
+- Scaffold a complete test script with correct header convention, named constants for all device/variable IDs, and a `log()` helper — ready to run immediately
+- Execute action groups that exercise the plugin from the outside
+- Check variable values that the plugin writes to confirm correct output
+- Read backed-up script versions to compare before/after behaviour
+
+**Example prompts:**
+> "Restart SigenEnergyManager and show me the last 20 log lines to confirm it started cleanly"
+> "Read the current plugin.py for ClaudeBridge and tell me what version of each handler it's using"
+> "I just updated the battery_manager — check the device states on the Sigenergy device and tell me if the SOC threshold changed"
+> "Watch the hall motion sensor and tell me the next three state changes you see"
+> "Did the plugin log any errors in the last hour?"
+> "Scaffold a test script that exercises the shellyRelay device with ID 123456 and logs the result to variable 789012"
+
+---
+
 ## What Claude Cannot Do (Hard Limits)
 
 These are Indigo API restrictions — not ClaudeBridge limitations:
@@ -312,6 +352,7 @@ Script reads, writes, and backups are entirely local — no Anthropic round-trip
 | Audit & diagnostics | 2 | Dependency map + conflict scanner |
 | Home status report | 1 | Prose narrative, configurable sections |
 | General search | 1 | Cross-entity name search |
+| Plugin dev & testing | — | Workflow combining tools above |
 | **Total** | **64** | |
 
 **Requirements:** Indigo 2025.1+, macOS, Claude Code (requires Claude.ai Pro/Max or Anthropic API key)
