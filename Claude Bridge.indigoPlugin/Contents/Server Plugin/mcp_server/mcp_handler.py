@@ -23,6 +23,14 @@ from .tools.log_query import LogQueryHandler
 from .tools.plugin_control import PluginControlHandler
 from .tools.search_entities import SearchEntitiesHandler
 from .tools.variable_control import VariableControlHandler
+from .tools.system_tools import SystemToolsHandler
+from .tools.schedule_control import ScheduleControlHandler
+from .tools.audit import AuditHandler
+from .tools.memory import MemoryHandler
+from .tools.script_tools import ScriptToolsHandler
+from .tools.events import EventsHandler
+from .tools.home_status import HomeStatusHandler
+from .tools.energy_tools import EnergyToolsHandler
 
 
 class MCPHandler:
@@ -120,6 +128,38 @@ class MCPHandler:
             logger=self.logger
         )
         self.plugin_control_handler = PluginControlHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.system_tools_handler = SystemToolsHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.schedule_control_handler = ScheduleControlHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.audit_handler = AuditHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.memory_handler = MemoryHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.script_tools_handler = ScriptToolsHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.events_handler = EventsHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.home_status_handler = HomeStatusHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.energy_tools_handler = EnergyToolsHandler(
             data_provider=self.data_provider,
             logger=self.logger
         )
@@ -947,6 +987,848 @@ class MCPHandler:
             },
             "function": self._tool_get_plugin_status
         }
+
+        # ── System / housekeeping tools ────────────────────────────────────
+
+        self._tools["system_health"] = {
+            "description": (
+                "Return a snapshot of Mac Mini system health: macOS version, "
+                "Python version, disk usage (total/used/free/%), RAM summary, "
+                "and uptime. No parameters required."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_system_health
+        }
+
+        self._tools["list_python_scripts"] = {
+            "description": (
+                "List all Python scripts (.py files) in the Indigo Python Scripts "
+                "folder. Returns name, size, last-modified date, and full path."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_list_python_scripts
+        }
+
+        self._tools["find_orphaned_scripts"] = {
+            "description": (
+                "Scan all Python scripts in the Indigo Python Scripts folder and "
+                "report any that reference device or variable IDs which no longer "
+                "exist in Indigo. Useful for finding stale scripts after devices "
+                "or variables have been deleted."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_find_orphaned_scripts
+        }
+
+        self._tools["find_orphaned_plugin_data"] = {
+            "description": (
+                "Compare Preferences/Plugins subdirectories against installed "
+                "plugin bundle IDs. Returns any prefs directories that belong to "
+                "plugins that are no longer installed, along with their size on "
+                "disk. Safe to delete orphaned entries to recover disk space."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_find_orphaned_plugin_data
+        }
+
+        self._tools["find_large_files"] = {
+            "description": (
+                "Walk a directory tree and return files exceeding a size threshold, "
+                "sorted largest first. Defaults to scanning the entire Indigo "
+                "install folder for files >= 10 MB."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Directory to scan. Defaults to the Indigo install "
+                            "folder if omitted or empty."
+                        )
+                    },
+                    "min_mb": {
+                        "type": "number",
+                        "description": "Minimum file size in MB to report (default 10)"
+                    },
+                    "max_results": {
+                        "type": "number",
+                        "description": "Maximum number of files to return (default 50)"
+                    }
+                },
+                "required": []
+            },
+            "function": self._tool_find_large_files
+        }
+
+        # ── Schedule / trigger tools ───────────────────────────────────────
+
+        self._tools["list_schedules"] = {
+            "description": (
+                "List all Indigo schedules with their ID, name, enabled state, "
+                "and next scheduled execution time."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_list_schedules
+        }
+
+        self._tools["enable_schedule"] = {
+            "description": "Enable an Indigo schedule by ID or name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "Schedule ID (number) or name (string)"
+                    }
+                },
+                "required": ["schedule_id"]
+            },
+            "function": self._tool_enable_schedule
+        }
+
+        self._tools["disable_schedule"] = {
+            "description": "Disable an Indigo schedule by ID or name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "Schedule ID (number) or name (string)"
+                    }
+                },
+                "required": ["schedule_id"]
+            },
+            "function": self._tool_disable_schedule
+        }
+
+        self._tools["list_triggers"] = {
+            "description": (
+                "List all Indigo triggers with their ID, name, enabled state, "
+                "and plugin type information."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_list_triggers
+        }
+
+        self._tools["enable_trigger"] = {
+            "description": "Enable an Indigo trigger by ID or name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "Trigger ID (number) or name (string)"
+                    }
+                },
+                "required": ["trigger_id"]
+            },
+            "function": self._tool_enable_trigger
+        }
+
+        self._tools["disable_trigger"] = {
+            "description": "Disable an Indigo trigger by ID or name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "Trigger ID (number) or name (string)"
+                    }
+                },
+                "required": ["trigger_id"]
+            },
+            "function": self._tool_disable_trigger
+        }
+
+    # ── Audit tools ───────────────────────────────────────────────────────
+
+        self._tools["audit_home"] = {
+            "description": (
+                "Run a comprehensive Indigo configuration health check. Returns "
+                "devices in error, low-battery devices, stale devices (no change "
+                "in 7+ days), empty/null variables, disabled triggers and schedules, "
+                "and automation counts. Use this for a quick health overview."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_audit_home
+        }
+        self._tools["find_devices_in_error"] = {
+            "description": "Return all Indigo devices currently in an error or fault state.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_find_devices_in_error
+        }
+        self._tools["find_low_battery"] = {
+            "description": (
+                "Return all devices with a batteryLevel state below the given "
+                "threshold (default 20%). Sorted lowest battery first."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "threshold": {
+                        "type": "number",
+                        "description": "Battery % threshold (default 20)"
+                    }
+                }
+            },
+            "function": self._tool_find_low_battery
+        }
+        self._tools["find_stale_devices"] = {
+            "description": (
+                "Return enabled devices whose state has not changed in more than "
+                "N days (default 7). Helps identify dead or forgotten hardware."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "number",
+                        "description": "Inactivity threshold in days (default 7)"
+                    }
+                }
+            },
+            "function": self._tool_find_stale_devices
+        }
+        self._tools["audit_variables"] = {
+            "description": (
+                "Report variables not referenced in any Python script (potentially "
+                "unused), and variables with empty, None, or 'null' values."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_audit_variables
+        }
+        self._tools["dependency_map"] = {
+            "description": (
+                "Show everything that references a given device or variable. "
+                "Returns which Python scripts reference it by ID, plus a full "
+                "list of all triggers and action groups (Indigo's API does not "
+                "expose their internal conditions, so content filtering is not "
+                "possible — the full list is returned for manual review)."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "entity_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "Device or variable ID (number) or name (string)"
+                    }
+                },
+                "required": ["entity_id"]
+            },
+            "function": self._tool_dependency_map
+        }
+
+        # ── Memory tools ───────────────────────────────────────────────────
+
+        self._tools["remember"] = {
+            "description": (
+                "Store a persistent note under a topic, accessible across future "
+                "Claude sessions. Examples: remember(topic='devices', note='Back "
+                "door sensor false-positives in direct sunlight') or "
+                "remember(topic='energy', note='Bias factor was 1.5 as of April 2026')."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Category for this note (e.g. devices, energy, heating)"
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "The note to store"
+                    }
+                },
+                "required": ["topic", "note"]
+            },
+            "function": self._tool_remember
+        }
+        self._tools["recall"] = {
+            "description": (
+                "Retrieve stored memories. Pass a topic to filter, or omit to "
+                "return all memories. Results are newest first."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Topic to filter by (omit for all)"
+                    }
+                }
+            },
+            "function": self._tool_recall
+        }
+        self._tools["recall_topics"] = {
+            "description": "List all memory topics and how many notes each has.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_recall_topics
+        }
+        self._tools["forget"] = {
+            "description": "Delete a specific memory entry by its ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "number",
+                        "description": "Memory ID to delete (from recall results)"
+                    }
+                },
+                "required": ["memory_id"]
+            },
+            "function": self._tool_forget
+        }
+
+        # ── Script tools ───────────────────────────────────────────────────
+
+        self._tools["read_script"] = {
+            "description": (
+                "Read the full content of a Python script from the Indigo "
+                "Python Scripts folder."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Script filename (with or without .py)"
+                    }
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_read_script
+        }
+        self._tools["write_script"] = {
+            "description": (
+                "Overwrite an existing Python script with new content. A timestamped "
+                "backup is created automatically before writing. Use this to fix or "
+                "update a script. For new scripts, use create_script instead."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name":    {"type": "string",
+                                "description": "Script filename (with or without .py)"},
+                    "content": {"type": "string",
+                                "description": "Full Python source code"}
+                },
+                "required": ["name", "content"]
+            },
+            "function": self._tool_write_script
+        }
+        self._tools["create_script"] = {
+            "description": (
+                "Create a new Python script in the Indigo Python Scripts folder. "
+                "Fails if the file already exists — use write_script to update."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name":    {"type": "string",
+                                "description": "Script filename (with or without .py)"},
+                    "content": {"type": "string",
+                                "description": "Full Python source code"}
+                },
+                "required": ["name", "content"]
+            },
+            "function": self._tool_create_script
+        }
+        self._tools["delete_script"] = {
+            "description": (
+                "Safely archive a Python script (moves to _backups/_archived/). "
+                "Does not permanently delete — can be recovered manually."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "Script filename to archive"}
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_delete_script
+        }
+        self._tools["list_script_backups"] = {
+            "description": "List auto-backups available for a given script.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "Script filename"}
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_list_script_backups
+        }
+
+        # ── Event subscription tools ───────────────────────────────────────
+
+        self._tools["subscribe"] = {
+            "description": (
+                "Subscribe to Indigo device or variable change events. ClaudeBridge "
+                "will queue any matching state changes. Use get_events() to poll "
+                "the queue. entity_type: 'device', 'variable', or 'all'. "
+                "entity_id: specific ID to watch, or omit for all of that type."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["device", "variable", "all"],
+                        "description": "Type to watch"
+                    },
+                    "entity_id": {
+                        "type": "number",
+                        "description": "Specific device/variable ID (omit for all)"
+                    }
+                }
+            },
+            "function": self._tool_subscribe
+        }
+        self._tools["unsubscribe"] = {
+            "description": "Remove an event subscription by its ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "subscription_id": {
+                        "type": "number",
+                        "description": "Subscription ID from subscribe()"
+                    }
+                },
+                "required": ["subscription_id"]
+            },
+            "function": self._tool_unsubscribe
+        }
+        self._tools["get_events"] = {
+            "description": (
+                "Drain queued Indigo change events. Pass `since` (Unix timestamp) "
+                "to get only events after a previous call. Returns up to `limit` "
+                "events (default 50). Requires at least one active subscription."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "since": {
+                        "type": "number",
+                        "description": "Unix timestamp — only return events after this"
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Max events to return (default 50)"
+                    }
+                }
+            },
+            "function": self._tool_get_events
+        }
+        self._tools["list_subscriptions"] = {
+            "description": "List active event subscriptions and current queue depth.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_list_subscriptions
+        }
+        self._tools["clear_events"] = {
+            "description": "Flush the event queue without returning its contents.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_clear_events
+        }
+
+        # ── Home status tools ──────────────────────────────────────────────
+
+        self._tools["home_status"] = {
+            "description": (
+                "Return a comprehensive snapshot of the home: all devices grouped "
+                "by type, key variable values, energy status, active alerts (errors/"
+                "low battery), and automation counts. Ideal for a full status report."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_home_status
+        }
+        self._tools["energy_status"] = {
+            "description": (
+                "Return a live energy snapshot from SigenEnergyManager device states: "
+                "battery SOC, solar generation, grid import/export, tariff, and "
+                "related variable values."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_energy_status
+        }
+        self._tools["heating_status"] = {
+            "description": (
+                "Return all heating/thermostat device states — Evohome TRVs via "
+                "Home Assistant Agent, with setpoints and current temperatures."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_heating_status
+        }
+        self._tools["security_status"] = {
+            "description": (
+                "Return all contact sensors (open doors/windows), active motion "
+                "sensors, and active leak/smoke/CO alerts."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_security_status
+        }
+
+        # ── Energy intelligence tools ──────────────────────────────────────
+
+        self._tools["energy_log_days"] = {
+            "description": (
+                "Return raw SigenEnergyManager log lines for the last N days "
+                "(max 14). Useful for asking Claude to reason about specific "
+                "events, decisions, or anomalies."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "number",
+                        "description": "Number of days to retrieve (default 3, max 14)"
+                    }
+                }
+            },
+            "function": self._tool_energy_log_days
+        }
+        self._tools["energy_daily_summary"] = {
+            "description": (
+                "Parse SigenEnergyManager daily log files into per-day kWh totals: "
+                "PV generated, grid imported, grid exported, home consumption, "
+                "max/min SOC, and overall self-sufficiency percentage."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "number",
+                        "description": "Number of days to summarise (default 14, max 90)"
+                    }
+                }
+            },
+            "function": self._tool_energy_daily_summary
+        }
+        self._tools["energy_compare"] = {
+            "description": (
+                "Compare two energy periods. Default: this week vs last week. "
+                "Returns kWh deltas and % changes for PV, import, export, "
+                "home consumption, and self-sufficiency."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "period_a_days":     {"type": "number",
+                                          "description": "Length of period A in days (default 7)"},
+                    "period_b_days":     {"type": "number",
+                                          "description": "Length of period B in days (default 7)"},
+                    "period_b_offset":   {"type": "number",
+                                          "description": "Days ago period B ends (default 7)"},
+                }
+            },
+            "function": self._tool_energy_compare
+        }
+
+    # ── System / housekeeping dispatch methods ─────────────────────────────
+
+    def _tool_system_health(self) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.system_health())
+        except Exception as e:
+            self.logger.error(f"system_health error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_list_python_scripts(self) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.list_python_scripts())
+        except Exception as e:
+            self.logger.error(f"list_python_scripts error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_find_orphaned_scripts(self) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.find_orphaned_scripts())
+        except Exception as e:
+            self.logger.error(f"find_orphaned_scripts error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_find_orphaned_plugin_data(self) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.find_orphaned_plugin_data())
+        except Exception as e:
+            self.logger.error(f"find_orphaned_plugin_data error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_find_large_files(
+        self,
+        path: str = "",
+        min_mb: float = 10.0,
+        max_results: int = 50,
+    ) -> str:
+        try:
+            return safe_json_dumps(
+                self.system_tools_handler.find_large_files(path, min_mb, max_results)
+            )
+        except Exception as e:
+            self.logger.error(f"find_large_files error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # ── Schedule / trigger dispatch methods ────────────────────────────────
+
+    def _tool_list_schedules(self) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.list_schedules())
+        except Exception as e:
+            self.logger.error(f"list_schedules error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_enable_schedule(self, schedule_id) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.enable_schedule(schedule_id))
+        except Exception as e:
+            self.logger.error(f"enable_schedule error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_disable_schedule(self, schedule_id) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.disable_schedule(schedule_id))
+        except Exception as e:
+            self.logger.error(f"disable_schedule error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_list_triggers(self) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.list_triggers())
+        except Exception as e:
+            self.logger.error(f"list_triggers error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_enable_trigger(self, trigger_id) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.enable_trigger(trigger_id))
+        except Exception as e:
+            self.logger.error(f"enable_trigger error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_disable_trigger(self, trigger_id) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.disable_trigger(trigger_id))
+        except Exception as e:
+            self.logger.error(f"disable_trigger error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # ── Audit dispatch methods ──────────────────────────────────────────────
+
+    def _tool_audit_home(self) -> str:
+        try:
+            return safe_json_dumps(self.audit_handler.audit_home())
+        except Exception as e:
+            self.logger.error(f"audit_home error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_find_devices_in_error(self) -> str:
+        try:
+            return safe_json_dumps(self.audit_handler.find_devices_in_error())
+        except Exception as e:
+            self.logger.error(f"find_devices_in_error error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_find_low_battery(self, threshold: int = 20) -> str:
+        try:
+            return safe_json_dumps(self.audit_handler.find_low_battery(threshold))
+        except Exception as e:
+            self.logger.error(f"find_low_battery error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_find_stale_devices(self, days: int = 7) -> str:
+        try:
+            return safe_json_dumps(self.audit_handler.find_stale_devices(days))
+        except Exception as e:
+            self.logger.error(f"find_stale_devices error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_audit_variables(self) -> str:
+        try:
+            return safe_json_dumps(self.audit_handler.audit_variables())
+        except Exception as e:
+            self.logger.error(f"audit_variables error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_dependency_map(self, entity_id: int = None) -> str:
+        try:
+            return safe_json_dumps(self.audit_handler.dependency_map(entity_id))
+        except Exception as e:
+            self.logger.error(f"dependency_map error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # ── Memory dispatch methods ─────────────────────────────────────────────
+
+    def _tool_remember(self, topic: str, note: str) -> str:
+        try:
+            return safe_json_dumps(self.memory_handler.remember(topic, note))
+        except Exception as e:
+            self.logger.error(f"remember error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_recall(self, topic: str = None) -> str:
+        try:
+            return safe_json_dumps(self.memory_handler.recall(topic))
+        except Exception as e:
+            self.logger.error(f"recall error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_recall_topics(self) -> str:
+        try:
+            return safe_json_dumps(self.memory_handler.recall_topics())
+        except Exception as e:
+            self.logger.error(f"recall_topics error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_forget(self, memory_id: int) -> str:
+        try:
+            return safe_json_dumps(self.memory_handler.forget(memory_id))
+        except Exception as e:
+            self.logger.error(f"forget error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # ── Script tools dispatch methods ───────────────────────────────────────
+
+    def _tool_read_script(self, name: str) -> str:
+        try:
+            return safe_json_dumps(self.script_tools_handler.read_script(name))
+        except Exception as e:
+            self.logger.error(f"read_script error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_write_script(self, name: str, content: str) -> str:
+        try:
+            return safe_json_dumps(self.script_tools_handler.write_script(name, content))
+        except Exception as e:
+            self.logger.error(f"write_script error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_create_script(self, name: str, content: str) -> str:
+        try:
+            return safe_json_dumps(self.script_tools_handler.create_script(name, content))
+        except Exception as e:
+            self.logger.error(f"create_script error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_delete_script(self, name: str) -> str:
+        try:
+            return safe_json_dumps(self.script_tools_handler.delete_script(name))
+        except Exception as e:
+            self.logger.error(f"delete_script error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_list_script_backups(self, name: str) -> str:
+        try:
+            return safe_json_dumps(self.script_tools_handler.list_script_backups(name))
+        except Exception as e:
+            self.logger.error(f"list_script_backups error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # ── Events dispatch methods ─────────────────────────────────────────────
+
+    def _tool_subscribe(self, entity_type: str = "all", entity_id: int = None) -> str:
+        try:
+            return safe_json_dumps(self.events_handler.subscribe(entity_type, entity_id))
+        except Exception as e:
+            self.logger.error(f"subscribe error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_unsubscribe(self, subscription_id: int) -> str:
+        try:
+            return safe_json_dumps(self.events_handler.unsubscribe(subscription_id))
+        except Exception as e:
+            self.logger.error(f"unsubscribe error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_get_events(
+        self,
+        subscription_id: int = None,
+        max_events: int = 50,
+    ) -> str:
+        try:
+            return safe_json_dumps(
+                self.events_handler.get_events(subscription_id, max_events)
+            )
+        except Exception as e:
+            self.logger.error(f"get_events error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_list_subscriptions(self) -> str:
+        try:
+            return safe_json_dumps(self.events_handler.list_subscriptions())
+        except Exception as e:
+            self.logger.error(f"list_subscriptions error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_clear_events(self) -> str:
+        try:
+            return safe_json_dumps(self.events_handler.clear_events())
+        except Exception as e:
+            self.logger.error(f"clear_events error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # ── Home status dispatch methods ────────────────────────────────────────
+
+    def _tool_home_status(self) -> str:
+        try:
+            return safe_json_dumps(self.home_status_handler.home_status())
+        except Exception as e:
+            self.logger.error(f"home_status error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_energy_status(self) -> str:
+        try:
+            return safe_json_dumps(self.home_status_handler.energy_status())
+        except Exception as e:
+            self.logger.error(f"energy_status error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_heating_status(self) -> str:
+        try:
+            return safe_json_dumps(self.home_status_handler.heating_status())
+        except Exception as e:
+            self.logger.error(f"heating_status error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_security_status(self) -> str:
+        try:
+            return safe_json_dumps(self.home_status_handler.security_status())
+        except Exception as e:
+            self.logger.error(f"security_status error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # ── Energy intelligence dispatch methods ────────────────────────────────
+
+    def _tool_energy_log_days(self, days: int = 3) -> str:
+        try:
+            return safe_json_dumps(self.energy_tools_handler.energy_log_days(days))
+        except Exception as e:
+            self.logger.error(f"energy_log_days error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_energy_daily_summary(self, days: int = 14) -> str:
+        try:
+            return safe_json_dumps(self.energy_tools_handler.energy_daily_summary(days))
+        except Exception as e:
+            self.logger.error(f"energy_daily_summary error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_energy_compare(
+        self,
+        period_a_days: int = 7,
+        period_b_days: int = 7,
+        period_b_offset: int = 7,
+    ) -> str:
+        try:
+            return safe_json_dumps(
+                self.energy_tools_handler.energy_compare(
+                    period_a_days, period_b_days, period_b_offset
+                )
+            )
+        except Exception as e:
+            self.logger.error(f"energy_compare error: {e}")
+            return safe_json_dumps({"error": str(e)})
 
     def _register_resources(self):
         """Register all available resources."""

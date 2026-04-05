@@ -372,6 +372,14 @@ class Plugin(indigo.PluginBase):
             # Auto-configure Claude Code integration (proxy + MCP config files)
             self._setup_claude_code_integration()
 
+            # Subscribe to device and variable changes for the events system
+            try:
+                indigo.devices.subscribeToChanges()
+                indigo.variables.subscribeToChanges()
+                self.logger.info("\t✅ Subscribed to device and variable change events")
+            except Exception as _sub_e:
+                self.logger.warning(f"\t⚠️  Could not subscribe to changes: {_sub_e}")
+
         except Exception as e:
             self.logger.error(f"\t❌ MCP handler initialization failed: {e}")
             self.mcp_handler = None
@@ -800,10 +808,55 @@ class Plugin(indigo.PluginBase):
             if self.mcp_server_device and self.mcp_server_device.id == device.id:
                 self.mcp_server_device = None
 
+    def variableUpdated(self, origVar: indigo.Variable, newVar: indigo.Variable) -> None:
+        """
+        Called when an Indigo variable value changes.
+        Queues the event for any active Claude subscriptions.
+        """
+        if (
+            self.mcp_handler
+            and hasattr(self.mcp_handler, "events_handler")
+            and origVar.value != newVar.value
+        ):
+            try:
+                self.mcp_handler.events_handler.queue_event({
+                    "type":      "variable_updated",
+                    "id":        newVar.id,
+                    "name":      newVar.name,
+                    "old_value": origVar.value,
+                    "new_value": newVar.value,
+                })
+            except Exception:
+                pass
+
     def deviceUpdated(self, origDev: indigo.Device, newDev: indigo.Device) -> None:
         """
-        Called when a device configuration is updated.
+        Called when a device state or configuration is updated.
+        Queues state-change events for any active Claude subscriptions,
+        then handles mcpServer-specific configuration tracking.
         """
+        # Queue event for the events system (all non-plugin devices)
+        if (
+            self.mcp_handler
+            and hasattr(self.mcp_handler, "events_handler")
+            and newDev.deviceTypeId != "mcpServer"
+        ):
+            try:
+                changed_states = {
+                    k: {"old": origDev.states.get(k), "new": v}
+                    for k, v in newDev.states.items()
+                    if origDev.states.get(k) != v
+                }
+                if changed_states:
+                    self.mcp_handler.events_handler.queue_event({
+                        "type":           "device_updated",
+                        "id":             newDev.id,
+                        "name":           newDev.name,
+                        "changed_states": changed_states,
+                    })
+            except Exception:
+                pass
+
         if newDev.deviceTypeId == "mcpServer":
             changes = []
             
