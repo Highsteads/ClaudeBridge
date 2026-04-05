@@ -1002,7 +1002,7 @@ class MCPHandler:
 
         self._tools["list_python_scripts"] = {
             "description": (
-                "List all Python scripts (.py files) in the Indigo Python Scripts "
+                "List all Python scripts (.py files) in the Indigo Scripts "
                 "folder. Returns name, size, last-modified date, and full path."
             ),
             "inputSchema": {"type": "object", "properties": {}},
@@ -1011,7 +1011,7 @@ class MCPHandler:
 
         self._tools["find_orphaned_scripts"] = {
             "description": (
-                "Scan all Python scripts in the Indigo Python Scripts folder and "
+                "Scan all Python scripts in the Indigo Scripts folder and "
                 "report any that reference device or variable IDs which no longer "
                 "exist in Indigo. Useful for finding stale scripts after devices "
                 "or variables have been deleted."
@@ -1296,7 +1296,7 @@ class MCPHandler:
         self._tools["read_script"] = {
             "description": (
                 "Read the full content of a Python script from the Indigo "
-                "Python Scripts folder."
+                "Scripts folder."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1330,7 +1330,7 @@ class MCPHandler:
         }
         self._tools["create_script"] = {
             "description": (
-                "Create a new Python script in the Indigo Python Scripts folder. "
+                "Create a new Python script in the Indigo Scripts folder. "
                 "Fails if the file already exists — use write_script to update."
             ),
             "inputSchema": {

@@ -27,8 +27,22 @@ from ...adapters.data_provider import DataProvider
 
 
 def _scripts_dir() -> str:
-    pa_base = os.path.dirname(indigo.server.getInstallFolderPath())
-    return os.path.join(pa_base, "Python Scripts")
+    """
+    Return the active Indigo scripts folder (one level above the version dir).
+
+    Resolution order:
+      1. <PA base>/Scripts        — standard Indigo location, present on all installations
+      2. <PA base>/Python Scripts — legacy / custom fallback
+      3. <PA base>/Scripts        — default if neither exists
+    """
+    pa_base        = os.path.dirname(indigo.server.getInstallFolderPath())
+    scripts        = os.path.join(pa_base, "Scripts")
+    python_scripts = os.path.join(pa_base, "Python Scripts")
+    if os.path.isdir(scripts):
+        return scripts
+    if os.path.isdir(python_scripts):
+        return python_scripts
+    return scripts
 
 
 def _days_since(ts) -> Optional[float]:
