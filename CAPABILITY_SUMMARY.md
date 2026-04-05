@@ -87,7 +87,7 @@ Search the live Indigo event log:
 
 ### 6. Script Tools (6 tools)
 
-Full read/write access to the Indigo Python Scripts folder:
+Full read/write access to the Indigo Scripts folder (the standard location where all Indigo Python automation scripts live — typically `Scripts` under the Perceptive Automation application support directory). If a `Python Scripts` folder exists instead, it is used as a fallback automatically:
 
 - **Read** a script — returns full content with line count and modification date
 - **Write** a script — overwrites with auto-backup (timestamped, max 5 per script)

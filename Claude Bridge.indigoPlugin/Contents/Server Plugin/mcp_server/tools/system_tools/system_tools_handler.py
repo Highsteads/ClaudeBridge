@@ -47,9 +47,22 @@ def _plugins_disabled_dir() -> str:
     return os.path.join(_indigo_base(), "Plugins (Disabled)")
 
 def _scripts_dir() -> str:
-    """Standard Indigo Python Scripts folder (one level above the version dir)."""
-    pa_base = os.path.dirname(_indigo_base())
-    return os.path.join(pa_base, "Python Scripts")
+    """
+    Return the active Indigo scripts folder (one level above the version dir).
+
+    Resolution order:
+      1. <PA base>/Scripts        — standard Indigo location, present on all installations
+      2. <PA base>/Python Scripts — legacy / custom fallback
+      3. <PA base>/Scripts        — default if neither exists
+    """
+    pa_base        = os.path.dirname(_indigo_base())
+    scripts        = os.path.join(pa_base, "Scripts")
+    python_scripts = os.path.join(pa_base, "Python Scripts")
+    if os.path.isdir(scripts):
+        return scripts
+    if os.path.isdir(python_scripts):
+        return python_scripts
+    return scripts  # default — will be created on first write
 
 
 # ── System helpers ───────────────────────────────────────────────────────────
@@ -171,13 +184,13 @@ class SystemToolsHandler(BaseToolHandler):
     # ────────────────────────────────────────────────────────────────────────
 
     def list_python_scripts(self) -> Dict[str, Any]:
-        """List all .py files in the Indigo Python Scripts folder."""
+        """List all .py files in the Indigo Scripts folder."""
         self.log_incoming_request("list_python_scripts", {})
         try:
             scripts_dir = _scripts_dir()
             if not os.path.isdir(scripts_dir):
                 return {"success": True, "scripts": [],
-                        "note": f"Python Scripts folder not found: {scripts_dir}"}
+                        "note": f"Scripts folder not found: {scripts_dir}"}
 
             scripts = []
             for entry in sorted(os.scandir(scripts_dir), key=lambda e: e.name.lower()):

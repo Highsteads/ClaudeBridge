@@ -1,8 +1,12 @@
 """
 Script tools handler for ClaudeBridge MCP server.
 
-Provides read, write, and create access to the Indigo Python Scripts folder,
+Provides read, write, and create access to the Indigo Scripts folder,
 allowing Claude to inspect, debug, and update automation scripts directly.
+
+The active scripts folder is resolved at runtime:
+  1. <PA base>/Scripts        — standard Indigo location (preferred)
+  2. <PA base>/Python Scripts — legacy/custom fallback if Scripts does not exist
 
 Tools:
   - read_script(name)               : return full content of a script
@@ -31,8 +35,22 @@ MAX_BACKUPS_PER_SCRIPT = 5
 
 
 def _scripts_dir() -> str:
+    """
+    Return the active Indigo scripts folder.
+
+    Resolution order:
+      1. <PA base>/Scripts        — standard Indigo location, present on all installations
+      2. <PA base>/Python Scripts — legacy / custom fallback
+      3. <PA base>/Scripts        — default if neither exists (created on first write)
+    """
     pa_base = os.path.dirname(indigo.server.getInstallFolderPath())
-    return os.path.join(pa_base, "Python Scripts")
+    scripts        = os.path.join(pa_base, "Scripts")
+    python_scripts = os.path.join(pa_base, "Python Scripts")
+    if os.path.isdir(scripts):
+        return scripts
+    if os.path.isdir(python_scripts):
+        return python_scripts
+    return scripts  # default — will be created on first write
 
 
 def _backup_dir() -> str:
@@ -110,13 +128,14 @@ class ScriptToolsHandler(BaseToolHandler):
                 content = fh.read()
             stat = os.stat(path)
             result = {
-                "success":  True,
-                "name":     os.path.basename(path),
-                "path":     path,
-                "size_kb":  round(stat.st_size / 1024, 1),
-                "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-                "lines":    content.count("\n") + 1,
-                "content":  content,
+                "success":      True,
+                "name":         os.path.basename(path),
+                "path":         path,
+                "scripts_dir":  _scripts_dir(),
+                "size_kb":      round(stat.st_size / 1024, 1),
+                "modified":     datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "lines":        content.count("\n") + 1,
+                "content":      content,
             }
             self.log_tool_outcome("read_script", True,
                                   f"Read {result['lines']} lines from '{name}'")
