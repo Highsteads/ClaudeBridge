@@ -7,13 +7,13 @@ Once installed, Claude can query device states, turn devices on and off, read an
 **Author:** CliveS & Claude Sonnet 4.6
 **Platform:** Indigo 2025.1, macOS, Python 3.11
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 1.2.0
+**Version:** 2.0.0
 
 ---
 
 ## Features
 
-- **23 MCP tools** — full read/write access to devices, variables, action groups, plugins, and event log
+- **64 MCP tools** — full read/write access to devices, variables, action groups, plugins, event log, scripts, memory, events, and home intelligence
 - **`device_control` — single-call search + action** — find and control a device by name in one round trip (~1s)
 - **Natural language entity search** — find devices by description ("conservatory lamp", "bedroom sensor")
 - **Fast slim search** — returns lightweight results by default; use `detail="full"` only when deep config is needed
@@ -57,7 +57,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 23 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 64 `indigo-mcp` tools available
 
 > **Anthropic API key:** If you have a `secrets.py` at
 > `/Library/Application Support/Perceptive Automation/secrets.py`
@@ -96,7 +96,7 @@ Click **Test** to verify the API connection, then **Save**.
 
 #### 3. Device auto-creation
 
-From v1.2.0 onwards the plugin auto-creates a Claude Bridge device on first startup.
+The plugin auto-creates a Claude Bridge device on first startup.
 No manual "New Device" step is needed. If you need to create it manually:
 **Devices → New Device → Plugin: Claude Bridge → Type: Claude Bridge**
 
@@ -135,7 +135,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 23 tools available.
+The `indigo-mcp` tools will appear on next session start. You should see 64 tools available.
 
 </details>
 
@@ -160,6 +160,7 @@ Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridg
 
 ## Available Tools
 
+### Devices (7)
 | Tool | Description |
 |------|-------------|
 | `list_devices` | List all Indigo devices with states |
@@ -169,22 +170,87 @@ Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridg
 | `device_turn_on` | Turn a device on |
 | `device_turn_off` | Turn a device off |
 | `device_set_brightness` | Set dimmer brightness (0–100) |
+
+### Variables (5)
+| Tool | Description |
+|------|-------------|
 | `list_variables` | List all Indigo variables |
 | `list_variable_folders` | List variable folders |
 | `get_variable_by_id` | Get a specific variable value |
 | `variable_update` | Update a variable value |
 | `variable_create` | Create a new variable |
+
+### Action Groups (3)
+| Tool | Description |
+|------|-------------|
 | `list_action_groups` | List all action groups |
 | `get_action_group_by_id` | Get action group details |
 | `action_execute_group` | Execute an action group |
+
+### Plugins (4)
+| Tool | Description |
+|------|-------------|
 | `list_plugins` | List all installed plugins |
 | `get_plugin_by_id` | Get plugin details |
 | `get_plugin_status` | Check if a plugin is enabled/running |
 | `restart_plugin` | Restart an Indigo plugin |
+
+### Search & Control (3)
+| Tool | Description |
+|------|-------------|
 | `device_control` | Find device by name and turn on/off/toggle in one call |
 | `search_entities` | Natural language search across all entities |
 | `query_event_log` | Query the Indigo event log |
 | `analyze_historical_data` | Analyse historical device/variable data |
+
+### Scripts (5)
+| Tool | Description |
+|------|-------------|
+| `list_script_backups` | List available script backups |
+| `read_script` | Read an Indigo Python script |
+| `write_script` | Write/update a script (auto-backup on write) |
+| `create_script` | Create a new script |
+| `delete_script` | Delete a script |
+
+### Memory (4)
+| Tool | Description |
+|------|-------------|
+| `remember` | Store a persistent memory entry |
+| `recall` | Retrieve memory entries by topic |
+| `recall_topics` | List all memory topics |
+| `forget` | Delete a memory entry |
+
+### Event Subscriptions (5)
+| Tool | Description |
+|------|-------------|
+| `subscribe` | Subscribe to device or variable change events |
+| `unsubscribe` | Remove a subscription |
+| `get_events` | Retrieve buffered events |
+| `list_subscriptions` | List active subscriptions |
+| `clear_events` | Clear the event buffer |
+
+### Audit (7)
+| Tool | Description |
+|------|-------------|
+| `audit_home` | Full home configuration audit |
+| `find_devices_in_error` | Find devices reporting error states |
+| `find_low_battery` | Find devices with low battery |
+| `find_stale_devices` | Find devices not updated recently |
+| `audit_variables` | Audit variable usage |
+| `dependency_map` | Map dependencies between entities |
+| `find_conflicts` | Find duplicate names, shared addresses, orphaned refs |
+
+### Home Intelligence (7)
+| Tool | Description |
+|------|-------------|
+| `home_status` | Current home status summary |
+| `energy_status` | Solar, battery, and grid energy status |
+| `heating_status` | Heating zone status |
+| `security_status` | Security sensor status |
+| `home_status_report` | Configurable prose markdown narrative |
+| `energy_log_days` | Read SigenEnergyManager daily log files |
+| `energy_daily_summary` | Summarise energy for a day |
+| `energy_compare` | Compare energy across days |
 
 ---
 
@@ -254,6 +320,24 @@ README.md
 ---
 
 ## Changelog
+
+### 2.0.0 (2026-04-05)
+- **64 MCP tools** (up from 23): added Scripts (5), Memory (4), Event Subscriptions (5), Audit (7), Home Intelligence (7), plus `find_conflicts` and `home_status_report`
+- Script tools with auto-backup on write
+- Persistent memory store (memory.json) — `remember` / `recall` / `forget`
+- Push-model event subscriptions via ring-buffer fed by `deviceUpdated` / `variableUpdated` callbacks
+- Audit tools: `audit_home`, `find_devices_in_error`, `find_low_battery`, `find_stale_devices`, `audit_variables`, `dependency_map`, `find_conflicts`
+- Home intelligence: `home_status`, `energy_status`, `heating_status`, `security_status`, `home_status_report`
+- Energy intelligence: reads SigenEnergyManager daily log files (`energy_log_days`, `energy_daily_summary`, `energy_compare`)
+- `variableUpdated()` callback added; `deviceUpdated()` extended to queue all non-mcpServer state changes
+- Fixed `Scripts` folder resolution — prefers `Scripts` over legacy `Python Scripts`
+
+### 1.2.0 (2026-04-02)
+- Zero-config install: plugin self-configures Claude Code on first enable
+- `_setup_claude_code_integration()` in `startup()`: copies bundled proxy to `Scripts/`, patches Bearer token, updates `~/.mcp.json` and `~/.claude/settings.json`
+- `setup.py` at repo root for CLI/advanced users
+- Proxy (`indigo_mcp_proxy.py`) now lives inside bundle — single source of truth
+- Auto-creates Claude Bridge device on first startup — no manual "New Device" step
 
 ### 1.1.1 (2026-03-24)
 - Fixed `get_devices_by_state`: now searches full device data including top-level properties (e.g. `heatIsOn`, `onState`)
