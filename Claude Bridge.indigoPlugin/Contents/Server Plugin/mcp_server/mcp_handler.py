@@ -911,17 +911,39 @@ class MCPHandler:
 
         # Log query tool
         self._tools["query_event_log"] = {
-            "description": "Query recent Indigo server event log entries",
+            "description": (
+                "Query Indigo server event log entries. "
+                "Without after/before returns the most recent line_count entries. "
+                "With after/before reads from the on-disk log files and returns "
+                "all entries in that time window (useful for investigating past events). "
+                "Time formats: 'HH:MM:SS' (today assumed), 'YYYY-MM-DDTHH:MM:SS' (full)."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "line_count": {
                         "type": "number",
-                        "description": "Number of log entries to return (default: 20)"
+                        "description": "Max entries to return (default: 20)"
                     },
                     "show_timestamp": {
                         "type": "boolean",
-                        "description": "Include timestamps in log entries (default: true)"
+                        "description": "Include timestamps in entries (default: true)"
+                    },
+                    "after": {
+                        "type": "string",
+                        "description": (
+                            "Return only entries after this time. "
+                            "Format: 'HH:MM:SS' for today, or 'YYYY-MM-DDTHH:MM:SS' "
+                            "for a specific date. Example: '07:45:00'"
+                        )
+                    },
+                    "before": {
+                        "type": "string",
+                        "description": (
+                            "Return only entries before this time. "
+                            "Format: 'HH:MM:SS' for today, or 'YYYY-MM-DDTHH:MM:SS'. "
+                            "Example: '07:52:00'"
+                        )
                     }
                 }
             },
@@ -2304,14 +2326,18 @@ class MCPHandler:
 
     def _tool_query_event_log(
         self,
-        line_count: int = 20,
-        show_timestamp: bool = True
+        line_count:     int  = 20,
+        show_timestamp: bool = True,
+        after:          str  = None,
+        before:         str  = None,
     ) -> str:
         """Query event log tool implementation."""
         try:
             result = self.log_query_handler.query(
                 line_count=line_count,
-                show_timestamp=show_timestamp
+                show_timestamp=show_timestamp,
+                after=after,
+                before=before,
             )
             return safe_json_dumps(result)
         except Exception as e:
