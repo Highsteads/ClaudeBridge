@@ -69,6 +69,31 @@
         <Description>Name of the database containing historical data (default: indigo)</Description>
     </Field>
 
+    <Field id="separator_phase2" type="separator"/>
+
+    <!-- Phase 2 hardening: rate limit + cache TTL  -->
+    <Field id="rate_limit_per_minute" type="textfield" defaultValue="120">
+        <Label>Rate limit (per minute):</Label>
+        <Description>Per-session sliding-window cap. 'admin'-scoped tokens get 10×.</Description>
+    </Field>
+    <Field id="rate_limit_per_day" type="textfield" defaultValue="5000">
+        <Label>Rate limit (per day):</Label>
+        <Description>Per-session daily cap.</Description>
+    </Field>
+    <Field id="cache_ttl_seconds" type="textfield" defaultValue="60">
+        <Label>Read-cache TTL (seconds):</Label>
+        <Description>How long read-only tool results stay cached. 0 disables cache. Max 300.</Description>
+    </Field>
+    <Field id="cache_help" type="label" fontSize="small" alignWithControl="false">
+        <Label>Mutating tools (turn_on/off, fire_indigo_event, …) automatically invalidate related cache buckets. Clients can override with the Cache-Control: no-cache header.</Label>
+    </Field>
+
+    <Field id="separator_scopes" type="separator"/>
+
+    <Field id="scopes_info" type="label" fontSize="small" alignWithControl="false">
+        <Label>Per-token scopes (read / write / admin) are configured in scopes.json under the plugin's Preferences folder. Without scopes.json, every authenticated token gets full access (backward compatible). See Show Plugin Info menu for the path.</Label>
+    </Field>
+
     <Field id="separator3" type="separator"/>
 
     <!-- Debug Settings -->

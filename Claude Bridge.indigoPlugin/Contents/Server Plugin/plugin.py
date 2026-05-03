@@ -3,9 +3,9 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Sonnet 4.6
-# Date:        03-04-2026
-# Version:     1.2
+# Author:      CliveS & Claude Opus 4.7
+# Date:        30-04-2026
+# Version:     2.2
 
 try:
     import indigo
@@ -17,6 +17,7 @@ import logging
 import os
 import platform
 import socket
+import time
 
 import anthropic
 
@@ -67,6 +68,20 @@ class Plugin(indigo.PluginBase):
         # Security configuration
         self.access_mode = plugin_prefs.get("access_mode", "local_only")
 
+        # Phase 2: rate limit / cache (with safe parsing)
+        try:
+            self.rate_limit_per_minute = max(1, int(plugin_prefs.get("rate_limit_per_minute", 120)))
+        except (TypeError, ValueError):
+            self.rate_limit_per_minute = 120
+        try:
+            self.rate_limit_per_day = max(1, int(plugin_prefs.get("rate_limit_per_day", 5000)))
+        except (TypeError, ValueError):
+            self.rate_limit_per_day = 5000
+        try:
+            self.cache_ttl_seconds = max(0, min(300, int(plugin_prefs.get("cache_ttl_seconds", 60))))
+        except (TypeError, ValueError):
+            self.cache_ttl_seconds = 60
+
         # Component instances
         self.data_provider = None
         self.mcp_handler = None
@@ -74,6 +89,9 @@ class Plugin(indigo.PluginBase):
 
         # Device management
         self.mcp_server_device = None
+
+        # Plugin start time (used by /health endpoint)
+        self._start_time = time.time()
 
         # Set up logging properly
         self.log_level = int(plugin_prefs.get("log_level", logging.INFO))
@@ -343,9 +361,18 @@ class Plugin(indigo.PluginBase):
 
         # Initialize MCP handler (includes vector store initialization)
         try:
+            scopes_file = os.path.join(
+                indigo.server.getInstallFolderPath(),
+                "Preferences/Plugins/com.clives.indigoplugin.claudebridge/scopes.json",
+            )
             self.mcp_handler = MCPHandler(
                 data_provider=self.data_provider,
-                logger=self.logger
+                logger=self.logger,
+                plugin=self,
+                rate_limit_per_minute=self.rate_limit_per_minute,
+                rate_limit_per_day=self.rate_limit_per_day,
+                cache_ttl_seconds=self.cache_ttl_seconds,
+                scopes_file=scopes_file,
             )
 
             # Log MCP client connection information
@@ -525,8 +552,155 @@ class Plugin(indigo.PluginBase):
             }
 
     ########################################
+    # Health / Diagnostics IWS endpoint
+    ########################################
+
+    def handle_health_endpoint(self, action, dev=None, callerWaitingForResult=True):
+        """
+        GET /message/com.clives.indigoplugin.claudebridge/health/
+        Returns plugin uptime, session count, tool inventory and recent
+        tool-call latencies as JSON. Cheap to call — safe for monitors.
+        """
+        if not self.mcp_handler:
+            return {
+                "status": 503,
+                "headers": {"Content-Type": "application/json"},
+                "content": json.dumps({
+                    "status": "unavailable",
+                    "error":  "MCP handler not initialized",
+                }),
+            }
+        try:
+            data = self.mcp_handler.get_health_data(plugin_start_time=self._start_time)
+            return {
+                "status":  200,
+                "headers": {"Content-Type": "application/json; charset=utf-8"},
+                "content": json.dumps(data, default=str, indent=2),
+            }
+        except Exception as e:
+            self.logger.error(f"❌ Health endpoint error: {e}")
+            return {
+                "status":  500,
+                "headers": {"Content-Type": "application/json"},
+                "content": json.dumps({"status": "error", "error": str(e)}),
+            }
+
+    ########################################
+    # Tool Explorer IWS endpoint (HTML)
+    ########################################
+
+    def handle_explorer_endpoint(self, action, dev=None, callerWaitingForResult=True):
+        """
+        GET /message/com.clives.indigoplugin.claudebridge/explorer/
+        Returns an interactive HTML page documenting every registered MCP tool
+        — its description, arguments, and required fields. Useful for users,
+        plugin testers, and debugging during development.
+        """
+        if not self.mcp_handler:
+            return {
+                "status":  503,
+                "headers": {"Content-Type": "text/html"},
+                "content": "<h1>Claude Bridge unavailable</h1><p>MCP handler not initialized.</p>",
+            }
+        try:
+            mcp_endpoint = "/message/com.clives.indigoplugin.claudebridge/mcp/"
+            html = self.mcp_handler.get_tool_explorer_html(endpoint_url=mcp_endpoint)
+            return {
+                "status":  200,
+                "headers": {"Content-Type": "text/html; charset=utf-8"},
+                "content": html,
+            }
+        except Exception as e:
+            self.logger.error(f"❌ Explorer endpoint error: {e}")
+            return {
+                "status":  500,
+                "headers": {"Content-Type": "text/html"},
+                "content": f"<h1>Internal error</h1><pre>{e}</pre>",
+            }
+
+    ########################################
     # Menu Actions
     ########################################
+
+    def scaffold_scopes_menu(self) -> None:
+        """Create a starter scopes.json next to the plugin Preferences. Idempotent."""
+        from pathlib import Path as _Path
+        scopes_path = _Path(indigo.server.getInstallFolderPath()) / (
+            "Preferences/Plugins/com.clives.indigoplugin.claudebridge/scopes.json"
+        )
+        if scopes_path.exists():
+            indigo.server.log(f"Claude Bridge: scopes.json already exists at: {scopes_path}")
+            return
+        starter = {
+            "default_scopes": ["read", "write", "admin"],
+            "tokens": {
+                "REPLACE_WITH_FULL_BEARER_TOKEN_FOR_CLAUDE_CODE": {
+                    "name":   "claude-code",
+                    "scopes": ["read", "write", "admin"]
+                },
+                "REPLACE_WITH_BEARER_FOR_PHONE_OR_OTHER_CLIENT": {
+                    "name":   "phone-readonly",
+                    "scopes": ["read"]
+                }
+            }
+        }
+        try:
+            scopes_path.parent.mkdir(parents=True, exist_ok=True)
+            scopes_path.write_text(json.dumps(starter, indent=2) + "\n")
+            indigo.server.log(f"Claude Bridge: Wrote starter scopes.json to: {scopes_path}")
+            indigo.server.log("Claude Bridge: Edit the token strings to match your IWS bearer "
+                              "tokens, then use 'Reload scopes.json' to apply.")
+        except Exception as e:
+            indigo.server.log(f"Claude Bridge: Could not create scopes.json: {e}", isError=True)
+
+    def reload_scopes_menu(self) -> None:
+        """Reload scopes.json without restarting the plugin."""
+        if not self.mcp_handler:
+            indigo.server.log("Claude Bridge: MCP handler not initialized", isError=True)
+            return
+        ok = self.mcp_handler.scope_manager.reload()
+        if ok:
+            summary = self.mcp_handler.scope_manager.summary()
+            indigo.server.log(
+                f"Claude Bridge: scopes.json reloaded — {summary['tokens_configured']} token(s), "
+                f"default={summary['default_scopes']}"
+            )
+        else:
+            indigo.server.log("Claude Bridge: scopes.json missing or invalid — using defaults")
+
+    def clear_cache_menu(self) -> None:
+        """Drop every cached read-tool result."""
+        if not self.mcp_handler:
+            indigo.server.log("Claude Bridge: MCP handler not initialized", isError=True)
+            return
+        n = self.mcp_handler.tool_cache.clear()
+        indigo.server.log(f"Claude Bridge: Cleared {n} cached tool result(s)")
+
+    def show_health_menu(self) -> None:
+        """Menu action: print health snapshot to the Indigo log."""
+        if not self.mcp_handler:
+            indigo.server.log("Claude Bridge: MCP handler not initialized", isError=True)
+            return
+        try:
+            data = self.mcp_handler.get_health_data(plugin_start_time=self._start_time)
+            indigo.server.log("Claude Bridge — Health Snapshot:\n" +
+                              json.dumps(data, default=str, indent=2))
+        except Exception as e:
+            indigo.server.log(f"Claude Bridge: Health snapshot failed: {e}", isError=True)
+
+    def show_explorer_url_menu(self) -> None:
+        """Menu action: print the tool explorer URL(s) to the Indigo log."""
+        urls = self._get_mcp_client_urls()
+        explorer_path = "/message/com.clives.indigoplugin.claudebridge/explorer/"
+        lines = ["Claude Bridge — Tool Explorer URLs:", ""]
+        for u in urls:
+            base = u["url"].rsplit("/message/", 1)[0]
+            lines.append(f"   {u['label']}: {base}{explorer_path}")
+        lines += [
+            "",
+            "Open in any browser. IWS authentication required (your IWS credentials or local secret).",
+        ]
+        indigo.server.log("\n".join(lines))
 
     def show_mcp_client_info_menu(self) -> None:
         """Menu action to show Claude Desktop MCP client connection information."""
@@ -641,7 +815,7 @@ class Plugin(indigo.PluginBase):
             config_lines.extend(["", "Setup:", "  1. Create a local secret (see documentation link above)", "  2. Replace YOUR_LOCAL_SECRET_KEY with your generated local secret", "  3. Replace your-local-hostname-or-ip with your server IP/hostname for LAN access", "  4. Replace port 8176 if you are not using the default Indigo Web Server port", ""])
         config_lines.extend(["", ""])
 
-        self.logger.info("\n".join(config_lines))
+        indigo.server.log("\n".join(config_lines))
 
     def test_connections_button(self, values_dict: indigo.Dict) -> indigo.Dict:
         """Button action to test connections with current configuration values."""
@@ -739,6 +913,19 @@ class Plugin(indigo.PluginBase):
         except (ValueError, TypeError):
             errors_dict["log_level"] = "Log level must be a valid number"
 
+        # Phase 2 — rate limit / cache TTL bounds
+        for fld, lo, hi, default in (
+            ("rate_limit_per_minute", 1,    100_000, 120),
+            ("rate_limit_per_day",    1, 10_000_000, 5_000),
+            ("cache_ttl_seconds",     0,        300, 60),
+        ):
+            try:
+                v = int(values_dict.get(fld, default))
+                if v < lo or v > hi:
+                    errors_dict[fld] = f"Must be between {lo} and {hi}"
+            except (ValueError, TypeError):
+                errors_dict[fld] = "Must be a whole number"
+
         # Validate InfluxDB configuration if enabled
         if values_dict.get("enable_influxdb", False):
             influx_url = values_dict.get("influx_url", "").strip()
@@ -778,6 +965,35 @@ class Plugin(indigo.PluginBase):
         return (len(errors_dict) == 0, values_dict, errors_dict)
 
     ########################################
+    # Plugin Event System (claudeEvent triggers)
+    ########################################
+
+    def fire_claude_event(self, event_name: str, data=None, source: str = "claude") -> dict:
+        """
+        Fire all claudeEvent triggers using the 2025.1 eventData mechanism.
+
+        Inside the user's Trigger actions, the payload is accessible as:
+            %%eventData:name%%   %%eventData:data%%   %%eventData:source%%
+        Per-trigger filtering is done via Trigger Conditions checking those
+        substitutions (Indigo's standard mechanism — no custom code needed).
+
+        Returns a small dict the MCP tool serialises back to Claude.
+        """
+        payload = {
+            "name":   event_name or "",
+            "data":   json.dumps(data) if isinstance(data, (dict, list)) else str(data or ""),
+            "source": source or "claude",
+        }
+        try:
+            # 2025.1+ eventData support
+            self.triggerEvent("claudeEvent", eventData=payload)
+        except TypeError:
+            # Older Indigo: fall back to plain triggerEvent
+            self.triggerEvent("claudeEvent")
+        self.logger.info(f"🎯 fire_claude_event '{event_name}' fired (source={source})")
+        return {"event": event_name, "payload": payload}
+
+    ########################################
     # Device Management
     ########################################
 
@@ -790,10 +1006,17 @@ class Plugin(indigo.PluginBase):
             # Store reference to device
             self.mcp_server_device = device
 
-            # Update device states to show server is available via IWS
-            device.updateStateOnServer(key="serverStatus", value="Running")
-            device.updateStateOnServer(key="accessMode", value="IWS")
-            device.updateStateOnServer(key="lastActivity", value=str(indigo.server.getTime()))
+            # Update device states only if changed — avoids Event Log spam and DB churn
+            updates = []
+            if device.states.get("serverStatus") != "Running":
+                updates.append({"key": "serverStatus", "value": "Running"})
+            if device.states.get("accessMode") != "IWS":
+                updates.append({"key": "accessMode", "value": "IWS"})
+            new_activity = str(indigo.server.getTime())
+            if device.states.get("lastActivity") != new_activity:
+                updates.append({"key": "lastActivity", "value": new_activity})
+            if updates:
+                device.updateStatesOnServer(updates)
 
     def deviceStopComm(self, device: indigo.Device) -> None:
         """
@@ -801,8 +1024,9 @@ class Plugin(indigo.PluginBase):
         """
         if device.deviceTypeId == "mcpServer":
             self.logger.info(f"MCP Server device stopped: {device.name}")
-            # Update device state
-            device.updateStateOnServer(key="serverStatus", value="Stopped")
+            # Update device state only if changed
+            if device.states.get("serverStatus") != "Stopped":
+                device.updateStateOnServer(key="serverStatus", value="Stopped")
 
             # Clear device reference
             if self.mcp_server_device and self.mcp_server_device.id == device.id:
@@ -987,6 +1211,22 @@ class Plugin(indigo.PluginBase):
             self.influx_login = values_dict.get("influx_login", "")
             self.influx_password = values_dict.get("influx_password", "")
             self.influx_database = values_dict.get("influx_database", "indigo")
+
+            # Phase 2 — apply rate-limit / cache changes live (no restart needed)
+            try:
+                self.rate_limit_per_minute = max(1, int(values_dict.get("rate_limit_per_minute", 120)))
+                self.rate_limit_per_day    = max(1, int(values_dict.get("rate_limit_per_day", 5000)))
+                self.cache_ttl_seconds     = max(0, min(300, int(values_dict.get("cache_ttl_seconds", 60))))
+                if self.mcp_handler:
+                    self.mcp_handler.rate_limiter.per_minute = self.rate_limit_per_minute
+                    self.mcp_handler.rate_limiter.per_day    = self.rate_limit_per_day
+                    self.mcp_handler.tool_cache.set_ttl(self.cache_ttl_seconds)
+                    self.logger.info(
+                        f"\t✅ Rate limits updated: {self.rate_limit_per_minute}/min, "
+                        f"{self.rate_limit_per_day}/day; cache TTL {self.cache_ttl_seconds}s"
+                    )
+            except Exception as _e:
+                self.logger.warning(f"\t⚠️  Could not apply Phase 2 settings: {_e}")
 
 
             # Set environment variables (same as startup)

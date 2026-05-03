@@ -59,6 +59,9 @@ def post_message(data: dict):
     """POST a JSON-RPC message to Indigo MCP and write response to stdout."""
     global session_id, _connection
 
+    # Notifications have no "id" — MCP spec forbids sending them a response.
+    is_notification = "id" not in data
+
     # Downgrade protocol version (Claude Code sends newer than Indigo supports)
     if data.get("method") == "initialize" and "params" in data:
         data["params"]["protocolVersion"] = INDIGO_PROTOCOL_VER
@@ -99,14 +102,16 @@ def post_message(data: dict):
                         break
                     try:
                         msg = json.loads(payload)
-                        sys.stdout.write(json.dumps(msg) + "\n")
-                        sys.stdout.flush()
+                        if not is_notification:
+                            sys.stdout.write(json.dumps(msg) + "\n")
+                            sys.stdout.flush()
                     except json.JSONDecodeError:
                         pass
         else:
             body_bytes = resp.read()
             body_str   = body_bytes.decode("utf-8").strip()
-            if body_str:
+            # Never write a response to a notification — MCP spec forbids it.
+            if body_str and not is_notification:
                 sys.stdout.write(body_str + "\n")
                 sys.stdout.flush()
 
@@ -118,13 +123,15 @@ def post_message(data: dict):
             conn.request("POST", INDIGO_MCP_PATH, body=body, headers=headers)
             resp = conn.getresponse()
             body_str = resp.read().decode("utf-8").strip()
-            if body_str:
+            if body_str and not is_notification:
                 sys.stdout.write(body_str + "\n")
                 sys.stdout.flush()
         except Exception as e:
-            _write_error(data.get("id"), f"Connection error: {e}")
+            if not is_notification:
+                _write_error(data.get("id"), f"Connection error: {e}")
     except Exception as e:
-        _write_error(data.get("id"), str(e))
+        if not is_notification:
+            _write_error(data.get("id"), str(e))
 
 
 def _write_error(req_id, message: str):

@@ -5,4 +5,33 @@
         <Name>Print MCP Client Connection Information</Name>
         <CallbackMethod>show_mcp_client_info_menu</CallbackMethod>
     </MenuItem>
+
+    <MenuItem id="sep1" isSeparator="true"/>
+
+    <MenuItem id="show_health">
+        <Name>Print Plugin Health (uptime / sessions / tool latencies)</Name>
+        <CallbackMethod>show_health_menu</CallbackMethod>
+    </MenuItem>
+
+    <MenuItem id="show_explorer_url">
+        <Name>Print Tool Explorer URL</Name>
+        <CallbackMethod>show_explorer_url_menu</CallbackMethod>
+    </MenuItem>
+
+    <MenuItem id="sep2" isSeparator="true"/>
+
+    <MenuItem id="scaffold_scopes">
+        <Name>Create Starter scopes.json (per-token Read/Write/Admin)</Name>
+        <CallbackMethod>scaffold_scopes_menu</CallbackMethod>
+    </MenuItem>
+
+    <MenuItem id="reload_scopes">
+        <Name>Reload scopes.json</Name>
+        <CallbackMethod>reload_scopes_menu</CallbackMethod>
+    </MenuItem>
+
+    <MenuItem id="clear_cache">
+        <Name>Clear Read-Cache</Name>
+        <CallbackMethod>clear_cache_menu</CallbackMethod>
+    </MenuItem>
 </MenuItems>

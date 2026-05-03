@@ -13,8 +13,11 @@ from typing import Any, Dict, List, Optional, Union
 from .adapters.data_provider import DataProvider
 from .common.indigo_device_types import IndigoDeviceType, IndigoEntityType, DeviceTypeResolver
 from .common.json_encoder import safe_json_dumps
+from .common.progress import ProgressEmitter, encode_sse_response
+from .common.tool_cache import ToolCache
 from .common.vector_store.vector_store_manager import VectorStoreManager
 from .handlers.list_handlers import ListHandlers
+from .security import RateLimiter, RateLimitExceeded, ScopeManager, ScopeDenied, required_scope_for
 from .tools.action_control import ActionControlHandler
 from .tools.device_control import DeviceControlHandler
 from .tools.get_devices_by_type import GetDevicesByTypeHandler
@@ -42,20 +45,55 @@ class MCPHandler:
     def __init__(
         self,
         data_provider: DataProvider,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        plugin=None,
+        rate_limit_per_minute: int = 120,
+        rate_limit_per_day:    int = 5_000,
+        cache_ttl_seconds:     int = 60,
+        scopes_file:           Optional[str] = None,
     ):
         """
         Initialize the MCP handler.
-        
+
         Args:
             data_provider: Data provider for accessing entity data
             logger: Optional logger instance
+            plugin: Owning Plugin instance — used for triggerEvent() calls
+                    and tool-call telemetry. May be None in test contexts.
+            rate_limit_per_minute: Per-session sliding-window cap (default 120).
+            rate_limit_per_day:    Per-session daily cap (default 5000).
+            cache_ttl_seconds:     TTL for cacheable read tools, 0 disables.
+            scopes_file: Optional path to scopes.json for per-token authorisation.
         """
         self.data_provider = data_provider
         self.logger = logger or logging.getLogger("Plugin")
+        self.plugin = plugin
 
         # Session management
         self._sessions = {}  # session_id -> {created, last_seen, client_info}
+
+        # Tool-call telemetry — rolling window of recent calls for /health metrics.
+        # Each entry: {"name": str, "duration_ms": int, "ok": bool, "ts": float}
+        self._tool_call_log: List[Dict[str, Any]] = []
+        self._tool_call_log_max = 200
+        self._tool_error_count = 0
+
+        # ── Phase 2 hardening ─────────────────────────────────────────────
+        self.rate_limiter = RateLimiter(
+            per_minute=rate_limit_per_minute,
+            per_day=rate_limit_per_day,
+            logger=self.logger,
+        )
+        self.tool_cache = ToolCache(
+            default_ttl=cache_ttl_seconds,
+            logger=self.logger,
+        )
+        self.scope_manager = ScopeManager(
+            scopes_file=scopes_file or "",
+            logger=self.logger,
+        )
+        # Per-call ProgressEmitter — set in _handle_tools_call, read by tools.
+        self._current_emitter: Optional[ProgressEmitter] = None
 
         # Get database path from environment variable
         db_path = os.environ.get("DB_FILE")
@@ -168,6 +206,135 @@ class MCPHandler:
         """Stop the MCP handler and cleanup resources."""
         if self.vector_store_manager:
             self.vector_store_manager.stop()
+
+    ########################################
+    # Health / Diagnostics
+    ########################################
+
+    def get_health_data(self, plugin_start_time: float = None) -> Dict[str, Any]:
+        """
+        Return a snapshot of plugin health for the /health endpoint.
+        Includes uptime, session count, tool inventory, recent tool latencies,
+        and vector-store status. Cheap to compute — safe to call frequently.
+        """
+        now = time.time()
+
+        # Per-tool latency aggregates over the rolling window
+        per_tool: Dict[str, Dict[str, Any]] = {}
+        for entry in self._tool_call_log:
+            agg = per_tool.setdefault(entry["name"], {"calls": 0, "errors": 0, "total_ms": 0, "max_ms": 0})
+            agg["calls"]    += 1
+            agg["errors"]   += 0 if entry["ok"] else 1
+            agg["total_ms"] += entry["duration_ms"]
+            agg["max_ms"]    = max(agg["max_ms"], entry["duration_ms"])
+        for name, agg in per_tool.items():
+            agg["avg_ms"] = round(agg["total_ms"] / agg["calls"], 1) if agg["calls"] else 0
+
+        # Vector store status (best-effort) — read via the manager's own get_stats()
+        vs_status = {"available": False}
+        try:
+            if self.vector_store_manager:
+                stats = self.vector_store_manager.get_stats()
+                vs_status["available"]       = True
+                vs_status["last_update"]     = stats.get("last_update")
+                vs_status["update_interval"] = stats.get("update_interval")
+                vs_status["is_running"]      = self.vector_store_manager.is_running
+        except Exception as e:
+            vs_status["error"] = str(e)
+
+        return {
+            "status":           "ok",
+            "plugin":           "Claude Bridge",
+            "protocol_version": self.PROTOCOL_VERSION,
+            "uptime_seconds":   round(now - plugin_start_time, 1) if plugin_start_time else None,
+            "sessions":         len(self._sessions),
+            "tools":            len(self._tools),
+            "resources":        len(self._resources),
+            "tool_calls": {
+                "total_in_window": len(self._tool_call_log),
+                "errors_lifetime": self._tool_error_count,
+                "per_tool":        per_tool,
+                "recent": [
+                    {"name": e["name"], "duration_ms": e["duration_ms"], "ok": e["ok"],
+                     "cache_hit": e.get("cache_hit", False),
+                     "ago_seconds": round(now - e["ts"], 1)}
+                    for e in self._tool_call_log[-10:]
+                ],
+            },
+            "vector_store": vs_status,
+            "rate_limiter": {
+                "per_minute":   self.rate_limiter.per_minute,
+                "per_day":      self.rate_limiter.per_day,
+                "per_session":  self.rate_limiter.snapshot(),
+            },
+            "cache":  self.tool_cache.stats(),
+            "scopes": self.scope_manager.summary(),
+        }
+
+    def get_tool_explorer_html(self, endpoint_url: str = "") -> str:
+        """
+        Render an HTML page listing every registered MCP tool: description, args,
+        required fields. Useful for plugin testing / public release docs / debugging.
+        Pure stdlib — no template engine.
+        """
+        # Sort tools alphabetically for stable browsing
+        tools_sorted = sorted(self._tools.items(), key=lambda kv: kv[0])
+
+        rows = []
+        for name, info in tools_sorted:
+            schema = info.get("inputSchema", {}) or {}
+            props  = (schema.get("properties") or {})
+            required = set(schema.get("required") or [])
+
+            param_lines = []
+            for pname, pinfo in props.items():
+                ptype = pinfo.get("type") or " | ".join(
+                    t.get("type", "?") for t in pinfo.get("anyOf", [])
+                ) or "?"
+                req_marker = " <em>(required)</em>" if pname in required else ""
+                desc = (pinfo.get("description") or "").replace("<", "&lt;").replace(">", "&gt;")
+                param_lines.append(
+                    f"<li><code>{pname}</code> <span class='ptype'>{ptype}</span>{req_marker}<br><span class='pdesc'>{desc}</span></li>"
+                )
+            params_html = f"<ul class='params'>{''.join(param_lines)}</ul>" if param_lines else "<em class='no-params'>(no arguments)</em>"
+
+            description = (info.get("description") or "").replace("<", "&lt;").replace(">", "&gt;")
+            rows.append(f"""
+              <details class='tool'>
+                <summary><code class='tname'>{name}</code> — {description}</summary>
+                {params_html}
+              </details>
+            """)
+
+        endpoint_note = (
+            f"<p class='endpoint'>Endpoint: <code>{endpoint_url}</code></p>"
+            if endpoint_url else ""
+        )
+
+        return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Claude Bridge — Tool Explorer</title>
+<style>
+ body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }}
+ h1 {{ border-bottom: 2px solid #444; padding-bottom: 0.3em; }}
+ .meta {{ color: #666; font-size: 0.9em; margin-bottom: 1.5em; }}
+ .tool {{ margin: 0.6em 0; padding: 0.6em 0.9em; background: #f6f6f8; border-radius: 6px; border: 1px solid #e2e2e8; }}
+ .tool summary {{ cursor: pointer; font-size: 1em; }}
+ .tname {{ background: #2b6cb0; color: white; padding: 1px 6px; border-radius: 3px; font-weight: 600; }}
+ .params {{ list-style: none; padding-left: 0.5em; margin-top: 0.6em; }}
+ .params li {{ margin: 0.4em 0; padding: 0.3em 0.5em; background: white; border-left: 3px solid #2b6cb0; }}
+ .ptype {{ color: #888; font-style: italic; font-size: 0.85em; }}
+ .pdesc {{ color: #555; font-size: 0.9em; }}
+ .no-params {{ color: #888; }}
+ code {{ font-family: ui-monospace, "SF Mono", Monaco, monospace; font-size: 0.92em; }}
+ .endpoint code {{ background: #fff3cd; padding: 1px 4px; border-radius: 3px; }}
+</style></head>
+<body>
+ <h1>🌉 Claude Bridge — Tool Explorer</h1>
+ <p class='meta'>{len(self._tools)} tools • {len(self._resources)} resources • protocol {self.PROTOCOL_VERSION}</p>
+ {endpoint_note}
+ {''.join(rows)}
+</body></html>
+"""
     
     def handle_request(
         self,
@@ -246,7 +413,22 @@ class MCPHandler:
             if isinstance(resp, dict) and "_mcp_session_id" in resp:
                 session_id = resp.pop("_mcp_session_id")
                 extra_headers["Mcp-Session-Id"] = session_id
-            
+
+            # Buffered SSE response path — used by tools that emitted progress
+            # events. The body already contains valid SSE blocks ending in
+            # "data: [DONE]\n\n", which indigo_mcp_proxy.py's reader handles.
+            if isinstance(resp, dict) and "_sse_body" in resp:
+                return {
+                    "status": resp.get("_status", 200),
+                    "headers": {
+                        "Content-Type":  "text/event-stream; charset=utf-8",
+                        "Cache-Control": "no-cache",
+                        "Connection":    "keep-alive",
+                        **extra_headers,
+                    },
+                    "content": resp["_sse_body"],
+                }
+
             return {
                 "status": 200,
                 "headers": {
@@ -332,7 +514,7 @@ class MCPHandler:
         elif method == "tools/list":
             return self._handle_tools_list(msg_id, params)
         elif method == "tools/call":
-            return self._handle_tools_call(msg_id, params)
+            return self._handle_tools_call(msg_id, params, headers)
         
         # Resource methods
         elif method == "resources/list":
@@ -450,40 +632,129 @@ class MCPHandler:
         }
     
     def _handle_tools_call(
-        self, 
-        msg_id: Any, 
-        params: Dict[str, Any]
+        self,
+        msg_id: Any,
+        params: Dict[str, Any],
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        """Handle tools/call request."""
+        """
+        Handle tools/call request with rate-limiting, per-token scope checks,
+        TTL caching of read-only tools, and optional buffered-SSE responses
+        for tools that emit progress events.
+        """
+        headers   = headers or {}
         tool_name = params.get("name")
-        tool_args = params.get("arguments", {})
-        
+        tool_args = params.get("arguments", {}) or {}
+
         if tool_name not in self._tools:
             return self._json_error(msg_id, -32602, f"Unknown tool: {tool_name}")
-        
+
+        # ── Bearer / session identification ─────────────────────────────
+        bearer = self._extract_bearer(headers)
+        session_id = headers.get("mcp-session-id", "")
+        no_cache   = "no-cache" in (headers.get("cache-control") or "").lower()
+
+        # ── Rate limit (admin scope gets 10x by default) ─────────────────
+        scopes = self.scope_manager.scopes_for_token(bearer)
         try:
-            # Call the tool function
-            result = self._tools[tool_name]["function"](**tool_args)
-            
-            return {
+            self.rate_limiter.check(session_id or bearer or "anonymous", scopes)
+        except RateLimitExceeded as rle:
+            self.logger.warning(f"⛔ Rate limit hit ({rle.window}) for {tool_name}")
+            return self._json_error(
+                msg_id, -32099,
+                f"Rate limit exceeded: {rle.window}={rle.limit}; retry in {int(rle.retry_after)}s"
+            )
+
+        # ── Scope gate ──────────────────────────────────────────────────
+        try:
+            self.scope_manager.check(bearer, tool_name)
+        except ScopeDenied as sd:
+            self.logger.warning(
+                f"⛔ Scope denied for tool '{tool_name}' "
+                f"(token='{self.scope_manager.name_for_token(bearer)}', has={sd.granted})"
+            )
+            return self._json_error(msg_id, -32099, str(sd))
+
+        # ── Per-call progress emitter (used by long-running tools) ───────
+        emitter = ProgressEmitter(request_id=msg_id, tool_name=tool_name)
+        self._current_emitter = emitter
+
+        start = time.time()
+        ok = False
+        cache_hit = False
+        try:
+            # Cache-aware dispatch — only for tools in the read allow-list
+            def _compute():
+                return self._tools[tool_name]["function"](**tool_args)
+
+            result, cache_hit = self.tool_cache.get_or_compute(
+                tool_name, tool_args, _compute, no_cache=no_cache
+            )
+            ok = True
+
+            # Mutating tools invalidate related cache buckets
+            if not cache_hit:
+                dropped = self.tool_cache.invalidate_for_tool(tool_name)
+                if dropped:
+                    self.logger.debug(
+                        f"Cache: dropped {dropped} entries after {tool_name}"
+                    )
+
+            response = {
                 "jsonrpc": "2.0",
-                "id": msg_id,
+                "id":      msg_id,
                 "result": {
                     "content": [
-                        {
-                            "type": "text",
-                            "text": result
-                        }
-                    ]
-                }
+                        {"type": "text", "text": result}
+                    ],
+                    # Hint to clients: 'cache-hit' lets Claude know the data
+                    # is up to TTL seconds stale; useful when debugging.
+                    "_meta": {
+                        "cache_hit": cache_hit,
+                        "tool":      tool_name,
+                    },
+                },
             }
+
+            # If the tool emitted progress events, return as buffered SSE so
+            # the client sees ordered notifications/progress + final result.
+            if emitter.has_events:
+                sse_body = encode_sse_response(emitter.events, response, msg_id)
+                return {
+                    "_sse_body": sse_body,
+                    "_status":   200,
+                }
+            return response
+
         except Exception as e:
+            self._tool_error_count += 1
             self.logger.error(f"Tool {tool_name} error: {e}")
             return self._json_error(
-                msg_id, 
-                -32603, 
-                f"Tool execution failed: {str(e)}"
+                msg_id, -32603, f"Tool execution failed: {str(e)}"
             )
+        finally:
+            self._current_emitter = None
+            duration_ms = int((time.time() - start) * 1000)
+            self._tool_call_log.append({
+                "name":        tool_name,
+                "duration_ms": duration_ms,
+                "ok":          ok,
+                "cache_hit":   cache_hit,
+                "ts":          time.time(),
+            })
+            if len(self._tool_call_log) > self._tool_call_log_max:
+                del self._tool_call_log[: len(self._tool_call_log) - self._tool_call_log_max]
+
+    @staticmethod
+    def _extract_bearer(headers: Dict[str, str]) -> Optional[str]:
+        """Pull the Bearer token out of the Authorization header (case-insensitive)."""
+        for key in ("authorization", "Authorization"):
+            val = headers.get(key)
+            if val:
+                parts = val.split(None, 1)
+                if len(parts) == 2 and parts[0].lower() == "bearer":
+                    return parts[1].strip()
+        return None
     
     def _handle_resources_list(
         self, 
@@ -1617,6 +1888,54 @@ class MCPHandler:
             "function": self._tool_energy_compare
         }
 
+        # ── Plugin Event firing (2025.1 eventData mechanism) ──────────────
+        self._tools["fire_indigo_event"] = {
+            "description": (
+                "Fire all Indigo Triggers of type 'Claude Bridge → Claude Event' with "
+                "a structured payload. Use this to drive Indigo automations from a Claude "
+                "tool call. Inside the user's Trigger actions, the payload is available "
+                "as %%eventData:name%%, %%eventData:data%%, %%eventData:source%%. Users "
+                "filter on event name via standard Trigger Conditions."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Short event name (e.g. 'sunset_routine', 'leak_detected'). "
+                                       "Triggers can filter on this via %%eventData:name%%."
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": "Optional structured payload. Serialised to JSON and exposed "
+                                       "as %%eventData:data%%."
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Origin label, default 'claude'. Useful when multiple agents "
+                                       "or scripts share the event channel."
+                    }
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_fire_indigo_event
+        }
+
+    # ── Plugin Event dispatch ──────────────────────────────────────────────
+
+    def _tool_fire_indigo_event(self, name: str, data: dict = None, source: str = "claude") -> str:
+        """Fire claudeEvent Triggers via the owning plugin instance."""
+        if not self.plugin or not hasattr(self.plugin, "fire_claude_event"):
+            return safe_json_dumps({
+                "error": "Plugin reference unavailable — cannot fire events"
+            })
+        try:
+            result = self.plugin.fire_claude_event(name, data, source)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"fire_indigo_event error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
     # ── System / housekeeping dispatch methods ─────────────────────────────
 
     def _tool_system_health(self) -> str:
@@ -1706,6 +2025,18 @@ class MCPHandler:
             return safe_json_dumps({"error": str(e)})
 
     # ── Audit dispatch methods ──────────────────────────────────────────────
+
+    def _emit(self, message: str, progress: float = None, data: dict = None) -> None:
+        """
+        Helper for tools that want to surface progress notifications.
+        Safe to call from any tool — does nothing if no emitter is active
+        (e.g. when invoked via direct method call rather than tools/call).
+        """
+        if self._current_emitter is not None:
+            try:
+                self._current_emitter.emit(message, progress=progress, data=data)
+            except Exception:
+                pass
 
     def _tool_audit_home(self) -> str:
         try:

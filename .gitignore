@@ -35,3 +35,6 @@ secrets.json
 
 # Logs
 *.log
+
+# Claude Code context file — local only
+CLAUDE.md

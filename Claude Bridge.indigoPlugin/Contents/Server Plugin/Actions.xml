@@ -5,4 +5,18 @@
         <Name>MCP Endpoint</Name>
         <CallbackMethod>handle_mcp_endpoint</CallbackMethod>
     </Action>
+
+    <!-- Health / metrics endpoint - Hidden from UI -->
+    <!-- /message/com.clives.indigoplugin.claudebridge/health/ -->
+    <Action id="health" uiPath="hidden">
+        <Name>Health Endpoint</Name>
+        <CallbackMethod>handle_health_endpoint</CallbackMethod>
+    </Action>
+
+    <!-- Tool explorer (HTML) - Hidden from UI -->
+    <!-- /message/com.clives.indigoplugin.claudebridge/explorer/ -->
+    <Action id="explorer" uiPath="hidden">
+        <Name>Tool Explorer Endpoint</Name>
+        <CallbackMethod>handle_explorer_endpoint</CallbackMethod>
+    </Action>
 </Actions>

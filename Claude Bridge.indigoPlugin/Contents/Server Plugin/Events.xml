@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<!--
+    Claude Bridge Plugin Events
+    ===========================
+    Lets Claude fire Indigo Triggers with structured payload data using the
+    2025.1+ eventData mechanism.
+
+    Workflow:
+      1. Create a Trigger:  Type = Plugin → Claude Bridge → Claude Event
+      2. (Optional) Add a Trigger Condition that checks %%eventData:name%%
+         to filter on a specific event name from Claude.
+      3. In the Trigger's actions, reference the payload via:
+            %%eventData:name%%       — the event name string
+            %%eventData:data%%       — JSON-serialised payload
+            %%eventData:source%%     — origin label (default "claude")
+      4. From Claude, call the MCP tool: fire_indigo_event(name, data, source)
+-->
+<Events>
+
+    <Event id="claudeEvent">
+        <Name>Claude Event</Name>
+    </Event>
+
+</Events>
