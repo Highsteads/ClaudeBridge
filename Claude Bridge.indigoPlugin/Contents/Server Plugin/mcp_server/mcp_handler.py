@@ -574,7 +574,9 @@ class MCPHandler:
                     },
                     "serverInfo": {
                         "name": "Indigo Claude Bridge",
-                        "version": "2025.0.1"
+                        "version": (self.plugin.pluginVersion
+                                    if self.plugin and hasattr(self.plugin, "pluginVersion")
+                                    else "unknown")
                     }
                 }
             }
@@ -951,7 +953,322 @@ class MCPHandler:
             },
             "function": self._tool_device_set_brightness
         }
-        
+
+        self._tools["set_heat_setpoint"] = {
+            "description": "Set the heat setpoint on a thermostat/TRV device (e.g. RAMSES, Evohome). "
+                           "Value is in degrees Celsius.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The thermostat device ID"
+                    },
+                    "setpoint": {
+                        "type": "number",
+                        "description": "Target temperature in degrees Celsius"
+                    }
+                },
+                "required": ["device_id", "setpoint"]
+            },
+            "function": self._tool_set_heat_setpoint
+        }
+
+        self._tools["set_cool_setpoint"] = {
+            "description": "Set the cool setpoint on a thermostat device. Value is in degrees Celsius.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The thermostat device ID"
+                    },
+                    "setpoint": {
+                        "type": "number",
+                        "description": "Target cool temperature in degrees Celsius"
+                    }
+                },
+                "required": ["device_id", "setpoint"]
+            },
+            "function": self._tool_set_cool_setpoint
+        }
+
+        self._tools["set_hvac_mode"] = {
+            "description": "Set the HVAC operating mode on a thermostat device.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The thermostat device ID"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["heat", "cool", "auto", "off",
+                                 "programHeat", "programCool", "programAuto"],
+                        "description": "HVAC mode to set"
+                    }
+                },
+                "required": ["device_id", "mode"]
+            },
+            "function": self._tool_set_hvac_mode
+        }
+
+        self._tools["lock_device"] = {
+            "description": "Lock a Z-Wave or other lock device.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The lock device ID"
+                    }
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_lock_device
+        }
+
+        self._tools["unlock_device"] = {
+            "description": "Unlock a Z-Wave or other lock device, optionally with a PIN code.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The lock device ID"
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "Optional PIN code for the lock"
+                    }
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_unlock_device
+        }
+
+        self._tools["set_color"] = {
+            "description": "Set the colour of an RGB or RGBW light dimmer. Values 0-255 per channel.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The dimmer device ID"
+                    },
+                    "red":   {"type": "number", "description": "Red channel 0-255"},
+                    "green": {"type": "number", "description": "Green channel 0-255"},
+                    "blue":  {"type": "number", "description": "Blue channel 0-255"},
+                    "white": {"type": "number", "description": "White channel 0-255 (RGBW only)"},
+                    "white_temperature": {
+                        "type": "number",
+                        "description": "Colour temperature in Kelvin (e.g. 2700-6500)"
+                    }
+                },
+                "required": ["device_id", "red", "green", "blue"]
+            },
+            "function": self._tool_set_color
+        }
+
+        self._tools["set_fan_speed"] = {
+            "description": "Set the speed level on a fan or speed-control device (0-100%).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The speed-control device ID"
+                    },
+                    "speed": {
+                        "type": "number",
+                        "description": "Speed level 0-100"
+                    }
+                },
+                "required": ["device_id", "speed"]
+            },
+            "function": self._tool_set_fan_speed
+        }
+
+        self._tools["request_status_update"] = {
+            "description": "Request an immediate status update from a device (polls the device for current state).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The device ID"
+                    }
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_request_status_update
+        }
+
+        self._tools["increase_heat_setpoint"] = {
+            "description": (
+                "Increase the heat setpoint on a thermostat/TRV by a given delta "
+                "(default 0.5 degC). Use for small step adjustments."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The thermostat device ID"
+                    },
+                    "delta": {
+                        "type": "number",
+                        "description": "Degrees Celsius to increase by (default 0.5)"
+                    }
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_increase_heat_setpoint
+        }
+
+        self._tools["decrease_heat_setpoint"] = {
+            "description": (
+                "Decrease the heat setpoint on a thermostat/TRV by a given delta "
+                "(default 0.5 degC). Use for small step adjustments."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "The thermostat device ID"
+                    },
+                    "delta": {
+                        "type": "number",
+                        "description": "Degrees Celsius to decrease by (default 0.5)"
+                    }
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_decrease_heat_setpoint
+        }
+
+        self._tools["get_device_by_name"] = {
+            "description": (
+                "Find a device by name and return its full state in one round trip. "
+                "Tries exact match, then case-insensitive, then partial match. "
+                "Returns all device states, properties, and current values."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Device name (exact, partial, or case-insensitive)"
+                    }
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_get_device_by_name
+        }
+
+        self._tools["log_message"] = {
+            "description": (
+                "Write a message to the Indigo on-screen event log (Log Viewer). "
+                "The message appears immediately. Use for status updates, confirmations, "
+                "or debug output that the user can see in the Indigo UI."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Message text to log"
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["INFO", "WARNING", "ERROR", "DEBUG"],
+                        "description": "Log level (default INFO)"
+                    }
+                },
+                "required": ["message"]
+            },
+            "function": self._tool_log_message
+        }
+
+        self._tools["send_notification"] = {
+            "description": (
+                "Send a Pushover push notification to the user's device. "
+                "Use for important alerts, confirmations, or proactive updates."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Notification title"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Notification body text"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["-2", "-1", "0", "1"],
+                        "description": "Priority: -2=silent, -1=quiet, 0=normal (default), 1=high"
+                    },
+                    "sound": {
+                        "type": "string",
+                        "description": "Notification sound (default 'vibrate')"
+                    }
+                },
+                "required": ["title", "message"]
+            },
+            "function": self._tool_send_notification
+        }
+
+        self._tools["send_email"] = {
+            "description": (
+                "Send an email via Indigo's configured SMTP device. "
+                "Use for detailed reports, logs, or non-urgent notifications."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "recipient": {
+                        "type": "string",
+                        "description": "Recipient email address"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Email subject line"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Email body text (plain text or HTML)"
+                    }
+                },
+                "required": ["recipient", "subject", "body"]
+            },
+            "function": self._tool_send_email
+        }
+
+        self._tools["run_script"] = {
+            "description": (
+                "Execute a Python script from the Python Scripts folder in the "
+                "Indigo Python context. The script runs with full access to the "
+                "indigo module. Use for triggering automation logic, one-off tasks, "
+                "or testing scripts. Returns stdout/stderr output."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Script filename (with or without .py extension)"
+                    }
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_run_script
+        }
+
         # Combined find + control tool (single round trip)
         self._tools["device_control"] = {
             "description": "Find a device by name and control it in one step — faster than search_entities + device_turn_on/off. Use this for all simple on/off/brightness commands.",
@@ -1793,8 +2110,8 @@ class MCPHandler:
         }
         self._tools["heating_status"] = {
             "description": (
-                "Return all heating/thermostat device states — Evohome TRVs via "
-                "Home Assistant Agent, with setpoints and current temperatures."
+                "Return all heating/thermostat device states — RAMSES ESP TRVs "
+                "(12 zones), with setpoints, current temperatures, and zone modes."
             ),
             "inputSchema": {"type": "object", "properties": {}},
             "function": self._tool_heating_status
@@ -1888,7 +2205,7 @@ class MCPHandler:
             "function": self._tool_energy_compare
         }
 
-        # ── Plugin Event firing (2025.1 eventData mechanism) ──────────────
+        # ── Plugin Event firing (Indigo eventData mechanism) ──────────────
         self._tools["fire_indigo_event"] = {
             "description": (
                 "Fire all Indigo Triggers of type 'Claude Bridge → Claude Event' with "
@@ -2422,7 +2739,155 @@ class MCPHandler:
         except Exception as e:
             self.logger.error(f"Device set brightness error: {e}")
             return safe_json_dumps({"error": str(e)})
-    
+
+    def _tool_set_heat_setpoint(self, device_id: int, setpoint: float) -> str:
+        """Set heat setpoint tool implementation."""
+        try:
+            result = self.device_control_handler.set_heat_setpoint(device_id, setpoint)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Set heat setpoint error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_set_cool_setpoint(self, device_id: int, setpoint: float) -> str:
+        """Set cool setpoint tool implementation."""
+        try:
+            result = self.device_control_handler.set_cool_setpoint(device_id, setpoint)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Set cool setpoint error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_set_hvac_mode(self, device_id: int, mode: str) -> str:
+        """Set HVAC mode tool implementation."""
+        try:
+            result = self.device_control_handler.set_hvac_mode(device_id, mode)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Set HVAC mode error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_lock_device(self, device_id: int) -> str:
+        """Lock device tool implementation."""
+        try:
+            result = self.device_control_handler.lock_device(device_id)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Lock device error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_unlock_device(self, device_id: int, code: str = None) -> str:
+        """Unlock device tool implementation."""
+        try:
+            result = self.device_control_handler.unlock_device(device_id, code=code)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Unlock device error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_set_color(self, device_id: int, red: int, green: int, blue: int,
+                        white: int = None, white_temperature: int = None) -> str:
+        """Set colour tool implementation."""
+        try:
+            result = self.device_control_handler.set_color(
+                device_id, red, green, blue,
+                white=white, white_temperature=white_temperature
+            )
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Set colour error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_set_fan_speed(self, device_id: int, speed: int) -> str:
+        """Set fan speed tool implementation."""
+        try:
+            result = self.device_control_handler.set_fan_speed(device_id, speed)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Set fan speed error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_request_status_update(self, device_id: int) -> str:
+        """Request device status update tool implementation."""
+        try:
+            result = self.device_control_handler.request_status_update(device_id)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Request status update error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_increase_heat_setpoint(self, device_id: int, delta: float = 0.5) -> str:
+        """Increase heat setpoint tool implementation."""
+        try:
+            result = self.device_control_handler.increase_heat_setpoint(device_id, delta)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Increase heat setpoint error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> str:
+        """Decrease heat setpoint tool implementation."""
+        try:
+            result = self.device_control_handler.decrease_heat_setpoint(device_id, delta)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Decrease heat setpoint error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_get_device_by_name(self, name: str) -> str:
+        """Get device by name tool implementation."""
+        try:
+            result = self.data_provider.get_device_by_name(name)
+            if result is None:
+                return safe_json_dumps({"error": f"No device found matching '{name}'",
+                                        "success": False})
+            return safe_json_dumps({"success": True, "device": result})
+        except Exception as e:
+            self.logger.error(f"Get device by name error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_log_message(self, message: str, level: str = "INFO") -> str:
+        """Log message tool implementation."""
+        try:
+            result = self.script_tools_handler.log_message(message, level)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Log message error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_send_notification(
+        self,
+        title: str,
+        message: str,
+        priority: str = "0",
+        sound: str = "vibrate",
+    ) -> str:
+        """Send notification tool implementation."""
+        try:
+            result = self.data_provider.send_notification(title, message, priority, sound)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Send notification error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_send_email(self, recipient: str, subject: str, body: str) -> str:
+        """Send email tool implementation."""
+        try:
+            result = self.data_provider.send_email(recipient, subject, body)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Send email error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_run_script(self, name: str) -> str:
+        """Run script tool implementation."""
+        try:
+            result = self.script_tools_handler.run_script(name)
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Run script error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
     def _tool_device_control(self, name: str, action: str, brightness: float = None) -> str:
         """Find device by name and control it in one round trip."""
         try:

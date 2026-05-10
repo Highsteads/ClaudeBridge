@@ -14,9 +14,9 @@ from ..base_handler import BaseToolHandler
 # ── Log-file location ────────────────────────────────────────────────────────
 # Derive the Indigo Logs folder from this module's own path.
 # This file lives at:
-#   .../Indigo 2025.1/Plugins/Claude Bridge.indigoPlugin/
+#   .../Indigo <version>/Plugins/Claude Bridge.indigoPlugin/
 #              Contents/Server Plugin/mcp_server/tools/log_query/log_query_handler.py
-# Going up 7 directories reaches the Indigo 2025.1 install root.
+# Going up 7 directories reaches the Indigo install root.
 _HERE     = os.path.dirname(os.path.abspath(__file__))
 _LOG_ROOT = os.path.normpath(os.path.join(_HERE, *([".."] * 7), "Logs"))
 

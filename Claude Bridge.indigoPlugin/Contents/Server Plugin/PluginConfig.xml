@@ -1,15 +1,35 @@
 <?xml version="1.0"?>
 <PluginConfig>
+    <!-- Secrets policy banner -->
+    <Field id="secrets_policy_label" type="label" fontSize="regular" alignWithControl="false" alignText="left">
+        <Label>CREDENTIALS &amp; PRIVATE VALUES</Label>
+    </Field>
+    <Field id="secrets_policy_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
+        <Label>All sensitive values (API keys, bearer tokens, usernames, passwords,
+private host addresses) are read from the master secrets.py at
+/Library/Application Support/Perceptive Automation/secrets.py FIRST.
+The fields below are a fallback only — leave them blank if you have
+the matching key in secrets.py. If a value is set in NEITHER place,
+the plugin logs an ERROR pointing here and skips that feature.
+
+Keys this plugin reads:
+  ANTHROPIC_API_KEY        - Anthropic Claude API key (required)
+  CLAUDEBRIDGE_BEARER_TOKEN - IWS bearer token for the MCP proxy
+  INFLUXDB_HOST / PORT / USERNAME / PASSWORD / DATABASE (optional)</Label>
+    </Field>
+
+    <Field id="separator_secrets" type="separator"/>
+
     <!-- Anthropic Configuration -->
     <Field id="anthropic_api_key" type="textfield" defaultValue="" secure="true"
-           tooltip="Required for Claude AI capabilities">
+           tooltip="Required for Claude AI capabilities — fallback to ANTHROPIC_API_KEY in secrets.py">
         <Label>Anthropic API Key:</Label>
     </Field>
 
     <Field id="api_key_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
-        <Label>Enter your Anthropic API key to enable Claude AI. Get your API key from
-            https://console.anthropic.com/settings/keys
-        </Label>
+        <Label>Get an API key from https://console.anthropic.com/settings/keys.
+Or set ANTHROPIC_API_KEY in /Library/Application Support/Perceptive Automation/secrets.py
+and leave this field blank.</Label>
     </Field>
 
     <Field id="separator1" type="separator"/>
@@ -39,10 +59,13 @@
         <Description>Enable access to historical device data stored in InfluxDB</Description>
     </Field>
 
+    <Field id="influxdb_secrets_help" type="label" fontSize="small" alignWithControl="false" enabledBindingId="enable_influxdb">
+        <Label>Leave the fields below blank if INFLUXDB_HOST/PORT/USERNAME/PASSWORD/DATABASE are set in secrets.py — those take priority.</Label>
+    </Field>
     <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_url"
-           defaultValue="http://localhost">
+           defaultValue="">
         <Label>InfluxDB URL:</Label>
-        <Description>InfluxDB server URL (e.g., http://localhost or https://influxdb.example.com)</Description>
+        <Description>InfluxDB host (e.g. 192.168.x.x). Protocol prefix is stripped.</Description>
     </Field>
 
     <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_port"
@@ -120,5 +143,15 @@
 
     <Field id="connection_status_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
         <Label>Click to test Anthropic API and InfluxDB connections with current configuration</Label>
+    </Field>
+
+    <Field id="separator_dotfiles" type="separator"/>
+
+    <Field id="dotfiles_label" type="label" fontSize="regular" alignWithControl="false" alignText="left">
+        <Label>CLAUDE CODE INTEGRATION</Label>
+    </Field>
+    <Field type="checkbox" id="auto_configure_claude_code" defaultValue="true">
+        <Label>Auto-configure Claude Code:</Label>
+        <Description>When enabled (default), the plugin copies indigo_mcp_proxy.py to /Library/Application Support/Perceptive Automation/Scripts/ on startup, patches the Bearer token, and edits ~/.mcp.json and ~/.claude/settings.json so Claude Code can connect without manual setup. Disable if you manage these files yourself.</Description>
     </Field>
 </PluginConfig>

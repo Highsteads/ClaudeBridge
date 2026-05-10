@@ -34,4 +34,11 @@
         <Name>Clear Read-Cache</Name>
         <CallbackMethod>clear_cache_menu</CallbackMethod>
     </MenuItem>
+
+    <MenuItem id="sep3" isSeparator="true"/>
+
+    <MenuItem id="showPluginInfo">
+        <Name>Show Plugin Info</Name>
+        <CallbackMethod>showPluginInfo</CallbackMethod>
+    </MenuItem>
 </MenuItems>

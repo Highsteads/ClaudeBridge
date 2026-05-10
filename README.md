@@ -5,9 +5,9 @@
 Once installed, Claude can query device states, turn devices on and off, read and write variables, execute action groups, search your home's entity database, and query the Indigo event log — all in natural language, with no manual scripting required.
 
 **Author:** CliveS & Claude Sonnet 4.6
-**Platform:** Indigo 2025.1, macOS, Python 3.11
+**Platform:** Indigo 2025.2, macOS, Python 3.13
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.0.0
+**Version:** 2.3.0
 
 ---
 
@@ -26,9 +26,9 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 ## Requirements
 
-- Indigo 2025.1 or later
+- Indigo 2025.2 or later
 - macOS (runs on the Indigo server machine)
-- Python 3.11 (bundled with Indigo)
+- Python 3.13 (bundled with Indigo 2025.2)
 - [Anthropic API key](https://console.anthropic.com) (Claude API)
 - [Claude Code](https://claude.ai/download) or Claude Desktop (to use the tools)
 
@@ -59,10 +59,13 @@ Then do these two final steps manually:
 
 2. **Restart Claude Code** — you should see 64 `indigo-mcp` tools available
 
-> **Anthropic API key:** If you have a `secrets.py` at
-> `/Library/Application Support/Perceptive Automation/secrets.py`
-> with `ANTHROPIC_API_KEY = "sk-ant-..."`, the plugin picks it up automatically.
-> Otherwise go to **Plugins → Claude Bridge → Configure** and enter it there.
+> **Credentials policy:** All sensitive values are read from
+> `/Library/Application Support/Perceptive Automation/secrets.py` first; the
+> plugin's PluginConfig dialog is a fallback only. Keys this plugin reads:
+> `ANTHROPIC_API_KEY`, `CLAUDEBRIDGE_BEARER_TOKEN`, and (optional) `INFLUXDB_HOST`,
+> `INFLUXDB_PORT`, `INFLUXDB_USERNAME`, `INFLUXDB_PASSWORD`, `INFLUXDB_DATABASE`.
+> If a value is missing from BOTH sources, the plugin logs an ERROR pointing
+> here and skips that feature. See `secrets_example.py` for the template.
 
 ---
 
@@ -320,6 +323,23 @@ README.md
 ---
 
 ## Changelog
+
+### 2.3.0 (2026-05-10)
+- **Standards-compliance pass** following the audit applied to all CliveS plugins
+- **Version is now read dynamically from Info.plist** via `self.pluginVersion` (no separate Python constant)
+- **Startup banner** via bundled `plugin_utils.py` — shows plugin name, version, ID, Indigo version, API version, architecture, Python version, macOS version
+- **Show Plugin Info** menu item — re-runs the banner on demand with extras (MCP URL, Anthropic key status, InfluxDB status, access mode)
+- **Trigger lifecycle fixed** — implemented `triggerStartProcessing` / `triggerStopProcessing` and rewrote `fire_claude_event()`. Previously called the non-existent `self.triggerEvent()` method which raised `AttributeError` silently, so `claudeEvent` triggers never actually fired
+- **`deviceUpdated` self-loop guard** — plugin both `subscribeToChanges()` and writes its own `mcpServer` device states; without the guard a future state write inside the callback could loop
+- **Bearer token rotated out of source** — `indigo_mcp_proxy.py` now ships with a deliberately invalid placeholder. Real value comes from Indigo's IWS `Preferences/secrets.json` first, with `CLAUDEBRIDGE_BEARER_TOKEN` in `secrets.py` as a fallback. Plugin patches the deployed copy at install time
+- **Secrets handling rebuilt** using `importlib` pattern with `clives_secrets` module name to avoid shadowing Python's stdlib `secrets` module (used by `mcp_handler` for `token_urlsafe()`). Also now correctly sources `INFLUXDB_*` from `secrets.py` (was PluginConfig-only)
+- **PluginConfig.xml policy banner** at the top — explicit explanation of secrets.py vs PluginConfig precedence + the keys this plugin reads
+- **Auto-configure Claude Code opt-out** — new checkbox so users can disable silent rewriting of `~/.mcp.json` and `~/.claude/settings.json`
+- `fire_claude_event` data serialisation fixed (was collapsing `0` and `False` to `""`)
+- Bare `except:` in `mcp_server/common/vector_store/validation.py` changed to `except Exception:`
+
+### 2.2.0
+- Prior release.
 
 ### 2.0.0 (2026-04-05)
 - **64 MCP tools** (up from 23): added Scripts (5), Memory (4), Event Subscriptions (5), Audit (7), Home Intelligence (7), plus `find_conflicts` and `home_status_report`

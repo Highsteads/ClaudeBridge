@@ -206,7 +206,7 @@ def validate_embedding(embedding: List[float], expected_dimension: int = 1536) -
             if not isinstance(val, (int, float)) or val != val:  # NaN check
                 return False
         return True
-    except:
+    except Exception:
         return False
 
 
@@ -227,7 +227,7 @@ def validate_stored_data(data_json: str) -> bool:
         data = json.loads(data_json)
         # Check that it's a dictionary with at least an ID
         return isinstance(data, dict) and "id" in data
-    except:
+    except Exception:
         return False
 
 

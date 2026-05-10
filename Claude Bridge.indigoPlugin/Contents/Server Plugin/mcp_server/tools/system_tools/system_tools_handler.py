@@ -34,7 +34,7 @@ from ...adapters.data_provider import DataProvider
 # ── Indigo path helpers ──────────────────────────────────────────────────────
 
 def _indigo_base() -> str:
-    """Return the Indigo install folder, e.g. .../Indigo 2025.1"""
+    """Return the Indigo install folder (e.g. .../Indigo 2025.2 — version resolved at runtime)."""
     return indigo.server.getInstallFolderPath()
 
 def _prefs_plugins_dir() -> str:
@@ -48,21 +48,29 @@ def _plugins_disabled_dir() -> str:
 
 def _scripts_dir() -> str:
     """
-    Return the active Indigo scripts folder (one level above the version dir).
+    Return the primary Indigo Python scripts folder (Python Scripts takes precedence).
 
     Resolution order:
-      1. <PA base>/Scripts        — standard Indigo location, present on all installations
-      2. <PA base>/Python Scripts — legacy / custom fallback
-      3. <PA base>/Scripts        — default if neither exists
+      1. <PA base>/Python Scripts — primary location (~35 scripts, preferred)
+      2. <PA base>/Scripts        — secondary / fallback
+      3. <PA base>/Python Scripts — default if neither exists
     """
     pa_base        = os.path.dirname(_indigo_base())
-    scripts        = os.path.join(pa_base, "Scripts")
     python_scripts = os.path.join(pa_base, "Python Scripts")
-    if os.path.isdir(scripts):
-        return scripts
+    scripts        = os.path.join(pa_base, "Scripts")
     if os.path.isdir(python_scripts):
         return python_scripts
-    return scripts  # default — will be created on first write
+    if os.path.isdir(scripts):
+        return scripts
+    return python_scripts  # default
+
+
+def _all_scripts_dirs() -> list:
+    """Return both script folders that exist, Python Scripts first."""
+    pa_base        = os.path.dirname(_indigo_base())
+    python_scripts = os.path.join(pa_base, "Python Scripts")
+    scripts        = os.path.join(pa_base, "Scripts")
+    return [d for d in [python_scripts, scripts] if os.path.isdir(d)]
 
 
 # ── System helpers ───────────────────────────────────────────────────────────
@@ -184,30 +192,34 @@ class SystemToolsHandler(BaseToolHandler):
     # ────────────────────────────────────────────────────────────────────────
 
     def list_python_scripts(self) -> Dict[str, Any]:
-        """List all .py files in the Indigo Scripts folder."""
+        """List all .py files in the Indigo Python Scripts and Scripts folders."""
         self.log_incoming_request("list_python_scripts", {})
         try:
-            scripts_dir = _scripts_dir()
-            if not os.path.isdir(scripts_dir):
+            all_dirs = _all_scripts_dirs()
+            if not all_dirs:
                 return {"success": True, "scripts": [],
-                        "note": f"Scripts folder not found: {scripts_dir}"}
+                        "note": "No scripts folders found"}
 
             scripts = []
-            for entry in sorted(os.scandir(scripts_dir), key=lambda e: e.name.lower()):
-                if not entry.name.endswith(".py") or not entry.is_file():
-                    continue
-                stat = entry.stat()
-                scripts.append({
-                    "name":        entry.name,
-                    "size_kb":     round(stat.st_size / 1024, 1),
-                    "modified":    datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-                    "path":        entry.path,
-                })
+            for scripts_dir in all_dirs:
+                for entry in sorted(os.scandir(scripts_dir), key=lambda e: e.name.lower()):
+                    if not entry.name.endswith(".py") or not entry.is_file():
+                        continue
+                    if entry.name.startswith("_"):
+                        continue  # skip backups/archived files in subdirs
+                    stat = entry.stat()
+                    scripts.append({
+                        "name":     entry.name,
+                        "size_kb":  round(stat.st_size / 1024, 1),
+                        "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                        "path":     entry.path,
+                        "folder":   scripts_dir,
+                    })
 
             result = {
                 "success": True,
                 "count":   len(scripts),
-                "folder":  scripts_dir,
+                "folders": all_dirs,
                 "scripts": scripts,
             }
             self.log_tool_outcome("list_python_scripts", True, f"{len(scripts)} scripts found")
@@ -236,10 +248,10 @@ class SystemToolsHandler(BaseToolHandler):
                                  (self.data_provider.get_all_variables_unfiltered() or [])}
             live_ids         = live_device_ids | live_var_ids
 
-            scripts_dir = _scripts_dir()
-            if not os.path.isdir(scripts_dir):
+            all_dirs = _all_scripts_dirs()
+            if not all_dirs:
                 return {"success": True, "orphaned": [],
-                        "note": f"Python Scripts folder not found: {scripts_dir}"}
+                        "note": "No scripts folders found"}
 
             # Indigo IDs are typically 8–10 digit integers
             id_pattern = re.compile(r"\b(\d{8,12})\b")
@@ -247,27 +259,28 @@ class SystemToolsHandler(BaseToolHandler):
             orphaned   = []
             clean      = []
 
-            for entry in sorted(os.scandir(scripts_dir), key=lambda e: e.name.lower()):
-                if not entry.name.endswith(".py") or not entry.is_file():
-                    continue
-                try:
-                    content = entry.path
-                    with open(entry.path, "r", encoding="utf-8", errors="replace") as fh:
-                        content = fh.read()
-                except OSError:
-                    continue
+            for scripts_dir in all_dirs:
+                for entry in sorted(os.scandir(scripts_dir), key=lambda e: e.name.lower()):
+                    if not entry.name.endswith(".py") or not entry.is_file():
+                        continue
+                    try:
+                        with open(entry.path, "r", encoding="utf-8", errors="replace") as fh:
+                            content = fh.read()
+                    except OSError:
+                        continue
 
-                found_ids   = {int(m) for m in id_pattern.findall(content)}
-                dead_ids    = found_ids - live_ids
+                    found_ids = {int(m) for m in id_pattern.findall(content)}
+                    dead_ids  = found_ids - live_ids
 
-                if dead_ids:
-                    orphaned.append({
-                        "script":    entry.name,
-                        "dead_ids":  sorted(dead_ids),
-                        "note":      "Contains references to IDs not found in Indigo",
-                    })
-                elif found_ids:
-                    clean.append(entry.name)
+                    if dead_ids:
+                        orphaned.append({
+                            "script":   entry.name,
+                            "folder":   scripts_dir,
+                            "dead_ids": sorted(dead_ids),
+                            "note":     "Contains references to IDs not found in Indigo",
+                        })
+                    elif found_ids:
+                        clean.append(entry.name)
 
             result = {
                 "success":          True,

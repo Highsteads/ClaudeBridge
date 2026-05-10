@@ -13,7 +13,15 @@ import http.client
 INDIGO_HOST            = "localhost"
 INDIGO_PORT            = 8176
 INDIGO_MCP_PATH        = "/message/com.clives.indigoplugin.claudebridge/mcp/"
-BEARER_TOKEN           = "eoLRHTH2wgwhuoFIfm2Vsx2i5NdYzFfI1dKWUffkDDY"
+# BEARER_TOKEN is patched in by the plugin at install time.  The plugin's
+# _setup_claude_code_integration() reads the live IWS token from
+# /Library/Application Support/Perceptive Automation/Indigo 2025.2/Preferences/secrets.json
+# (with secrets.py CLAUDEBRIDGE_BEARER_TOKEN as a fallback) and rewrites this
+# line in the destination copy at /Library/Application Support/Perceptive
+# Automation/Scripts/indigo_mcp_proxy.py.  The placeholder value below is
+# deliberately invalid — running this bundled file directly will fail
+# authentication, which is the intended behaviour.
+BEARER_TOKEN           = "REPLACE_AT_INSTALL"
 INDIGO_PROTOCOL_VER    = "2025-06-18"
 
 session_id  = None

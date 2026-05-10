@@ -137,3 +137,172 @@ class DeviceControlHandler(BaseToolHandler):
 
         except Exception as e:
             return self.handle_exception(e, f"setting brightness for device ID {device_id}")
+
+    def set_heat_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
+        """Set heat setpoint on a thermostat device."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.set_heat_setpoint(device_id, setpoint)
+            if "error" in result:
+                self.info_log(f"❌ Heat setpoint error: {result['error']}")
+            else:
+                self.info_log(f"🌡 {result.get('device_name', device_id)} heat setpoint → {setpoint} degC")
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"setting heat setpoint on device ID {device_id}")
+
+    def set_cool_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
+        """Set cool setpoint on a thermostat device."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.set_cool_setpoint(device_id, setpoint)
+            if "error" in result:
+                self.info_log(f"❌ Cool setpoint error: {result['error']}")
+            else:
+                self.info_log(f"❄ {result.get('device_name', device_id)} cool setpoint → {setpoint} degC")
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"setting cool setpoint on device ID {device_id}")
+
+    def set_hvac_mode(self, device_id: int, mode: str) -> Dict[str, Any]:
+        """Set HVAC mode on a thermostat device."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.set_hvac_mode(device_id, mode)
+            if "error" in result:
+                self.info_log(f"❌ HVAC mode error: {result['error']}")
+            else:
+                self.info_log(f"♨ {result.get('device_name', device_id)} HVAC mode → {mode}")
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"setting HVAC mode on device ID {device_id}")
+
+    def lock_device(self, device_id: int) -> Dict[str, Any]:
+        """Lock a lock device."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.lock_device(device_id)
+            if "error" in result:
+                self.info_log(f"❌ Lock error: {result['error']}")
+            else:
+                self.info_log(f"🔒 {result.get('device_name', device_id)} → locked")
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"locking device ID {device_id}")
+
+    def unlock_device(self, device_id: int, code: str = None) -> Dict[str, Any]:
+        """Unlock a lock device."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.unlock_device(device_id, code=code)
+            if "error" in result:
+                self.info_log(f"❌ Unlock error: {result['error']}")
+            else:
+                self.info_log(f"🔓 {result.get('device_name', device_id)} → unlocked")
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"unlocking device ID {device_id}")
+
+    def set_color(self, device_id: int, red: int, green: int, blue: int,
+                  white: int = None, white_temperature: int = None) -> Dict[str, Any]:
+        """Set colour levels on an RGB/RGBW dimmer."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.set_color(device_id, red, green, blue,
+                                                   white=white,
+                                                   white_temperature=white_temperature)
+            if "error" in result:
+                self.info_log(f"❌ Colour error: {result['error']}")
+            else:
+                self.info_log(f"🎨 {result.get('device_name', device_id)} → R{red} G{green} B{blue}")
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"setting colour on device ID {device_id}")
+
+    def set_fan_speed(self, device_id: int, speed: int) -> Dict[str, Any]:
+        """Set speed on a speed-control device."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.set_fan_speed(device_id, speed)
+            if "error" in result:
+                self.info_log(f"❌ Fan speed error: {result['error']}")
+            else:
+                self.info_log(f"💨 {result.get('device_name', device_id)} speed → {speed}%")
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"setting fan speed on device ID {device_id}")
+
+    def request_status_update(self, device_id: int) -> Dict[str, Any]:
+        """Request a status update from a device."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.request_status_update(device_id)
+            if "error" in result:
+                self.info_log(f"❌ Status request error: {result['error']}")
+            else:
+                self.info_log(f"📡 Status requested: {result.get('device_name', device_id)}")
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"requesting status for device ID {device_id}")
+
+    def increase_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Increase the heat setpoint by delta degrees Celsius."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.increase_heat_setpoint(device_id, delta)
+            if "error" in result:
+                self.info_log(f"❌ Increase setpoint error: {result['error']}")
+            else:
+                self.info_log(
+                    f"🌡 {result.get('device_name', device_id)} "
+                    f"setpoint ↑ {result.get('previous')} → {result.get('current')} degC"
+                )
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"increasing heat setpoint on device ID {device_id}")
+
+    def decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Decrease the heat setpoint by delta degrees Celsius."""
+        try:
+            if isinstance(device_id, str) and device_id.isdigit():
+                device_id = int(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.decrease_heat_setpoint(device_id, delta)
+            if "error" in result:
+                self.info_log(f"❌ Decrease setpoint error: {result['error']}")
+            else:
+                self.info_log(
+                    f"🌡 {result.get('device_name', device_id)} "
+                    f"setpoint ↓ {result.get('previous')} → {result.get('current')} degC"
+                )
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"decreasing heat setpoint on device ID {device_id}")

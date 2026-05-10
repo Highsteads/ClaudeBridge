@@ -263,3 +263,90 @@ class DataProvider(ABC):
             - description: Folder description
         """
         pass
+
+    @abstractmethod
+    def set_heat_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
+        """Set heat setpoint on a thermostat device."""
+        pass
+
+    @abstractmethod
+    def set_cool_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
+        """Set cool setpoint on a thermostat device."""
+        pass
+
+    @abstractmethod
+    def set_hvac_mode(self, device_id: int, mode: str) -> Dict[str, Any]:
+        """Set HVAC mode. mode: 'heat', 'cool', 'auto', 'off', 'programHeat', 'programCool', 'programAuto'."""
+        pass
+
+    @abstractmethod
+    def lock_device(self, device_id: int) -> Dict[str, Any]:
+        """Lock a lock device."""
+        pass
+
+    @abstractmethod
+    def unlock_device(self, device_id: int, code: str = None) -> Dict[str, Any]:
+        """Unlock a lock device, optionally with a PIN code."""
+        pass
+
+    @abstractmethod
+    def set_color(self, device_id: int, red: int, green: int, blue: int,
+                  white: int = None, white_temperature: int = None) -> Dict[str, Any]:
+        """Set colour levels on an RGB/RGBW dimmer device (values 0–255)."""
+        pass
+
+    @abstractmethod
+    def set_fan_speed(self, device_id: int, speed: int) -> Dict[str, Any]:
+        """Set speed on a speed-control device (0–100)."""
+        pass
+
+    @abstractmethod
+    def request_status_update(self, device_id: int) -> Dict[str, Any]:
+        """Request a status update from a device."""
+        pass
+
+    @abstractmethod
+    def increase_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Increase the heat setpoint by delta degrees Celsius (default 0.5)."""
+        pass
+
+    @abstractmethod
+    def decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Decrease the heat setpoint by delta degrees Celsius (default 0.5)."""
+        pass
+
+    @abstractmethod
+    def get_device_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a device by exact or case-insensitive name match.
+
+        Returns the full device dict (including all states) for the best match,
+        or None if no device is found.
+        """
+        pass
+
+    @abstractmethod
+    def log_message(self, message: str, level: str = "INFO") -> Dict[str, Any]:
+        """Write a message to the Indigo on-screen event log."""
+        pass
+
+    @abstractmethod
+    def send_notification(
+        self,
+        title: str,
+        message: str,
+        priority: str = "0",
+        sound: str = "vibrate",
+    ) -> Dict[str, Any]:
+        """Send a Pushover push notification."""
+        pass
+
+    @abstractmethod
+    def send_email(
+        self,
+        recipient: str,
+        subject: str,
+        body: str,
+    ) -> Dict[str, Any]:
+        """Send an email via Indigo's configured SMTP device."""
+        pass

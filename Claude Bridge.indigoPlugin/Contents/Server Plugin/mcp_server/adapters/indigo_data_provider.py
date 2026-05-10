@@ -520,3 +520,269 @@ class IndigoDataProvider(DataProvider):
             self.logger.error(f"Error getting variable folders: {e}")
 
         return folders
+
+    # ── Extended device control ────────────────────────────────────────────
+
+    def set_heat_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
+        """Set heat setpoint on a thermostat device."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            previous = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else None
+            indigo.thermostat.setHeatSetpoint(device_id, value=float(setpoint))
+            dev = indigo.devices[device_id]
+            current = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else setpoint
+            self.logger.info(f"Set heat setpoint '{dev.name}': {previous} -> {current} degC")
+            return {"success": True, "device_name": dev.name,
+                    "previous": previous, "current": current}
+        except Exception as e:
+            self.logger.error(f"Error setting heat setpoint on {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def set_cool_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
+        """Set cool setpoint on a thermostat device."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            previous = dev.coolSetpoint if hasattr(dev, 'coolSetpoint') else None
+            indigo.thermostat.setCoolSetpoint(device_id, value=float(setpoint))
+            dev = indigo.devices[device_id]
+            current = dev.coolSetpoint if hasattr(dev, 'coolSetpoint') else setpoint
+            self.logger.info(f"Set cool setpoint '{dev.name}': {previous} -> {current} degC")
+            return {"success": True, "device_name": dev.name,
+                    "previous": previous, "current": current}
+        except Exception as e:
+            self.logger.error(f"Error setting cool setpoint on {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def set_hvac_mode(self, device_id: int, mode: str) -> Dict[str, Any]:
+        """Set HVAC mode on a thermostat device."""
+        _MODE_MAP = {
+            "off":         indigo.kHvacMode.Off,
+            "heat":        indigo.kHvacMode.Heat,
+            "cool":        indigo.kHvacMode.Cool,
+            "auto":        indigo.kHvacMode.HeatCool,
+            "heatcool":    indigo.kHvacMode.HeatCool,
+            "programheat": indigo.kHvacMode.ProgramHeat,
+            "programcool": indigo.kHvacMode.ProgramCool,
+            "programauto": indigo.kHvacMode.ProgramAuto,
+        }
+        mode_key = mode.lower().replace(" ", "")
+        if mode_key not in _MODE_MAP:
+            return {"error": f"Unknown HVAC mode '{mode}'. Valid: {list(_MODE_MAP.keys())}",
+                    "success": False}
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            indigo.thermostat.setHvacMode(device_id, value=_MODE_MAP[mode_key])
+            self.logger.info(f"Set HVAC mode '{dev.name}' -> {mode}")
+            return {"success": True, "device_name": dev.name, "mode": mode}
+        except Exception as e:
+            self.logger.error(f"Error setting HVAC mode on {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def lock_device(self, device_id: int) -> Dict[str, Any]:
+        """Lock a lock device."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            previous = dev.onState  # locked = onState True for lock devices
+            indigo.device.lock(device_id)
+            dev = indigo.devices[device_id]
+            self.logger.info(f"Locked '{dev.name}'")
+            return {"success": True, "device_name": dev.name,
+                    "previous": previous, "current": dev.onState}
+        except Exception as e:
+            self.logger.error(f"Error locking device {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def unlock_device(self, device_id: int, code: str = None) -> Dict[str, Any]:
+        """Unlock a lock device."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            previous = dev.onState
+            if code:
+                indigo.device.unlock(device_id, code=code)
+            else:
+                indigo.device.unlock(device_id)
+            dev = indigo.devices[device_id]
+            self.logger.info(f"Unlocked '{dev.name}'")
+            return {"success": True, "device_name": dev.name,
+                    "previous": previous, "current": dev.onState}
+        except Exception as e:
+            self.logger.error(f"Error unlocking device {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def set_color(self, device_id: int, red: int, green: int, blue: int,
+                  white: int = None, white_temperature: int = None) -> Dict[str, Any]:
+        """Set colour levels on an RGB/RGBW dimmer (values 0-255)."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            kwargs = {
+                "rLevel": max(0, min(255, int(red))),
+                "gLevel": max(0, min(255, int(green))),
+                "bLevel": max(0, min(255, int(blue))),
+            }
+            if white is not None:
+                kwargs["whiteLevel"] = max(0, min(255, int(white)))
+            if white_temperature is not None:
+                kwargs["whiteTemperature"] = int(white_temperature)
+            indigo.dimmer.setColorLevels(device_id, **kwargs)
+            self.logger.info(f"Set colour '{dev.name}' -> R{red} G{green} B{blue}")
+            return {"success": True, "device_name": dev.name, **kwargs}
+        except Exception as e:
+            self.logger.error(f"Error setting colour on {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def set_fan_speed(self, device_id: int, speed: int) -> Dict[str, Any]:
+        """Set speed on a speed-control device (0-100)."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            speed_val = max(0, min(100, int(speed)))
+            previous = dev.speedLevel if hasattr(dev, 'speedLevel') else None
+            indigo.speedcontrol.setSpeedLevel(device_id, value=speed_val)
+            dev = indigo.devices[device_id]
+            current = dev.speedLevel if hasattr(dev, 'speedLevel') else speed_val
+            self.logger.info(f"Set fan speed '{dev.name}': {previous} -> {current}%")
+            return {"success": True, "device_name": dev.name,
+                    "previous": previous, "current": current}
+        except Exception as e:
+            self.logger.error(f"Error setting fan speed on {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def request_status_update(self, device_id: int) -> Dict[str, Any]:
+        """Request a status update from a device."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            indigo.device.statusRequest(device_id)
+            self.logger.info(f"Status requested for '{dev.name}'")
+            return {"success": True, "device_name": dev.name}
+        except Exception as e:
+            self.logger.error(f"Error requesting status for {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def increase_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Increase the heat setpoint by delta degrees Celsius."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            previous = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else None
+            if previous is None:
+                return {"error": f"Device '{dev.name}' has no heat setpoint", "success": False}
+            new_setpoint = round(float(previous) + float(delta), 1)
+            indigo.thermostat.setHeatSetpoint(device_id, value=new_setpoint)
+            dev = indigo.devices[device_id]
+            current = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else new_setpoint
+            self.logger.info(f"Increased heat setpoint '{dev.name}': {previous} -> {current} degC")
+            return {"success": True, "device_name": dev.name,
+                    "previous": previous, "current": current, "delta": delta}
+        except Exception as e:
+            self.logger.error(f"Error increasing heat setpoint on {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Decrease the heat setpoint by delta degrees Celsius."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            previous = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else None
+            if previous is None:
+                return {"error": f"Device '{dev.name}' has no heat setpoint", "success": False}
+            new_setpoint = round(float(previous) - float(delta), 1)
+            indigo.thermostat.setHeatSetpoint(device_id, value=new_setpoint)
+            dev = indigo.devices[device_id]
+            current = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else new_setpoint
+            self.logger.info(f"Decreased heat setpoint '{dev.name}': {previous} -> {current} degC")
+            return {"success": True, "device_name": dev.name,
+                    "previous": previous, "current": current, "delta": delta}
+        except Exception as e:
+            self.logger.error(f"Error decreasing heat setpoint on {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def get_device_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """Find a device by exact or case-insensitive name match, return full state dict."""
+        try:
+            name_stripped = name.strip()
+            name_lower    = name_stripped.lower()
+            # Try exact match first
+            for dev in indigo.devices:
+                if dev.name == name_stripped:
+                    return dict(dev)
+            # Fallback: case-insensitive
+            for dev in indigo.devices:
+                if dev.name.lower() == name_lower:
+                    return dict(dev)
+            # Partial match
+            for dev in indigo.devices:
+                if name_lower in dev.name.lower():
+                    return dict(dev)
+            return None
+        except Exception as e:
+            self.logger.error(f"Error finding device by name '{name}': {e}")
+            return None
+
+    def log_message(self, message: str, level: str = "INFO") -> Dict[str, Any]:
+        """Write a message to the Indigo on-screen event log."""
+        try:
+            level_upper = (level or "INFO").upper()
+            if level_upper == "ERROR":
+                indigo.server.log(message, level=level_upper, isError=True)
+            else:
+                indigo.server.log(message, level=level_upper)
+            return {"success": True, "message": message, "level": level_upper}
+        except Exception as e:
+            self.logger.error(f"Error writing to Indigo log: {e}")
+            return {"error": str(e), "success": False}
+
+    def send_notification(
+        self,
+        title: str,
+        message: str,
+        priority: str = "0",
+        sound: str = "vibrate",
+    ) -> Dict[str, Any]:
+        """Send a Pushover push notification via the Pushover plugin."""
+        try:
+            pushover = indigo.server.getPlugin("io.thechad.indigoplugin.pushover")
+            if not pushover or not pushover.isEnabled():
+                return {"error": "Pushover plugin not found or not enabled", "success": False}
+            pushover.executeAction("send", props={
+                "msgTitle":    title,
+                "msgBody":     message,
+                "msgPriority": str(priority),
+                "msgSound":    sound,
+            })
+            self.logger.info(f"Pushover sent: '{title}'")
+            return {"success": True, "title": title, "priority": priority, "sound": sound}
+        except Exception as e:
+            self.logger.error(f"Error sending Pushover notification: {e}")
+            return {"error": str(e), "success": False}
+
+    def send_email(
+        self,
+        recipient: str,
+        subject: str,
+        body: str,
+    ) -> Dict[str, Any]:
+        """Send an email via Indigo's configured SMTP device."""
+        try:
+            indigo.server.sendEmailTo(recipient, subject=subject, body=body)
+            self.logger.info(f"Email sent to {recipient}: '{subject}'")
+            return {"success": True, "recipient": recipient, "subject": subject}
+        except Exception as e:
+            self.logger.error(f"Error sending email to {recipient}: {e}")
+            return {"error": str(e), "success": False}

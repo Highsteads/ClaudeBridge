@@ -1,12 +1,14 @@
 """
 Script tools handler for ClaudeBridge MCP server.
 
-Provides read, write, and create access to the Indigo Scripts folder,
-allowing Claude to inspect, debug, and update automation scripts directly.
+Provides read, write, create, run, and log access to the Indigo Scripts folders,
+allowing Claude to inspect, debug, update, and execute automation scripts directly.
 
 The active scripts folder is resolved at runtime:
-  1. <PA base>/Scripts        — standard Indigo location (preferred)
-  2. <PA base>/Python Scripts — legacy/custom fallback if Scripts does not exist
+  1. <PA base>/Python Scripts — primary location (preferred, ~35 scripts)
+  2. <PA base>/Scripts        — secondary location (rarely used)
+
+For reads, both folders are searched (Python Scripts first).
 
 Tools:
   - read_script(name)               : return full content of a script
@@ -14,6 +16,8 @@ Tools:
   - create_script(name, content)    : create a new script (fails if exists)
   - delete_script(name)             : move a script to the _archive subfolder
   - list_script_backups(name)       : list auto-backups for a script
+  - run_script(name)                : execute a script in the Indigo Python context
+  - log_message(message, level)     : write a message to the Indigo on-screen log
 """
 
 import logging
@@ -36,21 +40,29 @@ MAX_BACKUPS_PER_SCRIPT = 5
 
 def _scripts_dir() -> str:
     """
-    Return the active Indigo scripts folder.
+    Return the primary Indigo Python scripts folder (used for new writes).
 
     Resolution order:
-      1. <PA base>/Scripts        — standard Indigo location, present on all installations
-      2. <PA base>/Python Scripts — legacy / custom fallback
-      3. <PA base>/Scripts        — default if neither exists (created on first write)
+      1. <PA base>/Python Scripts — primary location (~35 scripts, preferred)
+      2. <PA base>/Scripts        — secondary / fallback
+      3. <PA base>/Python Scripts — default if neither exists (created on first write)
     """
-    pa_base = os.path.dirname(indigo.server.getInstallFolderPath())
-    scripts        = os.path.join(pa_base, "Scripts")
+    pa_base        = os.path.dirname(indigo.server.getInstallFolderPath())
     python_scripts = os.path.join(pa_base, "Python Scripts")
-    if os.path.isdir(scripts):
-        return scripts
+    scripts        = os.path.join(pa_base, "Scripts")
     if os.path.isdir(python_scripts):
         return python_scripts
-    return scripts  # default — will be created on first write
+    if os.path.isdir(scripts):
+        return scripts
+    return python_scripts  # default — will be created on first write
+
+
+def _all_scripts_dirs() -> list:
+    """Return all script folders that exist, Python Scripts first."""
+    pa_base        = os.path.dirname(indigo.server.getInstallFolderPath())
+    python_scripts = os.path.join(pa_base, "Python Scripts")
+    scripts        = os.path.join(pa_base, "Scripts")
+    return [d for d in [python_scripts, scripts] if os.path.isdir(d)]
 
 
 def _backup_dir() -> str:
@@ -58,9 +70,18 @@ def _backup_dir() -> str:
 
 
 def _resolve(name: str) -> str:
-    """Return full path for a script name (adds .py if missing)."""
+    """
+    Return full path for a script name (adds .py if missing).
+    Searches Python Scripts first, then Scripts.  Falls back to Python Scripts
+    for new file paths (create/write operations).
+    """
     if not name.endswith(".py"):
         name = name + ".py"
+    for folder in _all_scripts_dirs():
+        candidate = os.path.join(folder, name)
+        if os.path.isfile(candidate):
+            return candidate
+    # Not found in any folder — return path in primary folder for creation
     return os.path.join(_scripts_dir(), name)
 
 
@@ -407,6 +428,102 @@ if __name__ == "__main__":
             return result
         except Exception as exc:
             return self.handle_exception(exc, "scaffold_automation_script")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # run_script
+    # ────────────────────────────────────────────────────────────────────────
+
+    def run_script(self, name: str) -> Dict[str, Any]:
+        """
+        Execute a Python script in the Indigo Python context.
+
+        The script is looked up in Python Scripts (then Scripts) and executed
+        via exec() with the Indigo globals available.  stdout/stderr are
+        captured.  Suitable for short automation scripts; long-running scripts
+        should be triggered via action groups instead.
+        """
+        self.log_incoming_request("run_script", {"name": name})
+        try:
+            path = _resolve(name)
+            if not os.path.isfile(path):
+                return {"success": False,
+                        "error": f"Script '{name}' not found at {path}"}
+
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+
+            import io
+            import sys as _sys
+
+            old_stdout = _sys.stdout
+            old_stderr = _sys.stderr
+            captured_out = io.StringIO()
+            captured_err = io.StringIO()
+            _sys.stdout = captured_out
+            _sys.stderr = captured_err
+
+            try:
+                code = compile(source, path, "exec")
+                ns = {"__file__": path, "__name__": "__main__"}
+                try:
+                    exec(code, ns)  # noqa: S102
+                    error_msg = None
+                except SystemExit:
+                    error_msg = None  # clean exit via sys.exit() is normal
+                except Exception as exc:
+                    error_msg = str(exc)
+            finally:
+                _sys.stdout = old_stdout
+                _sys.stderr = old_stderr
+
+            out = captured_out.getvalue()
+            err = captured_err.getvalue()
+
+            result = {
+                "success":  error_msg is None,
+                "name":     os.path.basename(path),
+                "path":     path,
+                "stdout":   out[:4000] if out else "",
+                "stderr":   err[:2000] if err else "",
+            }
+            if error_msg:
+                result["error"] = error_msg
+            self.log_tool_outcome(
+                "run_script",
+                result["success"],
+                f"Ran '{name}'" + (f" — ERROR: {error_msg}" if error_msg else ""),
+            )
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "run_script")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # log_message
+    # ────────────────────────────────────────────────────────────────────────
+
+    def log_message(self, message: str, level: str = "INFO") -> Dict[str, Any]:
+        """
+        Write a message to the Indigo on-screen event log.
+
+        Level can be: INFO (default), WARNING, ERROR, DEBUG.
+        The message appears immediately in the Indigo Log Viewer.
+        """
+        self.log_incoming_request("log_message", {"message": message, "level": level})
+        try:
+            level_upper = (level or "INFO").upper()
+            if level_upper == "ERROR":
+                indigo.server.log(message, level=level_upper, isError=True)
+            else:
+                indigo.server.log(message, level=level_upper)
+            result = {"success": True, "message": message, "level": level_upper}
+            self.log_tool_outcome("log_message", True, f"Logged [{level_upper}] {message[:60]}")
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "log_message")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # list_script_backups
+    # ────────────────────────────────────────────────────────────────────────
 
     def list_script_backups(self, name: str) -> Dict[str, Any]:
         """List auto-backups available for a given script name."""

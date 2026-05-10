@@ -4,8 +4,29 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
-# Date:        30-04-2026
-# Version:     2.2
+# Date:        10-05-2026
+# Version:     2.3.0
+#
+# v2.3.0 (10-05-2026):
+# - Version is now read dynamically from Info.plist via self.pluginVersion
+#   (no separate Python constant — Info.plist is the single source of truth)
+# - Added log_startup_banner() via bundled plugin_utils.py
+# - Added showPluginInfo menu item + callback
+# - Implemented triggerStartProcessing / triggerStopProcessing lifecycle and
+#   fixed two broken self.triggerEvent() call sites (the method does not exist
+#   on PluginBase — was raising AttributeError, swallowed silently).  Indigo
+#   custom 'claudeEvent' triggers now actually fire.
+# - Added deviceUpdated self-loop guard at top (loop risk: plugin
+#   subscribeToChanges + writes own mcpServer device states)
+# - Bearer token rotated out of indigo_mcp_proxy.py source — replaced with
+#   placeholder; real value now in secrets.py CLAUDEBRIDGE_BEARER_TOKEN
+# - Standardised secrets handling: per-key try/except for ANTHROPIC_API_KEY,
+#   CLAUDEBRIDGE_BEARER_TOKEN, INFLUXDB_*; PluginConfig fallback per key;
+#   ERROR-log if neither source set
+# - PluginConfig.xml: help-text labels explaining secrets.py policy added to
+#   every credentials section; auto_configure_claude_code checkbox added
+# - fire_claude_event data serialisation fixed (was collapsing 0/False to "")
+# - vector_store/validation.py: bare except: -> except Exception:
 
 try:
     import indigo
@@ -20,6 +41,57 @@ import socket
 import time
 
 import anthropic
+
+# Bundled plugin_utils (startup banner).  We DELIBERATELY do NOT add
+# /Library/Application Support/Perceptive Automation to sys.path because that
+# directory contains a `secrets.py` file which would shadow Python's stdlib
+# `secrets` module — mcp_handler.py uses `secrets.token_urlsafe()` from the
+# stdlib and breaks if our user-data secrets.py wins.  Instead we load both
+# `plugin_utils` and the master `secrets.py` explicitly via importlib so they
+# don't appear on sys.path under their canonical names.
+import os as _os
+import sys as _sys
+import importlib.util as _ilu
+
+def _load_module_by_path(name: str, path: str):
+    """Load a Python file as a module by an arbitrary name, without polluting sys.path."""
+    if not _os.path.exists(path):
+        return None
+    try:
+        spec = _ilu.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+# Startup banner — try shared master, then bundled fallback.  Loaded under a
+# distinctive name so it can never clash with another module called plugin_utils.
+_pu = (_load_module_by_path("clives_plugin_utils",
+                            "/Library/Application Support/Perceptive Automation/plugin_utils.py")
+       or _load_module_by_path("clives_plugin_utils",
+                               _os.path.join(_os.getcwd(), "plugin_utils.py")))
+log_startup_banner = getattr(_pu, "log_startup_banner", None) if _pu else None
+
+# Master secrets.py loaded under a non-conflicting name.  Any KEY not present
+# falls back to "" (or sensible default).  Resolution order at runtime is:
+# secrets.py first, then PluginConfig fallback.
+_secrets_mod = _load_module_by_path(
+    "clives_secrets",
+    "/Library/Application Support/Perceptive Automation/secrets.py",
+)
+def _get_secret(name: str, default=""):
+    return getattr(_secrets_mod, name, default) if _secrets_mod else default
+
+ANTHROPIC_API_KEY         = _get_secret("ANTHROPIC_API_KEY")
+CLAUDEBRIDGE_BEARER_TOKEN = _get_secret("CLAUDEBRIDGE_BEARER_TOKEN")
+INFLUXDB_HOST             = _get_secret("INFLUXDB_HOST")
+INFLUXDB_PORT             = _get_secret("INFLUXDB_PORT", 8086)
+INFLUXDB_USERNAME         = _get_secret("INFLUXDB_USERNAME")
+INFLUXDB_PASSWORD         = _get_secret("INFLUXDB_PASSWORD")
+INFLUXDB_DATABASE         = _get_secret("INFLUXDB_DATABASE")
 
 # Import our modules
 from mcp_server.adapters.indigo_data_provider import IndigoDataProvider
@@ -52,18 +124,32 @@ class Plugin(indigo.PluginBase):
             plugin_id, plugin_display_name, plugin_version, plugin_prefs, **kwargs
         )
 
-        # Plugin configuration
-        self.anthropic_api_key = plugin_prefs.get("anthropic_api_key", "")
-        self.large_model = plugin_prefs.get("large_model", "claude-sonnet-4-6")
-        self.small_model = plugin_prefs.get("small_model", "claude-haiku-4-5-20251001")
+        if log_startup_banner:
+            log_startup_banner(plugin_id, plugin_display_name, plugin_version)
+        else:
+            indigo.server.log(f"{plugin_display_name} v{plugin_version} starting")
 
-        # InfluxDB configuration
-        self.enable_influxdb = plugin_prefs.get("enable_influxdb", False)
-        self.influx_url = plugin_prefs.get("influx_url", "http://localhost")
-        self.influx_port = plugin_prefs.get("influx_port", "8086")
-        self.influx_login = plugin_prefs.get("influx_login", "")
-        self.influx_password = plugin_prefs.get("influx_password", "")
-        self.influx_database = plugin_prefs.get("influx_database", "indigo")
+        # Indigo trigger registry — populated by triggerStartProcessing/Stop.
+        # Maps trigger.id -> trigger object so _fire_claude_event can find
+        # triggers whose pluginTypeId matches the event being fired.
+        self.event_triggers = {}
+
+        # Plugin configuration — credentials follow the standard resolution
+        # order: secrets.py first, then PluginConfig (pluginPrefs) as fallback.
+        # See feedback_secrets_policy.md for the rule.
+        self.anthropic_api_key = ANTHROPIC_API_KEY or plugin_prefs.get("anthropic_api_key", "")
+        self.large_model       = plugin_prefs.get("large_model", "claude-sonnet-4-6")
+        self.small_model       = plugin_prefs.get("small_model", "claude-haiku-4-5-20251001")
+
+        # InfluxDB configuration — same resolution pattern
+        self.enable_influxdb   = plugin_prefs.get("enable_influxdb", False)
+        # Strip protocol from host (clients add their own) — accept either form in config
+        _influx_url            = (INFLUXDB_HOST or plugin_prefs.get("influx_url", "")).strip()
+        self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
+        self.influx_port       = str(INFLUXDB_PORT or plugin_prefs.get("influx_port", "8086"))
+        self.influx_login      = INFLUXDB_USERNAME or plugin_prefs.get("influx_login", "")
+        self.influx_password   = INFLUXDB_PASSWORD or plugin_prefs.get("influx_password", "")
+        self.influx_database   = INFLUXDB_DATABASE or plugin_prefs.get("influx_database", "indigo")
 
         # Security configuration
         self.access_mode = plugin_prefs.get("access_mode", "local_only")
@@ -299,28 +385,23 @@ class Plugin(indigo.PluginBase):
         """
         Called after __init__ when the plugin is starting up.
         """
-        self.logger.info("Starting plugin...")
+        self.logger.info(f"Claude Bridge v{self.pluginVersion} ready")
 
-        # If no key in prefs, fall back to central secrets.py before testing
+        # Anthropic API key is already resolved in __init__ via ANTHROPIC_API_KEY
+        # (secrets.py) -> pluginPrefs.  If still empty, log an ERROR pointing the
+        # user to either source — but don't crash; the plugin still hosts the MCP
+        # endpoint, just refuses requests until the key is set.
         if not self.anthropic_api_key:
-            try:
-                import importlib.util
-                _spec = importlib.util.spec_from_file_location(
-                    "secrets",
-                    "/Library/Application Support/Perceptive Automation/secrets.py"
-                )
-                _secrets = importlib.util.module_from_spec(_spec)
-                _spec.loader.exec_module(_secrets)
-                self.anthropic_api_key = getattr(_secrets, "ANTHROPIC_API_KEY", "")
-                if self.anthropic_api_key:
-                    self.logger.info("\t✅ Anthropic API key loaded from secrets.py")
-            except Exception as _e:
-                self.logger.warning(f"\t⚠️  Could not load secrets.py: {_e}")
+            self.logger.error(
+                "[Config] No Anthropic API key configured. Set ANTHROPIC_API_KEY in "
+                "/Library/Application Support/Perceptive Automation/secrets.py "
+                "OR fill in 'Anthropic API Key' under Plugins -> Claude Bridge -> "
+                "Configure. Plugin will not be able to call Claude until this is set."
+            )
 
-        # Test connections (now that key is loaded)
-        if not self.test_connections():
-            self.logger.error("\t❌ Required service connections failed - startup aborted")
-            return
+        # Test connections (skips Anthropic test if key is empty)
+        if self.anthropic_api_key and not self.test_connections():
+            self.logger.error("\tRequired service connections failed - continuing in degraded mode")
 
         # Log CPU architecture information
         self.check_cpu_compatibility()
@@ -396,8 +477,14 @@ class Plugin(indigo.PluginBase):
             except Exception as _dev_e:
                 self.logger.warning(f"\t⚠️  Could not auto-create device: {_dev_e}")
 
-            # Auto-configure Claude Code integration (proxy + MCP config files)
-            self._setup_claude_code_integration()
+            # Auto-configure Claude Code integration (proxy + ~/.mcp.json +
+            # ~/.claude/settings.json edits).  Opt-in via PluginConfig — defaults
+            # to True so existing users keep their current setup, but lets a user
+            # disable silent dotfile rewriting if they manage these themselves.
+            if self.pluginPrefs.get("auto_configure_claude_code", True):
+                self._setup_claude_code_integration()
+            else:
+                self.logger.info("Claude Code auto-configure disabled in PluginConfig — skipping ~/.mcp.json and ~/.claude/settings.json updates")
 
             # Subscribe to device and variable changes for the events system
             try:
@@ -438,28 +525,47 @@ class Plugin(indigo.PluginBase):
         changed       = []
 
         # 1. Copy proxy script from bundle and patch Bearer token
+        # Token resolution order: Indigo IWS Preferences/secrets.json (master,
+        # written by Indigo) -> CLAUDEBRIDGE_BEARER_TOKEN from secrets.py.
         if bundle_proxy.exists():
             scripts_dir.mkdir(parents=True, exist_ok=True)
             _shutil.copy2(bundle_proxy, dest_proxy)
 
+            token = ""
             if secrets_path.exists():
                 try:
-                    secrets = _json.loads(secrets_path.read_text())
-                    if isinstance(secrets, list) and secrets:
-                        token    = secrets[0]
-                        text     = dest_proxy.read_text(encoding="utf-8")
-                        new_text = _re.sub(
-                            r'^(BEARER_TOKEN\s*=\s*")[^"]*(")',
-                            rf'\g<1>{token}\g<2>',
-                            text, flags=_re.MULTILINE
-                        )
-                        dest_proxy.write_text(new_text, encoding="utf-8")
+                    iws_secrets = _json.loads(secrets_path.read_text())
+                    if isinstance(iws_secrets, list) and iws_secrets:
+                        token = iws_secrets[0]
                 except Exception as _e:
-                    self.logger.warning(f"\t⚠️  Bearer token patch failed: {_e}")
+                    self.logger.warning(f"\tIWS secrets.json read failed: {_e}")
+            if not token:
+                token = CLAUDEBRIDGE_BEARER_TOKEN
+            if not token:
+                self.logger.error(
+                    "[Config] No bearer token available to patch into the MCP proxy. "
+                    "Indigo IWS Preferences/secrets.json is empty AND "
+                    "CLAUDEBRIDGE_BEARER_TOKEN is not set in secrets.py. "
+                    "Claude Code will not be able to authenticate. "
+                    "Generate an IWS bearer token in Indigo (Server -> Web Server -> "
+                    "Manage Authentication) or add CLAUDEBRIDGE_BEARER_TOKEN to "
+                    "/Library/Application Support/Perceptive Automation/secrets.py."
+                )
+            else:
+                try:
+                    text     = dest_proxy.read_text(encoding="utf-8")
+                    new_text = _re.sub(
+                        r'^(BEARER_TOKEN\s*=\s*")[^"]*(")',
+                        rf'\g<1>{token}\g<2>',
+                        text, flags=_re.MULTILINE
+                    )
+                    dest_proxy.write_text(new_text, encoding="utf-8")
+                except Exception as _e:
+                    self.logger.error(f"[Config] Bearer token patch failed: {_e}")
 
             changed.append("proxy script")
         else:
-            self.logger.warning("\t⚠️  indigo_mcp_proxy.py not found in bundle — skipping proxy setup")
+            self.logger.warning("\tindigo_mcp_proxy.py not found in bundle — skipping proxy setup")
 
         # 2. Update ~/.mcp.json
         try:
@@ -831,27 +937,16 @@ class Plugin(indigo.PluginBase):
         old_influx_database = self.influx_database
 
         try:
-            # Apply values from dialog temporarily — fall back to secrets.py if field is blank
-            dialog_key = values_dict.get("anthropic_api_key", "")
-            if not dialog_key:
-                try:
-                    import importlib.util
-                    _spec = importlib.util.spec_from_file_location(
-                        "secrets",
-                        "/Library/Application Support/Perceptive Automation/secrets.py"
-                    )
-                    _mod = importlib.util.module_from_spec(_spec)
-                    _spec.loader.exec_module(_mod)
-                    dialog_key = getattr(_mod, "ANTHROPIC_API_KEY", "")
-                except Exception:
-                    pass
-            self.anthropic_api_key = dialog_key
-            self.enable_influxdb = values_dict.get("enable_influxdb", False)
-            self.influx_url = values_dict.get("influx_url", "http://localhost")
-            self.influx_port = values_dict.get("influx_port", "8086")
-            self.influx_login = values_dict.get("influx_login", "")
-            self.influx_password = values_dict.get("influx_password", "")
-            self.influx_database = values_dict.get("influx_database", "indigo")
+            # Apply dialog values, falling back to secrets.py for empty fields
+            # (matches the resolution order used everywhere else in the plugin).
+            self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
+            self.enable_influxdb   = values_dict.get("enable_influxdb", False)
+            _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
+            self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
+            self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))
+            self.influx_login      = INFLUXDB_USERNAME or values_dict.get("influx_login", "")
+            self.influx_password   = INFLUXDB_PASSWORD or values_dict.get("influx_password", "")
+            self.influx_database   = INFLUXDB_DATABASE or values_dict.get("influx_database", "indigo")
 
             # Test connections
             connections_ok = self.test_connections()
@@ -890,19 +985,8 @@ class Plugin(indigo.PluginBase):
 
         # Validate Anthropic API key — blank is OK if secrets.py provides it
         api_key = values_dict.get("anthropic_api_key", "")
-        if not api_key:
-            secrets_path = "/Library/Application Support/Perceptive Automation/secrets.py"
-            has_secrets_key = False
-            try:
-                import importlib.util
-                _spec = importlib.util.spec_from_file_location("secrets", secrets_path)
-                _mod  = importlib.util.module_from_spec(_spec)
-                _spec.loader.exec_module(_mod)
-                has_secrets_key = bool(getattr(_mod, "ANTHROPIC_API_KEY", ""))
-            except Exception:
-                pass
-            if not has_secrets_key:
-                errors_dict["anthropic_api_key"] = "Enter an Anthropic API key (or add ANTHROPIC_API_KEY to secrets.py)"
+        if not api_key and not ANTHROPIC_API_KEY:
+            errors_dict["anthropic_api_key"] = "Enter an Anthropic API key (or add ANTHROPIC_API_KEY to secrets.py)"
 
 
         # Validate log level
@@ -968,9 +1052,25 @@ class Plugin(indigo.PluginBase):
     # Plugin Event System (claudeEvent triggers)
     ########################################
 
+    def triggerStartProcessing(self, trigger):
+        """Indigo lifecycle: a trigger configured against this plugin was enabled.
+
+        Store the trigger object so fire_claude_event() can fire it via
+        indigo.trigger.execute() — that API requires a trigger OBJECT, not a
+        string event ID.  Neither indigo.server.fireEvent() nor
+        self.triggerEvent() exist on PluginBase; both raise AttributeError.
+        """
+        self.event_triggers[trigger.id] = trigger
+
+    def triggerStopProcessing(self, trigger):
+        """Indigo lifecycle: trigger disabled or deleted."""
+        self.event_triggers.pop(trigger.id, None)
+
     def fire_claude_event(self, event_name: str, data=None, source: str = "claude") -> dict:
         """
-        Fire all claudeEvent triggers using the 2025.1 eventData mechanism.
+        Fire all claudeEvent triggers via the standard PluginBase lifecycle:
+        iterate self.event_triggers (populated by triggerStartProcessing) and
+        execute every trigger whose pluginTypeId matches the Events.xml event ID.
 
         Inside the user's Trigger actions, the payload is accessible as:
             %%eventData:name%%   %%eventData:data%%   %%eventData:source%%
@@ -979,19 +1079,34 @@ class Plugin(indigo.PluginBase):
 
         Returns a small dict the MCP tool serialises back to Claude.
         """
+        # data: serialise dicts/lists; preserve falsy non-None scalars (0, False)
+        if isinstance(data, (dict, list)):
+            data_str = json.dumps(data)
+        elif data is None:
+            data_str = ""
+        else:
+            data_str = str(data)
+
         payload = {
             "name":   event_name or "",
-            "data":   json.dumps(data) if isinstance(data, (dict, list)) else str(data or ""),
+            "data":   data_str,
             "source": source or "claude",
         }
-        try:
-            # 2025.1+ eventData support
-            self.triggerEvent("claudeEvent", eventData=payload)
-        except TypeError:
-            # Older Indigo: fall back to plain triggerEvent
-            self.triggerEvent("claudeEvent")
-        self.logger.info(f"🎯 fire_claude_event '{event_name}' fired (source={source})")
-        return {"event": event_name, "payload": payload}
+
+        fired = 0
+        for trigger in self.event_triggers.values():
+            if trigger.pluginTypeId == "claudeEvent":
+                try:
+                    indigo.trigger.execute(trigger)
+                    fired += 1
+                except Exception as e:
+                    self.logger.error(f"[Trigger] execute failed for claudeEvent (id={trigger.id}): {e}")
+
+        if fired:
+            self.logger.info(f"fire_claude_event '{event_name}' fired {fired} trigger(s) (source={source})")
+        else:
+            self.logger.info(f"fire_claude_event '{event_name}' — no Indigo triggers configured for claudeEvent")
+        return {"event": event_name, "payload": payload, "triggers_fired": fired}
 
     ########################################
     # Device Management
@@ -1058,7 +1173,22 @@ class Plugin(indigo.PluginBase):
         Called when a device state or configuration is updated.
         Queues state-change events for any active Claude subscriptions,
         then handles mcpServer-specific configuration tracking.
+
+        Loop-guard: this plugin both subscribeToChanges() AND writes to its own
+        mcpServer device states (via deviceStartComm/deviceUpdated below).
+        Without this guard, every state write fires deviceUpdated again -> any
+        future state write inside the mcpServer branch would loop.  Per-device
+        self-checks aren't sufficient if the plugin ever has more than one
+        device — block the whole pluginId at the top.
         """
+        if newDev.pluginId == self.pluginId:
+            # Still process mcpServer config tracking for our own device, but
+            # skip the events-queue path entirely (no MCP subscriber wants
+            # change events from the bridge device itself).
+            if newDev.deviceTypeId == "mcpServer":
+                self._handle_mcp_server_device_update(origDev, newDev)
+            return
+
         # Queue event for the events system (all non-plugin devices)
         if (
             self.mcp_handler
@@ -1082,44 +1212,43 @@ class Plugin(indigo.PluginBase):
                 pass
 
         if newDev.deviceTypeId == "mcpServer":
-            changes = []
-            
-            # Check property changes (actual configuration)
-            for key in newDev.pluginProps:
-                old_val = origDev.pluginProps.get(key)
-                new_val = newDev.pluginProps.get(key)
+            self._handle_mcp_server_device_update(origDev, newDev)
+
+    def _handle_mcp_server_device_update(self, origDev, newDev):
+        """Track config changes on the plugin's own mcpServer device.
+
+        Pulled out of deviceUpdated() so it can be called from the loop-guard
+        early-return path too — see deviceUpdated() docstring.
+        """
+        changes = []
+
+        # Check property changes (actual configuration)
+        for key in newDev.pluginProps:
+            old_val = origDev.pluginProps.get(key)
+            new_val = newDev.pluginProps.get(key)
+            if old_val != new_val:
+                changes.append(f"property '{key}': '{old_val}' -> '{new_val}'")
+
+        # Check state changes (runtime status)
+        for key in newDev.states:
+            if key in origDev.states:
+                old_val = origDev.states[key]
+                new_val = newDev.states[key]
                 if old_val != new_val:
-                    changes.append(f"property '{key}': '{old_val}' → '{new_val}'")
-            
-            # Check state changes (runtime status)
-            for key in newDev.states:
-                if key in origDev.states:
-                    old_val = origDev.states[key]
-                    new_val = newDev.states[key]
-                    if old_val != new_val:
-                        changes.append(f"state '{key}': '{old_val}' → '{new_val}'")
-            
-            # Check device name change
-            if origDev.name != newDev.name:
-                changes.append(f"device name: '{origDev.name}' → '{newDev.name}'")
-            
-            # Log specific changes at debug level
-            if changes:
-                self.logger.debug(f"MCP Server device '{newDev.name}' updated: {', '.join(changes)}")
+                    changes.append(f"state '{key}': '{old_val}' -> '{new_val}'")
 
-            # Check if access mode changed (keep at INFO level - important configuration change)
-            old_access_mode = origDev.pluginProps.get(
-                "server_access_mode", "local_only"
-            )
-            new_access_mode = newDev.pluginProps.get("server_access_mode", "local_only")
+        # Check device name change
+        if origDev.name != newDev.name:
+            changes.append(f"device name: '{origDev.name}' -> '{newDev.name}'")
 
-            if old_access_mode != new_access_mode:
-                self.logger.info(
-                    f"Access mode changed from {old_access_mode} to {new_access_mode}"
-                )
-                # No server restart needed - MCP runs via Indigo Web Server
+        if changes:
+            self.logger.debug(f"MCP Server device '{newDev.name}' updated: {', '.join(changes)}")
 
-            # Device name changes are handled automatically by Indigo
+        # Access-mode change is important — log at INFO
+        old_access_mode = origDev.pluginProps.get("server_access_mode", "local_only")
+        new_access_mode = newDev.pluginProps.get("server_access_mode", "local_only")
+        if old_access_mode != new_access_mode:
+            self.logger.info(f"Access mode changed from {old_access_mode} to {new_access_mode}")
 
     def validateDeviceConfigUi(
         self, valuesDict: indigo.Dict, typeId: str, devId: int
@@ -1183,34 +1312,23 @@ class Plugin(indigo.PluginBase):
             self.plugin_file_handler.setLevel(self.log_level)
             logging.getLogger("Plugin").setLevel(self.log_level)
 
-            # Core configuration — if key field is blank, fall back to secrets.py
-            dialog_key = values_dict.get("anthropic_api_key", "")
-            if not dialog_key:
-                try:
-                    import importlib.util
-                    _spec = importlib.util.spec_from_file_location(
-                        "secrets",
-                        "/Library/Application Support/Perceptive Automation/secrets.py"
-                    )
-                    _mod = importlib.util.module_from_spec(_spec)
-                    _spec.loader.exec_module(_mod)
-                    dialog_key = getattr(_mod, "ANTHROPIC_API_KEY", "")
-                except Exception:
-                    pass
-            self.anthropic_api_key = dialog_key
-            self.large_model = values_dict.get("large_model", "claude-sonnet-4-6")
-            self.small_model = values_dict.get("small_model", "claude-haiku-4-5-20251001")
+            # Core configuration — secrets.py first, dialog as fallback (matches
+            # the standard resolution order documented in feedback_secrets_policy.md)
+            self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
+            self.large_model       = values_dict.get("large_model", "claude-sonnet-4-6")
+            self.small_model       = values_dict.get("small_model", "claude-haiku-4-5-20251001")
 
             # Security configuration
-            self.access_mode = values_dict.get("access_mode", "local_only")
+            self.access_mode       = values_dict.get("access_mode", "local_only")
 
-            # InfluxDB configuration
-            self.enable_influxdb = values_dict.get("enable_influxdb", False)
-            self.influx_url = values_dict.get("influx_url", "http://localhost")
-            self.influx_port = values_dict.get("influx_port", "8086")
-            self.influx_login = values_dict.get("influx_login", "")
-            self.influx_password = values_dict.get("influx_password", "")
-            self.influx_database = values_dict.get("influx_database", "indigo")
+            # InfluxDB configuration — secrets.py first, dialog fallback
+            self.enable_influxdb   = values_dict.get("enable_influxdb", False)
+            _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
+            self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
+            self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))
+            self.influx_login      = INFLUXDB_USERNAME or values_dict.get("influx_login", "")
+            self.influx_password   = INFLUXDB_PASSWORD or values_dict.get("influx_password", "")
+            self.influx_database   = INFLUXDB_DATABASE or values_dict.get("influx_database", "indigo")
 
             # Phase 2 — apply rate-limit / cache changes live (no restart needed)
             try:
@@ -1274,3 +1392,25 @@ class Plugin(indigo.PluginBase):
             # No server restart needed - MCP runs via Indigo Web Server
             # Configuration changes (environment variables) are already applied above
             # and will be picked up by handlers on next request
+
+    ########################################
+    # Menu callbacks
+    ########################################
+
+    def showPluginInfo(self, valuesDict=None, typeId=None):
+        """Re-run the startup banner on demand from the Plugins menu."""
+        if log_startup_banner:
+            extras = []
+            try:
+                urls = self._get_mcp_client_urls() if hasattr(self, "_get_mcp_client_urls") else []
+                if urls:
+                    extras.append(("MCP Local URL:", urls[0].get("url", "")))
+            except Exception:
+                pass
+            extras.append(("Tools:", "64+"))
+            extras.append(("Anthropic Key:", "configured" if self.anthropic_api_key else "MISSING"))
+            extras.append(("InfluxDB:", "enabled" if self.enable_influxdb else "disabled"))
+            extras.append(("Access Mode:", str(self.access_mode)))
+            log_startup_banner(self.pluginId, self.pluginDisplayName, self.pluginVersion, extras=extras)
+        else:
+            indigo.server.log(f"{self.pluginDisplayName} v{self.pluginVersion}")
