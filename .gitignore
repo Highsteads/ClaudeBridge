@@ -15,6 +15,7 @@ __pycache__/
 
 # Secrets — NEVER commit
 secrets.py
+IndigoSecrets.py
 secrets.json
 *.key
 

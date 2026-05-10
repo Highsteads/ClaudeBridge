@@ -42,13 +42,15 @@ import time
 
 import anthropic
 
-# Bundled plugin_utils (startup banner).  We DELIBERATELY do NOT add
-# /Library/Application Support/Perceptive Automation to sys.path because that
-# directory contains a `secrets.py` file which would shadow Python's stdlib
-# `secrets` module — mcp_handler.py uses `secrets.token_urlsafe()` from the
-# stdlib and breaks if our user-data secrets.py wins.  Instead we load both
-# `plugin_utils` and the master `secrets.py` explicitly via importlib so they
-# don't appear on sys.path under their canonical names.
+# Master credentials file: IndigoSecrets.py at
+# /Library/Application Support/Perceptive Automation/IndigoSecrets.py
+# (renamed from secrets.py on 10-May-2026 — the old name shadowed Python's
+# stdlib `secrets` module which mcp_handler uses for token_urlsafe().)
+#
+# We still use the importlib pattern (rather than putting the parent dir on
+# sys.path) for two reasons: (1) belt-and-braces against any future stdlib
+# collision, (2) lets us load plugin_utils.py from the same directory under a
+# unique module name without registering "plugin_utils" globally.
 import os as _os
 import sys as _sys
 import importlib.util as _ilu
@@ -67,20 +69,18 @@ def _load_module_by_path(name: str, path: str):
     except Exception:
         return None
 
-# Startup banner — try shared master, then bundled fallback.  Loaded under a
-# distinctive name so it can never clash with another module called plugin_utils.
+# Startup banner — shared master first, bundled fallback second.
 _pu = (_load_module_by_path("clives_plugin_utils",
                             "/Library/Application Support/Perceptive Automation/plugin_utils.py")
        or _load_module_by_path("clives_plugin_utils",
                                _os.path.join(_os.getcwd(), "plugin_utils.py")))
 log_startup_banner = getattr(_pu, "log_startup_banner", None) if _pu else None
 
-# Master secrets.py loaded under a non-conflicting name.  Any KEY not present
-# falls back to "" (or sensible default).  Resolution order at runtime is:
-# secrets.py first, then PluginConfig fallback.
+# Master IndigoSecrets.py.  Any KEY not present falls back to default ("").
+# Resolution order at runtime is: IndigoSecrets.py first, PluginConfig fallback.
 _secrets_mod = _load_module_by_path(
-    "clives_secrets",
-    "/Library/Application Support/Perceptive Automation/secrets.py",
+    "indigo_user_secrets",
+    "/Library/Application Support/Perceptive Automation/IndigoSecrets.py",
 )
 def _get_secret(name: str, default=""):
     return getattr(_secrets_mod, name, default) if _secrets_mod else default

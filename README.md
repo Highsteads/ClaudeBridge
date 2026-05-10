@@ -60,12 +60,12 @@ Then do these two final steps manually:
 2. **Restart Claude Code** — you should see 64 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
-> `/Library/Application Support/Perceptive Automation/secrets.py` first; the
+> `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first; the
 > plugin's PluginConfig dialog is a fallback only. Keys this plugin reads:
 > `ANTHROPIC_API_KEY`, `CLAUDEBRIDGE_BEARER_TOKEN`, and (optional) `INFLUXDB_HOST`,
 > `INFLUXDB_PORT`, `INFLUXDB_USERNAME`, `INFLUXDB_PASSWORD`, `INFLUXDB_DATABASE`.
 > If a value is missing from BOTH sources, the plugin logs an ERROR pointing
-> here and skips that feature. See `secrets_example.py` for the template.
+> here and skips that feature. See `IndigoSecrets_example.py` for the template.
 
 ---
 
@@ -93,9 +93,9 @@ Then do these two final steps manually:
 Click **Test** to verify the API connection, then **Save**.
 
 > **Tip:** Leave the API Key field blank and add `ANTHROPIC_API_KEY = "sk-ant-..."` to
-> `/Library/Application Support/Perceptive Automation/secrets.py` instead.
+> `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` instead.
 > The plugin checks for this file automatically on startup.
-> A template (`secrets_example.py`) is included in the repository.
+> A template (`IndigoSecrets_example.py`) is included in the repository.
 
 #### 3. Device auto-creation
 
@@ -331,9 +331,9 @@ README.md
 - **Show Plugin Info** menu item — re-runs the banner on demand with extras (MCP URL, Anthropic key status, InfluxDB status, access mode)
 - **Trigger lifecycle fixed** — implemented `triggerStartProcessing` / `triggerStopProcessing` and rewrote `fire_claude_event()`. Previously called the non-existent `self.triggerEvent()` method which raised `AttributeError` silently, so `claudeEvent` triggers never actually fired
 - **`deviceUpdated` self-loop guard** — plugin both `subscribeToChanges()` and writes its own `mcpServer` device states; without the guard a future state write inside the callback could loop
-- **Bearer token rotated out of source** — `indigo_mcp_proxy.py` now ships with a deliberately invalid placeholder. Real value comes from Indigo's IWS `Preferences/secrets.json` first, with `CLAUDEBRIDGE_BEARER_TOKEN` in `secrets.py` as a fallback. Plugin patches the deployed copy at install time
-- **Secrets handling rebuilt** using `importlib` pattern with `clives_secrets` module name to avoid shadowing Python's stdlib `secrets` module (used by `mcp_handler` for `token_urlsafe()`). Also now correctly sources `INFLUXDB_*` from `secrets.py` (was PluginConfig-only)
-- **PluginConfig.xml policy banner** at the top — explicit explanation of secrets.py vs PluginConfig precedence + the keys this plugin reads
+- **Bearer token rotated out of source** — `indigo_mcp_proxy.py` now ships with a deliberately invalid placeholder. Real value comes from Indigo's IWS `Preferences/secrets.json` first, with `CLAUDEBRIDGE_BEARER_TOKEN` in `IndigoSecrets.py` as a fallback. Plugin patches the deployed copy at install time
+- **Secrets handling rebuilt** using `importlib` pattern with `clives_secrets` module name to avoid shadowing Python's stdlib `secrets` module (used by `mcp_handler` for `token_urlsafe()`). Also now correctly sources `INFLUXDB_*` from `IndigoSecrets.py` (was PluginConfig-only)
+- **PluginConfig.xml policy banner** at the top — explicit explanation of IndigoSecrets.py vs PluginConfig precedence + the keys this plugin reads
 - **Auto-configure Claude Code opt-out** — new checkbox so users can disable silent rewriting of `~/.mcp.json` and `~/.claude/settings.json`
 - `fire_claude_event` data serialisation fixed (was collapsing `0` and `False` to `""`)
 - Bare `except:` in `mcp_server/common/vector_store/validation.py` changed to `except Exception:`
@@ -372,8 +372,8 @@ README.md
 - Reduced vector store sync log verbosity
 
 ### 1.0.3 (2026-03-24)
-- API key field can now be left blank if `secrets.py` provides `ANTHROPIC_API_KEY`
-- Fixed config save erroring when API key field is blank but secrets.py has the key
+- API key field can now be left blank if `IndigoSecrets.py` provides `ANTHROPIC_API_KEY`
+- Fixed config save erroring when API key field is blank but IndigoSecrets.py has the key
 - Added `indigo_mcp_proxy.py` to repository
 
 ### 1.0.2 (2026-03-24)
