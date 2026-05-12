@@ -5,9 +5,11 @@
 Once installed, Claude can query device states, turn devices on and off, read and write variables, execute action groups, search your home's entity database, and query the Indigo event log — all in natural language, with no manual scripting required.
 
 **Author:** CliveS & Claude Sonnet 4.6
-**Platform:** Indigo 2025.2, macOS, Python 3.13
+**Platform:** Indigo 2023.2 or later, macOS (Python 3.11+ bundled with Indigo)
+
+*Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.3.1
+**Version:** 2.3.2
 
 ---
 
@@ -176,9 +178,9 @@ minutes; Claude does it in a couple of round-trips.
 
 ## Requirements
 
-- Indigo 2025.2 or later
+- Indigo 2023.2 or later (Python 3.11+)
 - macOS (runs on the Indigo server machine)
-- Python 3.13 (bundled with Indigo 2025.2)
+- Python 3.11+ (bundled with Indigo 2023.2+)
 - [Anthropic API key](https://console.anthropic.com) (Claude API)
 - [Claude Code](https://claude.ai/download) or Claude Desktop (to use the tools)
 
@@ -548,6 +550,18 @@ README.md
 ---
 
 ## Changelog
+
+### 2.3.2 (2026-05-12)
+- **`ServerApiVersion` lowered 3.6 → 3.4.** Plugin uses `requirements.txt`
+  auto-install (introduced API 3.4) but does NOT use the API 3.6 feature
+  (`dict(indigo.triggers[id])`-style iteration on Trigger/Schedule objects);
+  it serialises those by reading attributes one-by-one. Lowering the API
+  floor extends compatibility down to Indigo 2023.2 / Python 3.11
+  (was Indigo 2024.2). Verified by grep — no `dict()` calls on
+  trigger/schedule objects anywhere in the codebase.
+- README "Platform" / "Requirements" lines corrected: was overstated as
+  "Indigo 2025.2 / Python 3.13" (which is just the dev environment); now
+  honestly reflects the API floor of 3.4 → Indigo 2023.2 / Python 3.11+.
 
 ### 2.3.1 (2026-05-12)
 - **Docs sync** — README and `CAPABILITY_SUMMARY.md` brought up to date with the
