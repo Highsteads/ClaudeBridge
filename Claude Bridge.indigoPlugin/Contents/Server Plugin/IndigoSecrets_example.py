@@ -1,9 +1,9 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
-# Filename:    secrets_example.py
-# Description: Template for secrets.py — copy to secrets.py and fill in your values.
-#              secrets.py lives at:
-#                  /Library/Application Support/Perceptive Automation/secrets.py
+# Filename:    IndigoSecrets_example.py
+# Description: Template for IndigoSecrets.py — copy to IndigoSecrets.py and fill in your values.
+#              IndigoSecrets.py lives at:
+#                  /Library/Application Support/Perceptive Automation/IndigoSecrets.py
 #              It is NEVER committed to git. Keep a backup in a password manager.
 # Author:      CliveS & Claude Sonnet 4.6
 # Date:        24-03-2026
@@ -19,32 +19,32 @@
 # Each plugin needs API keys and passwords to connect to external services.
 # Rather than storing credentials separately in every plugin, or re-entering
 # them each time via the Indigo config dialog, all plugins share a single
-# secrets.py at this version-stable path:
+# IndigoSecrets.py at this version-stable path:
 #
-#     /Library/Application Support/Perceptive Automation/secrets.py
+#     /Library/Application Support/Perceptive Automation/IndigoSecrets.py
 #
 # This path never changes when Indigo is upgraded — unlike paths inside the
 # Indigo version folder (e.g. .../Indigo 2025.1/...) which change each release.
 #
 # HOW PLUGINS USE IT
 # Each plugin does: sys.path.insert(0, "/Library/Application Support/Perceptive Automation")
-# then: from secrets import KEY_NAME
-# If secrets.py is missing or a key is absent, the plugin falls back to the
+# then: from IndigoSecrets import KEY_NAME
+# If IndigoSecrets.py is missing or a key is absent, the plugin falls back to the
 # value entered in its own configuration dialog (Plugins → Plugin Name → Configure).
 #
 # NOTE: Indigo also has a built-in "secrets.json" in its Preferences folder,
 # but that is only for authenticating HTTP requests to Indigo's own web server.
 # It is a flat list of tokens with no names — not suitable for storing plugin
-# credentials. Our secrets.py is a separate, purpose-built solution.
+# credentials. Our IndigoSecrets.py is a separate, purpose-built solution.
 #
 # FIRST-TIME SETUP
 # Copy this file to:
-#     /Library/Application Support/Perceptive Automation/secrets.py
+#     /Library/Application Support/Perceptive Automation/IndigoSecrets.py
 # Fill in the values for the plugins you use. You only need the sections for
 # plugins you have installed.
 #
 # SECURITY
-# secrets.py is listed in .gitignore on every plugin repo and will NEVER be
+# IndigoSecrets.py is listed in .gitignore on every plugin repo and will NEVER be
 # committed to git. Keep a backup copy in a password manager.
 #
 # ============================================================

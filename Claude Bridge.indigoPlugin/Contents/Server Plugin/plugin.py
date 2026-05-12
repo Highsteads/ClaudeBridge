@@ -19,11 +19,11 @@
 # - Added deviceUpdated self-loop guard at top (loop risk: plugin
 #   subscribeToChanges + writes own mcpServer device states)
 # - Bearer token rotated out of indigo_mcp_proxy.py source — replaced with
-#   placeholder; real value now in secrets.py CLAUDEBRIDGE_BEARER_TOKEN
+#   placeholder; real value now in IndigoSecrets.py CLAUDEBRIDGE_BEARER_TOKEN
 # - Standardised secrets handling: per-key try/except for ANTHROPIC_API_KEY,
 #   CLAUDEBRIDGE_BEARER_TOKEN, INFLUXDB_*; PluginConfig fallback per key;
 #   ERROR-log if neither source set
-# - PluginConfig.xml: help-text labels explaining secrets.py policy added to
+# - PluginConfig.xml: help-text labels explaining IndigoSecrets.py policy added to
 #   every credentials section; auto_configure_claude_code checkbox added
 # - fire_claude_event data serialisation fixed (was collapsing 0/False to "")
 # - vector_store/validation.py: bare except: -> except Exception:
@@ -135,7 +135,7 @@ class Plugin(indigo.PluginBase):
         self.event_triggers = {}
 
         # Plugin configuration — credentials follow the standard resolution
-        # order: secrets.py first, then PluginConfig (pluginPrefs) as fallback.
+        # order: IndigoSecrets.py first, then PluginConfig (pluginPrefs) as fallback.
         # See feedback_secrets_policy.md for the rule.
         self.anthropic_api_key = ANTHROPIC_API_KEY or plugin_prefs.get("anthropic_api_key", "")
         self.large_model       = plugin_prefs.get("large_model", "claude-sonnet-4-6")
@@ -388,13 +388,13 @@ class Plugin(indigo.PluginBase):
         self.logger.info(f"Claude Bridge v{self.pluginVersion} ready")
 
         # Anthropic API key is already resolved in __init__ via ANTHROPIC_API_KEY
-        # (secrets.py) -> pluginPrefs.  If still empty, log an ERROR pointing the
+        # (IndigoSecrets.py) -> pluginPrefs.  If still empty, log an ERROR pointing the
         # user to either source — but don't crash; the plugin still hosts the MCP
         # endpoint, just refuses requests until the key is set.
         if not self.anthropic_api_key:
             self.logger.error(
                 "[Config] No Anthropic API key configured. Set ANTHROPIC_API_KEY in "
-                "/Library/Application Support/Perceptive Automation/secrets.py "
+                "/Library/Application Support/Perceptive Automation/IndigoSecrets.py "
                 "OR fill in 'Anthropic API Key' under Plugins -> Claude Bridge -> "
                 "Configure. Plugin will not be able to call Claude until this is set."
             )
@@ -526,7 +526,7 @@ class Plugin(indigo.PluginBase):
 
         # 1. Copy proxy script from bundle and patch Bearer token
         # Token resolution order: Indigo IWS Preferences/secrets.json (master,
-        # written by Indigo) -> CLAUDEBRIDGE_BEARER_TOKEN from secrets.py.
+        # written by Indigo) -> CLAUDEBRIDGE_BEARER_TOKEN from IndigoSecrets.py.
         if bundle_proxy.exists():
             scripts_dir.mkdir(parents=True, exist_ok=True)
             _shutil.copy2(bundle_proxy, dest_proxy)
@@ -545,11 +545,11 @@ class Plugin(indigo.PluginBase):
                 self.logger.error(
                     "[Config] No bearer token available to patch into the MCP proxy. "
                     "Indigo IWS Preferences/secrets.json is empty AND "
-                    "CLAUDEBRIDGE_BEARER_TOKEN is not set in secrets.py. "
+                    "CLAUDEBRIDGE_BEARER_TOKEN is not set in IndigoSecrets.py. "
                     "Claude Code will not be able to authenticate. "
                     "Generate an IWS bearer token in Indigo (Server -> Web Server -> "
                     "Manage Authentication) or add CLAUDEBRIDGE_BEARER_TOKEN to "
-                    "/Library/Application Support/Perceptive Automation/secrets.py."
+                    "/Library/Application Support/Perceptive Automation/IndigoSecrets.py."
                 )
             else:
                 try:
@@ -937,7 +937,7 @@ class Plugin(indigo.PluginBase):
         old_influx_database = self.influx_database
 
         try:
-            # Apply dialog values, falling back to secrets.py for empty fields
+            # Apply dialog values, falling back to IndigoSecrets.py for empty fields
             # (matches the resolution order used everywhere else in the plugin).
             self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
             self.enable_influxdb   = values_dict.get("enable_influxdb", False)
@@ -983,10 +983,10 @@ class Plugin(indigo.PluginBase):
         """
         errors_dict = indigo.Dict()
 
-        # Validate Anthropic API key — blank is OK if secrets.py provides it
+        # Validate Anthropic API key — blank is OK if IndigoSecrets.py provides it
         api_key = values_dict.get("anthropic_api_key", "")
         if not api_key and not ANTHROPIC_API_KEY:
-            errors_dict["anthropic_api_key"] = "Enter an Anthropic API key (or add ANTHROPIC_API_KEY to secrets.py)"
+            errors_dict["anthropic_api_key"] = "Enter an Anthropic API key (or add ANTHROPIC_API_KEY to IndigoSecrets.py)"
 
 
         # Validate log level
@@ -1312,7 +1312,7 @@ class Plugin(indigo.PluginBase):
             self.plugin_file_handler.setLevel(self.log_level)
             logging.getLogger("Plugin").setLevel(self.log_level)
 
-            # Core configuration — secrets.py first, dialog as fallback (matches
+            # Core configuration — IndigoSecrets.py first, dialog as fallback (matches
             # the standard resolution order documented in feedback_secrets_policy.md)
             self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
             self.large_model       = values_dict.get("large_model", "claude-sonnet-4-6")
@@ -1321,7 +1321,7 @@ class Plugin(indigo.PluginBase):
             # Security configuration
             self.access_mode       = values_dict.get("access_mode", "local_only")
 
-            # InfluxDB configuration — secrets.py first, dialog fallback
+            # InfluxDB configuration — IndigoSecrets.py first, dialog fallback
             self.enable_influxdb   = values_dict.get("enable_influxdb", False)
             _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
             self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"

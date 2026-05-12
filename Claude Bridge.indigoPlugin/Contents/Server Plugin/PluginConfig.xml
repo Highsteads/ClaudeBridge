@@ -6,10 +6,10 @@
     </Field>
     <Field id="secrets_policy_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
         <Label>All sensitive values (API keys, bearer tokens, usernames, passwords,
-private host addresses) are read from the master secrets.py at
-/Library/Application Support/Perceptive Automation/secrets.py FIRST.
+private host addresses) are read from the master IndigoSecrets.py at
+/Library/Application Support/Perceptive Automation/IndigoSecrets.py FIRST.
 The fields below are a fallback only — leave them blank if you have
-the matching key in secrets.py. If a value is set in NEITHER place,
+the matching key in IndigoSecrets.py. If a value is set in NEITHER place,
 the plugin logs an ERROR pointing here and skips that feature.
 
 Keys this plugin reads:
@@ -22,13 +22,13 @@ Keys this plugin reads:
 
     <!-- Anthropic Configuration -->
     <Field id="anthropic_api_key" type="textfield" defaultValue="" secure="true"
-           tooltip="Required for Claude AI capabilities — fallback to ANTHROPIC_API_KEY in secrets.py">
+           tooltip="Required for Claude AI capabilities — fallback to ANTHROPIC_API_KEY in IndigoSecrets.py">
         <Label>Anthropic API Key:</Label>
     </Field>
 
     <Field id="api_key_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
         <Label>Get an API key from https://console.anthropic.com/settings/keys.
-Or set ANTHROPIC_API_KEY in /Library/Application Support/Perceptive Automation/secrets.py
+Or set ANTHROPIC_API_KEY in /Library/Application Support/Perceptive Automation/IndigoSecrets.py
 and leave this field blank.</Label>
     </Field>
 
@@ -60,7 +60,7 @@ and leave this field blank.</Label>
     </Field>
 
     <Field id="influxdb_secrets_help" type="label" fontSize="small" alignWithControl="false" enabledBindingId="enable_influxdb">
-        <Label>Leave the fields below blank if INFLUXDB_HOST/PORT/USERNAME/PASSWORD/DATABASE are set in secrets.py — those take priority.</Label>
+        <Label>Leave the fields below blank if INFLUXDB_HOST/PORT/USERNAME/PASSWORD/DATABASE are set in IndigoSecrets.py — those take priority.</Label>
     </Field>
     <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_url"
            defaultValue="">

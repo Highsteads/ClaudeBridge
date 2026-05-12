@@ -16,7 +16,7 @@ INDIGO_MCP_PATH        = "/message/com.clives.indigoplugin.claudebridge/mcp/"
 # BEARER_TOKEN is patched in by the plugin at install time.  The plugin's
 # _setup_claude_code_integration() reads the live IWS token from
 # /Library/Application Support/Perceptive Automation/Indigo 2025.2/Preferences/secrets.json
-# (with secrets.py CLAUDEBRIDGE_BEARER_TOKEN as a fallback) and rewrites this
+# (with IndigoSecrets.py CLAUDEBRIDGE_BEARER_TOKEN as a fallback) and rewrites this
 # line in the destination copy at /Library/Application Support/Perceptive
 # Automation/Scripts/indigo_mcp_proxy.py.  The placeholder value below is
 # deliberately invalid — running this bundled file directly will fail

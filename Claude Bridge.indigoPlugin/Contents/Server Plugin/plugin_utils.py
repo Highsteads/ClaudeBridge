@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # Filename:    plugin_utils.py
 # Description: Shared utilities for all Indigo plugins (CliveS / Highsteads)
-#              Import via sys.path.insert using the same pattern as secrets.py
+#              Import via sys.path.insert using the same pattern as IndigoSecrets.py
 # Author:      CliveS & Claude Sonnet 4.6
 # Date:        10-05-2026
 # Version:     1.1

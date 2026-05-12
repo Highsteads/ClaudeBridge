@@ -144,6 +144,34 @@ The `indigo-mcp` tools will appear on next session start. You should see 64 tool
 
 ---
 
+## Credentials — `IndigoSecrets.py` vs `IndigoSecrets_example.py`
+
+This plugin (along with all CliveS Indigo plugins) reads sensitive values from
+a shared master credentials file at:
+
+`/Library/Application Support/Perceptive Automation/IndigoSecrets.py`
+
+| File | Purpose | Real data? | Committed to GitHub? |
+|------|---------|------------|----------------------|
+| `IndigoSecrets.py` | Working file the plugin reads at runtime. Keep a backup in a password manager. | YES | **NO** — listed in `.gitignore` |
+| `IndigoSecrets_example.py` | Template only — empty placeholders. Shipped in the plugin bundle. | NO | YES |
+
+If you do not have `IndigoSecrets.py`, copy `IndigoSecrets_example.py` from
+the plugin bundle to that location and fill in your values. Or skip
+`IndigoSecrets.py` entirely and enter values via the plugin's configuration
+dialog — `IndigoSecrets.py` wins over the dialog when both are set.
+
+If a required value is set in NEITHER source the plugin logs an ERROR
+pointing the user to either fill in the matching field or add the key to
+`IndigoSecrets.py`.
+
+**Keys read by this plugin**: `ANTHROPIC_API_KEY` (required for Claude API
+features), `CLAUDEBRIDGE_BEARER_TOKEN` (fallback for IWS auth — first
+preference is Indigo's own `Preferences/secrets.json`), and the optional
+`INFLUXDB_*` keys for historical-analysis MCP tools.
+
+---
+
 ## Connecting Claude Code
 
 Claude Code connects via a lightweight Python proxy script (`indigo_mcp_proxy.py`) that handles

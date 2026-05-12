@@ -240,7 +240,7 @@ def main():
     print("     (The plugin will auto-create its device on first enable)")
     print()
     print("  2. If prompted for an Anthropic API key:")
-    print("     → Add ANTHROPIC_API_KEY to secrets.py, or")
+    print("     → Add ANTHROPIC_API_KEY to IndigoSecrets.py, or")
     print("     → Enter it in Plugins → Claude Bridge → Configure")
     print()
     print("  3. Restart Claude Code")
