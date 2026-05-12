@@ -1,25 +1,28 @@
 # ClaudeBridge — Full Capability Summary
-*For anyone evaluating whether to download and install ClaudeBridge v2.0.0*
+*For anyone evaluating whether to download and install ClaudeBridge v2.3.1*
 
 ClaudeBridge connects **Claude Code** (Anthropic's AI coding agent) directly to your running **Indigo home automation server** via the Model Context Protocol (MCP). Instead of asking Claude to write scripts blindly, Claude can read your actual devices, check live states, query history, write and test scripts, and reason about your real home — all from a single conversation.
 
-This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost.
+**Current tool count: 80 tools across 13 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost.
 
 ---
 
 ## What Claude Can Do With ClaudeBridge Installed
 
-### 1. Device Control & Queries (12 tools)
+### 1. Device Control & Queries (16 tools)
 
 Read and control every Indigo device without leaving the conversation:
 
 - List all devices (with optional folder or type filters)
-- Get a single device by ID — including all custom states, plugin states, and metadata
+- Get a device by ID or by name (exact / partial / case-insensitive)
 - Find devices by current state (e.g. "all motion sensors currently triggered")
 - Find devices by type (relay, dimmer, thermostat, sensor, speed control, etc.)
-- Turn devices on or off
-- Set dimmer brightness (0–100%)
-- Full device control — send any supported command with a values dictionary
+- Natural-language `search_entities` across devices, variables, action groups
+- Turn devices on / off / toggle (`device_control` does name lookup + action in one call)
+- Set dimmer brightness (0–100%), RGB / colour-temp, fan speed
+- Lock / unlock smart locks
+- Request hardware status update
+- Whole-home snapshot (`home_status`) — SOC, PV, grid, errors at a glance
 
 **Example prompts:**
 > "Which lights are currently on in the house?"
@@ -57,10 +60,11 @@ Full read/write access to Indigo variables:
 
 ---
 
-### 4. Plugin Management (3 tools)
+### 4. Plugin Management (4 tools)
 
 - List all installed plugins with version and status
-- Get detailed status for a specific plugin
+- Get plugin detail by ID
+- Get plugin enabled / running status
 - Restart a plugin
 
 **Example prompts:**
@@ -85,7 +89,7 @@ Search the live Indigo event log:
 
 ---
 
-### 6. Script Tools (6 tools)
+### 6. Script Tools (8 tools)
 
 Full read/write access to the Indigo Scripts folder (the standard location where all Indigo Python automation scripts live — typically `Scripts` under the Perceptive Automation application support directory). If a `Python Scripts` folder exists instead, it is used as a fallback automatically:
 
@@ -122,7 +126,7 @@ Capped at 100 entries. When full, oldest entry of the same topic is removed firs
 
 ---
 
-### 8. Event Subscriptions & Push Feed (4 tools)
+### 8. Event Subscriptions & Push Feed (6 tools — incl. event log)
 
 Real-time monitoring of device and variable changes:
 
@@ -140,19 +144,25 @@ The plugin automatically queues every device state change and variable update as
 
 ---
 
-### 9. Audit & Diagnostics (2 tools)
+### 9. Audit, Health & Diagnostics (12 tools)
 
-**Dependency map** — for any device or variable, find everything that references it:
-- Action groups that act on it
-- Triggers that watch it
-- Scripts that contain its numeric ID
+A wide diagnostic toolkit covering the whole Indigo install:
 
-**Find conflicts** — scans your entire Indigo setup for five classes of problem:
-- Duplicate device names (case-insensitive)
-- Multiple devices sharing the same hardware address
-- Duplicate trigger names
-- Orphaned script references (a script contains an ID that no longer exists)
-- Variable write races (multiple scripts calling `updateValue()` on the same variable ID)
+**`audit_home`** — full home configuration audit (devices, plugins, scripts, variables)
+**`audit_variables`** — audit variable usage and references
+**`security_status`** — security sensor snapshot
+**`system_health`** — whole-system health summary
+
+**Finders:**
+- `find_devices_in_error` — devices reporting error states
+- `find_low_battery` — devices with low battery
+- `find_stale_devices` — devices not updated recently
+- `find_orphaned_plugin_data` — plugin prefs / data dirs with no installed plugin
+- `find_orphaned_scripts` — scripts referenced nowhere
+- `find_large_files` — outsized files in plugin data / logs
+- `find_conflicts` — duplicate names, shared hardware addresses, orphaned references, variable write races
+
+**`dependency_map`** — for any device or variable, find everything that references it (action groups, scripts that contain its numeric ID, etc.)
 
 **Example prompts:**
 > "What would break if I deleted the Hall Motion Sensor device?"
@@ -192,7 +202,64 @@ Search across all entity types simultaneously:
 
 ---
 
-### 12. Plugin Development & Testing Workflow
+### 12. Heating / HVAC (6 tools)
+
+Full control of any Indigo thermostat device:
+
+- `heating_status` — per-zone snapshot
+- `set_heat_setpoint` / `set_cool_setpoint` — absolute targets
+- `increase_heat_setpoint` / `decrease_heat_setpoint` — bump up/down
+- `set_hvac_mode` — off / heat / cool / auto / fan
+
+**Example prompts:**
+> "What heating zones are above their target right now?"
+> "Bump the hall by 1 degree for the next hour"
+> "Put the conservatory into auto mode"
+
+---
+
+### 13. Energy intelligence (4 tools)
+
+Reads SigenEnergyManager's daily log files for richer energy analysis than the live `energy_status` snapshot:
+
+- `energy_status` — solar / battery / grid live
+- `energy_log_days` — list available log days
+- `energy_daily_summary` — day's energy summary (imports, exports, PV, SOC trace)
+- `energy_compare` — side-by-side comparison across days
+
+**Example prompts:**
+> "Compare yesterday's energy use against the same day last week"
+> "What was my solar peak last Friday?"
+> "Summarise energy for Tuesday"
+
+---
+
+### 14. Triggers & schedules (7 tools)
+
+- `list_triggers` / `list_schedules`
+- `enable_trigger` / `disable_trigger` / `enable_schedule` / `disable_schedule`
+- `fire_indigo_event` — fire a custom "Claude Bridge → Claude Event" trigger with a JSON payload that Indigo Triggers can read via `%%eventData:name%%` etc.
+
+**Example prompts:**
+> "Disable the Morning_Lights trigger for the rest of today"
+> "Are any of my schedules disabled that shouldn't be?"
+> "Fire a 'leak_detected' event with location=kitchen"
+
+---
+
+### 15. Notifications & logging (3 tools)
+
+- `send_email` — via Indigo's first SMTP device
+- `send_notification` — via Pushover (priority, sound, title, body)
+- `log_message` — write a line to the Indigo event log
+
+**Example prompts:**
+> "Pushover me when this finishes"
+> "Email a summary of today's energy report to me"
+
+---
+
+### 16. Plugin Development & Testing Workflow
 
 ClaudeBridge makes Claude a hands-on partner for developing, debugging, and testing Indigo plugins — because it can see your live system at every step.
 
@@ -341,19 +408,21 @@ Script reads, writes, and backups are entirely local — no Anthropic round-trip
 
 | Capability area | Tools | Notes |
 |---|---|---|
-| Device control & queries | 12 | Full read/write, all device types |
+| Device queries & search | 6 | List, get, search; by id / name / type / state |
+| Device control | 10 | On/off/toggle/brightness/colour/fan/lock/unlock + whole-home status |
+| Heating / HVAC | 6 | Setpoints, mode, increment helpers |
+| Energy intelligence | 4 | Live status + SigenEnergyManager daily logs |
 | Variable management | 5 | Full CRUD, folder support |
 | Action groups | 3 | List, get, execute |
-| Plugin management | 3 | List, status, restart |
-| Event log queries | 1 | Live search with filters |
-| Script tools | 6 | Read/write/create/delete/scaffold/backups |
-| Memory tools | 4 | Persistent cross-session, topic-organised |
-| Event subscriptions | 4 | Real-time device/variable change feed |
-| Audit & diagnostics | 2 | Dependency map + conflict scanner |
-| Home status report | 1 | Prose narrative, configurable sections |
-| General search | 1 | Cross-entity name search |
-| Plugin dev & testing | — | Workflow combining tools above |
-| **Total** | **64** | |
+| Triggers & schedules | 7 | List, enable/disable, plus `fire_indigo_event` |
+| Plugin management | 4 | List, get, status, restart |
+| Scripts | 8 | Read/write/create/delete/run/scaffold/list/backups |
+| Events & subscriptions | 6 | Event log + real-time device/variable change feed |
+| Memory | 4 | Persistent cross-session, topic-organised |
+| Audit, health, diagnostics | 12 | Wide finder set + dependency map + conflict scan |
+| Notifications & logging | 3 | Email, Pushover, write to event log |
+| Reporting & analysis | 2 | `home_status_report` + `analyze_historical_data` |
+| **Total** | **80** | |
 
 **Requirements:** Indigo 2025.1+, macOS, Claude Code (requires Claude.ai Pro/Max or Anthropic API key)
 

@@ -13,7 +13,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 ## Features
 
-- **64 MCP tools** — full read/write access to devices, variables, action groups, plugins, event log, scripts, memory, events, and home intelligence
+- **80 MCP tools** — full read/write access to devices, variables, action groups, triggers, schedules, plugins, event log, scripts, memory, events, audit & health, heating, energy, notifications, and home intelligence
 - **`device_control` — single-call search + action** — find and control a device by name in one round trip (~1s)
 - **Natural language entity search** — find devices by description ("conservatory lamp", "bedroom sensor")
 - **Fast slim search** — returns lightweight results by default; use `detail="full"` only when deep config is needed
@@ -57,7 +57,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 64 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 80 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first; the
@@ -138,7 +138,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 64 tools available.
+The `indigo-mcp` tools will appear on next session start. You should see 80 tools available.
 
 </details>
 
@@ -191,57 +191,107 @@ Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridg
 
 ## Available Tools
 
-### Devices (7)
+**80 tools in 13 categories.** Counts verified against the plugin's tool
+registration at `mcp_server/mcp_handler.py`.
+
+### Device queries & search (6)
 | Tool | Description |
 |------|-------------|
 | `list_devices` | List all Indigo devices with states |
-| `get_device_by_id` | Get full detail for a specific device |
-| `get_devices_by_type` | Filter devices by type (relay, dimmer, sensor, etc.) |
+| `get_device_by_id` | Full detail for a specific device |
+| `get_device_by_name` | Look up a device by exact, partial, or case-insensitive name |
+| `get_devices_by_type` | Filter devices by type (relay, dimmer, sensor, thermostat, etc.) |
 | `get_devices_by_state` | Find devices matching a state condition |
+| `search_entities` | Natural-language search across devices / variables / actions |
+
+### Device control (10)
+| Tool | Description |
+|------|-------------|
 | `device_turn_on` | Turn a device on |
 | `device_turn_off` | Turn a device off |
+| `device_control` | Find by name and turn on / off / toggle in one call |
 | `device_set_brightness` | Set dimmer brightness (0–100) |
+| `set_color` | Set RGB / colour-temp for colour-capable devices |
+| `set_fan_speed` | Set fan speed on speed-control devices |
+| `lock_device` | Lock a smart lock |
+| `unlock_device` | Unlock a smart lock |
+| `request_status_update` | Force a hardware status refresh |
+| `home_status` | Whole-home snapshot (SOC, PV, grid, errors) |
+
+### Heating / HVAC (6)
+| Tool | Description |
+|------|-------------|
+| `heating_status` | Per-zone heating snapshot |
+| `set_heat_setpoint` | Absolute heat setpoint |
+| `set_cool_setpoint` | Absolute cool setpoint |
+| `increase_heat_setpoint` | Bump up by a delta |
+| `decrease_heat_setpoint` | Bump down by a delta |
+| `set_hvac_mode` | Off / heat / cool / auto / fan |
+
+### Energy (4)
+| Tool | Description |
+|------|-------------|
+| `energy_status` | Solar / battery / grid live |
+| `energy_log_days` | List SigenEnergyManager log days |
+| `energy_daily_summary` | Day's energy summary |
+| `energy_compare` | Compare energy across days |
 
 ### Variables (5)
 | Tool | Description |
 |------|-------------|
 | `list_variables` | List all Indigo variables |
 | `list_variable_folders` | List variable folders |
-| `get_variable_by_id` | Get a specific variable value |
+| `get_variable_by_id` | Get a variable value |
 | `variable_update` | Update a variable value |
 | `variable_create` | Create a new variable |
 
-### Action Groups (3)
+### Action groups (3)
 | Tool | Description |
 |------|-------------|
 | `list_action_groups` | List all action groups |
-| `get_action_group_by_id` | Get action group details |
+| `get_action_group_by_id` | Action-group detail |
 | `action_execute_group` | Execute an action group |
+
+### Triggers & schedules (7)
+| Tool | Description |
+|------|-------------|
+| `list_triggers` | List all Indigo triggers |
+| `list_schedules` | List all Indigo schedules |
+| `enable_trigger` | Enable a trigger |
+| `disable_trigger` | Disable a trigger |
+| `enable_schedule` | Enable a schedule |
+| `disable_schedule` | Disable a schedule |
+| `fire_indigo_event` | Fire a custom Claude-Bridge → Indigo event with payload |
 
 ### Plugins (4)
 | Tool | Description |
 |------|-------------|
 | `list_plugins` | List all installed plugins |
-| `get_plugin_by_id` | Get plugin details |
-| `get_plugin_status` | Check if a plugin is enabled/running |
-| `restart_plugin` | Restart an Indigo plugin |
+| `get_plugin_by_id` | Plugin detail |
+| `get_plugin_status` | Enabled / running state |
+| `restart_plugin` | Restart a plugin |
 
-### Search & Control (3)
+### Scripts (8)
 | Tool | Description |
 |------|-------------|
-| `device_control` | Find device by name and turn on/off/toggle in one call |
-| `search_entities` | Natural language search across all entities |
-| `query_event_log` | Query the Indigo event log |
-| `analyze_historical_data` | Analyse historical device/variable data |
-
-### Scripts (5)
-| Tool | Description |
-|------|-------------|
-| `list_script_backups` | List available script backups |
-| `read_script` | Read an Indigo Python script |
-| `write_script` | Write/update a script (auto-backup on write) |
+| `list_python_scripts` | List all scripts (both Python Scripts / and Scripts / folders) |
+| `read_script` | Read a script by filename |
+| `write_script` | Overwrite an existing script (auto-backup) |
 | `create_script` | Create a new script |
-| `delete_script` | Delete a script |
+| `delete_script` | Archive a script (move to `_backups/_archived/`) |
+| `run_script` | Execute a script in the Indigo Python context |
+| `list_script_backups` | List `_backups/` entries |
+| `scaffold_automation_script` | Generate a templated automation script |
+
+### Events & subscriptions (6)
+| Tool | Description |
+|------|-------------|
+| `query_event_log` | Query the Indigo event log with time filters |
+| `subscribe` | Subscribe to device or variable change events |
+| `unsubscribe` | Remove a subscription |
+| `list_subscriptions` | List active subscriptions |
+| `get_events` | Retrieve buffered events |
+| `clear_events` | Clear the event buffer |
 
 ### Memory (4)
 | Tool | Description |
@@ -251,37 +301,34 @@ Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridg
 | `recall_topics` | List all memory topics |
 | `forget` | Delete a memory entry |
 
-### Event Subscriptions (5)
-| Tool | Description |
-|------|-------------|
-| `subscribe` | Subscribe to device or variable change events |
-| `unsubscribe` | Remove a subscription |
-| `get_events` | Retrieve buffered events |
-| `list_subscriptions` | List active subscriptions |
-| `clear_events` | Clear the event buffer |
-
-### Audit (7)
+### Audit, health, diagnostics (12)
 | Tool | Description |
 |------|-------------|
 | `audit_home` | Full home configuration audit |
-| `find_devices_in_error` | Find devices reporting error states |
-| `find_low_battery` | Find devices with low battery |
-| `find_stale_devices` | Find devices not updated recently |
-| `audit_variables` | Audit variable usage |
+| `audit_variables` | Audit variable usage and references |
+| `security_status` | Security sensor snapshot |
+| `system_health` | Whole-system health summary |
+| `find_devices_in_error` | Devices reporting error states |
+| `find_low_battery` | Devices with low battery |
+| `find_stale_devices` | Devices not updated recently |
+| `find_orphaned_plugin_data` | Plugin prefs / data dirs with no installed plugin |
+| `find_orphaned_scripts` | Scripts referenced nowhere |
+| `find_large_files` | Outsized files in plugin data / logs |
+| `find_conflicts` | Duplicate names, shared addresses, orphaned refs |
 | `dependency_map` | Map dependencies between entities |
-| `find_conflicts` | Find duplicate names, shared addresses, orphaned refs |
 
-### Home Intelligence (7)
+### Notifications & logging (3)
 | Tool | Description |
 |------|-------------|
-| `home_status` | Current home status summary |
-| `energy_status` | Solar, battery, and grid energy status |
-| `heating_status` | Heating zone status |
-| `security_status` | Security sensor status |
-| `home_status_report` | Configurable prose markdown narrative |
-| `energy_log_days` | Read SigenEnergyManager daily log files |
-| `energy_daily_summary` | Summarise energy for a day |
-| `energy_compare` | Compare energy across days |
+| `send_email` | Send via Indigo's first SMTP device |
+| `send_notification` | Send via Pushover (with priority / sound) |
+| `log_message` | Write a line to the Indigo event log |
+
+### Reporting & analysis (2)
+| Tool | Description |
+|------|-------------|
+| `home_status_report` | Configurable prose-markdown narrative of the whole home |
+| `analyze_historical_data` | Run historical device / variable analysis (uses InfluxDB if configured) |
 
 ---
 
@@ -351,6 +398,15 @@ README.md
 ---
 
 ## Changelog
+
+### 2.3.1 (2026-05-12)
+- **Docs sync** — README and `CAPABILITY_SUMMARY.md` brought up to date with the
+  current tool surface. Tool count corrected from the stale "64" reference to
+  the real 80. Categories expanded to cover the heating, energy, triggers /
+  schedules, notifications, audit, and reporting groups that had drifted out of
+  the previous categorisation. All log strings and config-dialog labels
+  updated from `secrets.py` → `IndigoSecrets.py` to match the May-2026 rename
+  policy.
 
 ### 2.3.0 (2026-05-10)
 - **Standards-compliance pass** following the audit applied to all CliveS plugins
