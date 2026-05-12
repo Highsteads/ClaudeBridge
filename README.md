@@ -7,7 +7,157 @@ Once installed, Claude can query device states, turn devices on and off, read an
 **Author:** CliveS & Claude Sonnet 4.6
 **Platform:** Indigo 2025.2, macOS, Python 3.13
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.3.0
+**Version:** 2.3.1
+
+---
+
+## How it works — Claude Code ↔ Claude Bridge ↔ Indigo
+
+Claude Bridge runs inside Indigo as a small **MCP server** (Model Context
+Protocol — an open standard from Anthropic for letting AI agents call
+external tools). [Claude Code](https://claude.ai/download), Anthropic's
+terminal-based coding agent, connects to that server via a tiny stdio
+proxy and gains access to **80 tools** that read and write your Indigo
+system.
+
+```
+┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
+│  Claude Code        │  stdio  │  indigo_mcp_proxy.py │  HTTPS  │  Indigo IWS  │
+│  (terminal)         │ ───────►│  (local Python)      │ ───────►│  + plugin    │
+│  asks for tool      │         │  adds Bearer token,  │         │  exposes 80  │
+│  Claude reasons     │         │  protocol bridging   │         │  MCP tools   │
+└─────────────────────┘         └──────────────────────┘         └──────────────┘
+```
+
+The proxy script is auto-installed by the plugin and auto-registered in
+your Claude Code config. From your point of view it's invisible — you
+just open a Claude Code session and the `indigo-mcp` toolset is there.
+
+### Why this matters
+
+Before Claude Bridge, asking AI to help with Indigo meant pasting
+screenshots, copying device IDs by hand, and hoping the AI remembered
+what state your Hall PIR was in three messages ago. Claude was writing
+into a vacuum.
+
+With Claude Bridge, Claude can:
+
+- **Read your actual Indigo state, live.** Not a description of it —
+  the real device states, plugin states, variable values, event log,
+  and trigger configurations as they are right now.
+- **Make changes and verify them.** Turn a device on, then read its
+  state back to confirm. Edit a script, restart the plugin that uses
+  it, query the log to see if it loaded cleanly — all in one
+  conversation.
+- **Reason about your home.** "Which sensors haven't reported in 24
+  hours?" "Does any script depend on variable ID 12345?" "What plugins
+  are disabled that shouldn't be?" Claude uses the audit and
+  diagnostic tools and answers.
+
+---
+
+## Vibe coding for Indigo
+
+["Vibe coding"](https://en.wikipedia.org/wiki/Vibe_coding) is a term
+coined by Andrej Karpathy in early 2025 for a particular style of
+working with AI coding agents: you describe what you want in plain
+language, the AI writes the code, you describe what you want changed,
+the AI iterates. You guide by intent rather than by syntax. The "vibe"
+is the conversational, iterative feedback loop — fewer keystrokes, more
+back-and-forth. Done well, it produces working code in a fraction of
+the time it would take to write line-by-line; done carelessly, it
+produces plausible-looking code that doesn't run. The difference is
+having a feedback loop that lets the AI **verify** what it just wrote.
+
+Claude Bridge turns the Indigo system itself into that feedback loop.
+Examples of how a session might go:
+
+### Example 1 — write a Python script in one prompt
+
+> **You:** "Write me a script that runs at sunset, turns on the porch
+> light, and sends me a Pushover notification if the front door is
+> currently open."
+
+Claude Code:
+1. Calls `search_entities` to find your porch light and front door sensor
+2. Calls `get_device_by_name` to confirm IDs and states
+3. Writes the script via `scaffold_automation_script` with the correct
+   IDs baked in and a `log()` helper
+4. Writes the file via `create_script`
+5. Tells you the script name and tells you to schedule it for sunset
+
+You read the result, hit Enter to commit, done. No Googling
+`indigo.device.turnOn()`. No copy-pasting device IDs.
+
+### Example 2 — write an Indigo plugin from a description
+
+> **You:** "Build me a plugin that listens to my Tuya Zigbee thermostat
+> via the Z2M bridge, exposes setpoint changes as states, and fires a
+> trigger when the schedule kicks in."
+
+Claude Code:
+1. Reads your existing Zigbee2MQTTBridge plugin's device list to find
+   the thermostat and discover its state names
+2. Inspects similar plugins in your `Indigo 2025.2/Plugins/` folder
+   for the conventions you use (Devices.xml structure, log format,
+   header style)
+3. Scaffolds the new plugin bundle with `Info.plist`, `Devices.xml`,
+   `Events.xml`, and `plugin.py`
+4. Restarts the plugin via `restart_plugin`
+5. Queries the event log via `query_event_log` to confirm it started
+   cleanly
+6. Asks you to trigger a setpoint change and watches the events via
+   `subscribe` + `get_events` to verify the state updates flow
+
+When something fails, Claude sees the error in your log immediately and
+fixes it. The iteration loop is seconds, not minutes.
+
+### Example 3 — debug something weird
+
+> **You:** "My bathroom light hasn't been turning off after the motion
+> sensor clears for a week. Find out why."
+
+Claude Code:
+1. `query_event_log` for recent bathroom motion events
+2. `dependency_map` for the bathroom motion sensor → which scripts and
+   action groups reference it
+3. `read_script` on each candidate
+4. Spots a script that compares `var.value` to `"true"` (string) when
+   the variable was set as `True` (bool, coerced to `"True"`)
+5. Proposes the fix, you say yes, Claude `write_script`s the change
+   and tells you it's done
+
+This kind of cross-referencing diagnostic would take a human 20-30
+minutes; Claude does it in a couple of round-trips.
+
+### What you get out of it
+
+- **Plugin development goes from days to hours.** Most of the
+  boilerplate (Devices.xml, action callbacks, MenuItems.xml, file
+  headers) is generated. Your input is the design and the review.
+- **Scripts you'd put off get written.** A 50-line automation that
+  would take an evening of digging through Indigo's IOM docs becomes a
+  five-minute prompt.
+- **Debugging is faster.** Claude has the whole log, the whole device
+  tree, every script, and every plugin's state in scope at once. You
+  don't have to context-load it manually.
+- **You can be sloppy in your prompt.** "The hall light isn't doing
+  the thing" works, because Claude can look at the hall light, see
+  what it's doing, and infer what "the thing" might be.
+
+### Honest limits
+
+- **Claude can't read Indigo Trigger conditions or Action Group
+  steps** — Indigo's API doesn't expose those. Claude can read what
+  scripts do, but for Trigger logic it has to work from the names and
+  ask you what they do.
+- **Claude can't enable/disable plugins or create Triggers
+  programmatically** — Indigo restricts those to the UI. You'll get a
+  scaffolded `.indigoPlugin` bundle and instructions; you do the
+  enable click.
+- **Vibe coding is a force multiplier, not a magic wand.** Review
+  what's been written. Test changes. The point of Claude Bridge is
+  that *verification is one tool call away* — use it.
 
 ---
 
