@@ -4,8 +4,15 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
-# Date:        10-05-2026
-# Version:     2.3.0
+# Date:        18-05-2026
+# Version:     2.3.3
+#
+# v2.3.3 (18-05-2026):
+# - run_script now pre-injects `indigo` into the script's globals before exec,
+#   matching Indigo's own GUI action runner. Scripts no longer need an explicit
+#   `import indigo` at the top — bare references like `indigo.devices.iter(...)`
+#   work directly. (Discovered while running an ad-hoc device-create script
+#   for the MQTTExplorerBridge plugin.)
 #
 # v2.3.0 (10-05-2026):
 # - Version is now read dynamically from Info.plist via self.pluginVersion

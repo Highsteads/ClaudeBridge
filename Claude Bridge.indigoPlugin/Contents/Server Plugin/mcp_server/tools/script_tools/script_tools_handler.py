@@ -438,9 +438,11 @@ if __name__ == "__main__":
         Execute a Python script in the Indigo Python context.
 
         The script is looked up in Python Scripts (then Scripts) and executed
-        via exec() with the Indigo globals available.  stdout/stderr are
-        captured.  Suitable for short automation scripts; long-running scripts
-        should be triggered via action groups instead.
+        via exec() with the `indigo` module pre-injected into globals — bare
+        references like `indigo.devices.iter(...)` work without an explicit
+        `import indigo`, matching Indigo's own GUI action runner.  stdout and
+        stderr are captured.  Suitable for short automation scripts;
+        long-running scripts should be triggered via action groups instead.
         """
         self.log_incoming_request("run_script", {"name": name})
         try:
@@ -464,7 +466,11 @@ if __name__ == "__main__":
 
             try:
                 code = compile(source, path, "exec")
-                ns = {"__file__": path, "__name__": "__main__"}
+                ns = {
+                    "__file__": path,
+                    "__name__": "__main__",
+                    "indigo":   indigo,
+                }
                 try:
                     exec(code, ns)  # noqa: S102
                     error_msg = None
