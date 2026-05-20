@@ -4,7 +4,7 @@ Provides robust text extraction from various response types including GPT-5 reas
 """
 
 import logging
-from typing import Any, Union, List, Optional
+from typing import Any, List
 
 logger = logging.getLogger("Plugin")
 

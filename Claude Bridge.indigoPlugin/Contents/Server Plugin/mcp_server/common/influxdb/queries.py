@@ -4,7 +4,7 @@ InfluxDB query builder and utilities.
 
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Optional, Union
 from .time_utils import TimeFormatter
 
 

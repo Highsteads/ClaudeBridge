@@ -7,7 +7,7 @@ import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Callable
+from typing import List, Callable
 
 logger = logging.getLogger("Plugin")
 

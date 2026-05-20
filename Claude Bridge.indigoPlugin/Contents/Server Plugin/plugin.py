@@ -59,7 +59,6 @@ import anthropic
 # collision, (2) lets us load plugin_utils.py from the same directory under a
 # unique module name without registering "plugin_utils" globally.
 import os as _os
-import sys as _sys
 import importlib.util as _ilu
 
 def _load_module_by_path(name: str, path: str):
@@ -102,9 +101,8 @@ INFLUXDB_DATABASE         = _get_secret("INFLUXDB_DATABASE")
 
 # Import our modules
 from mcp_server.adapters.indigo_data_provider import IndigoDataProvider
-from mcp_server.common.openai_client.langsmith_config import get_langsmith_config
 from mcp_server.mcp_handler import MCPHandler
-from mcp_server.security import AuthManager, AccessMode
+from mcp_server.security import AuthManager
 
 
 ################################################################################

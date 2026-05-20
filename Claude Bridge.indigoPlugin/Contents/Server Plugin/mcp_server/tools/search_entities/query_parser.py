@@ -130,7 +130,7 @@ class QueryParser:
         """
         try:
             if not enable_llm or not query.strip():
-                logger.debug(f"Query expansion skipped (LLM disabled or empty query)")
+                logger.debug("Query expansion skipped (LLM disabled or empty query)")
                 return query
             
             # Check cache first
@@ -189,7 +189,7 @@ Example: "living room light" -> "living room light lamp illumination lighting fi
             )
             
             if not response:
-                logger.debug(f"Empty LLM response for query expansion")
+                logger.debug("Empty LLM response for query expansion")
                 return query
             
             # Use standardized response handling utility
@@ -199,7 +199,7 @@ Example: "living room light" -> "living room light lamp illumination lighting fi
             
             if not expanded or not expanded.strip():
                 # If extraction failed or returned empty string, fallback to original query
-                logger.debug(f"LLM expansion extraction failed, using original query")
+                logger.debug("LLM expansion extraction failed, using original query")
                 expanded = query
             else:
                 # Clean up the expanded query

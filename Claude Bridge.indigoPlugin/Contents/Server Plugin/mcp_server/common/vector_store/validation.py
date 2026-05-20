@@ -4,7 +4,7 @@ Vector store validation utilities for comprehensive data consistency checking.
 
 import json
 import logging
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Set
 from enum import Enum
 
 logger = logging.getLogger("Plugin")
@@ -112,13 +112,13 @@ def load_validation_data(table, logger) -> Dict[int, Dict[str, Any]]:
                     "data": row.get("data", "{}")
                 }
                 
-            except Exception as row_error:
+            except Exception:
                 # Skip invalid row
                 continue
         
         return validation_data
         
-    except Exception as e:
+    except Exception:
         # Failed to load validation data
         return {}
 

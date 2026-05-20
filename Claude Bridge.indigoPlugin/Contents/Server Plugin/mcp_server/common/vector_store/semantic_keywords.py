@@ -171,7 +171,7 @@ def generate_batch_device_keywords(
             if progress_callback:
                 # Rule-based processing takes the second half of progress (50-100%)
                 rule_progress = 50 + int(((i + 1) / len(entities)) * 50)  # 50-100%
-                progress_callback(rule_progress, f"Combining rule-based + LLM keywords")
+                progress_callback(rule_progress, "Combining rule-based + LLM keywords")
                 
                 # Progress tracking handled by callback, no need for additional logging
         
@@ -670,7 +670,7 @@ def _process_structured_response(response, entity_ids: List[str], cache_keys: Li
                 import json
                 json_data = json.loads(response)
                 parsed_response = BatchKeywordsResponse(**json_data)
-                logger.debug(f"✅ Successfully parsed JSON string into BatchKeywordsResponse")
+                logger.debug("✅ Successfully parsed JSON string into BatchKeywordsResponse")
             except (json.JSONDecodeError, TypeError, ValueError) as e:
                 logger.error(f"❌ Failed to parse JSON response: {e}")
                 logger.debug(f"Response content: {response}")
@@ -678,7 +678,7 @@ def _process_structured_response(response, entity_ids: List[str], cache_keys: Li
         elif hasattr(response, 'devices'):
             # Already a parsed BatchKeywordsResponse object
             parsed_response = response
-            logger.debug(f"✅ Using already parsed BatchKeywordsResponse object")
+            logger.debug("✅ Using already parsed BatchKeywordsResponse object")
         else:
             # Unknown response type
             logger.error(f"❌ Unknown response type: {type(response)}")
