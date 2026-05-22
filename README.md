@@ -343,7 +343,7 @@ Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridg
 
 ## Available Tools
 
-**80 tools in 13 categories.** Counts verified against the plugin's tool
+**87 tools in 15 categories.** Counts verified against the plugin's tool
 registration at `mcp_server/mcp_handler.py`.
 
 ### Device queries & search (6)
@@ -404,7 +404,7 @@ registration at `mcp_server/mcp_handler.py`.
 | `get_action_group_by_id` | Action-group detail |
 | `action_execute_group` | Execute an action group |
 
-### Triggers & schedules (7)
+### Triggers & schedules (8)
 | Tool | Description |
 |------|-------------|
 | `list_triggers` | List all Indigo triggers |
@@ -414,6 +414,7 @@ registration at `mcp_server/mcp_handler.py`.
 | `enable_schedule` | Enable a schedule |
 | `disable_schedule` | Disable a schedule |
 | `fire_indigo_event` | Fire a custom Claude-Bridge → Indigo event with payload |
+| `fire_trigger` | Execute an Indigo trigger directly by ID/name (`indigo.trigger.execute`) |
 
 ### Plugins (4)
 | Tool | Description |
@@ -481,6 +482,19 @@ registration at `mcp_server/mcp_handler.py`.
 |------|-------------|
 | `home_status_report` | Configurable prose-markdown narrative of the whole home |
 | `analyze_historical_data` | Run historical device / variable analysis (uses InfluxDB if configured) |
+
+### Folders & server info (3)
+| Tool | Description |
+|------|-------------|
+| `create_device_folder` | Idempotent device-folder creation |
+| `create_variable_folder` | Idempotent variable-folder creation |
+| `get_reflector_url` | Indigo Reflector remote-access URL, if configured |
+
+### Scripting shell (2) — ADMIN scope
+| Tool | Description |
+|------|-------------|
+| `execute_indigo_python` | Run arbitrary Python in this plugin's Indigo context via in-process `exec()`. `mode='exec'` returns captured stdout/stderr; `mode='eval'` returns the expression's repr in `value`. Treat as full code execution on the Indigo server. |
+| `execute_plugin_menu_item` | Click a plugin's menu item under the Indigo client's Plugins menu via AppleScript GUI scripting. Only way to fire a third-party plugin's `<MenuItem>` callback from outside. Requires the Indigo GUI to be running and System Events permission. |
 
 ---
 
@@ -550,6 +564,30 @@ README.md
 ---
 
 ## Changelog
+
+### 2.4.0 (2026-05-22)
+- **Six new MCP tools** exposing recently-verified Indigo APIs:
+  - `fire_trigger` — execute an Indigo trigger directly by ID/name
+    (`indigo.trigger.execute`). Complements `fire_indigo_event` which fires
+    custom Claude-Bridge plugin events via the `claudeEvent` channel.
+  - `get_reflector_url` — return `indigo.server.getReflectorURL()`.
+  - `create_device_folder` / `create_variable_folder` — idempotent folder
+    creation via `indigo.devices.folder.create()` /
+    `indigo.variables.folder.create()`.
+  - `execute_indigo_python` — run arbitrary Python in the plugin's Indigo
+    context via in-process `exec()` (same pattern as `run_script` but for
+    ad-hoc code strings). `mode='exec'` returns captured stdout/stderr;
+    `mode='eval'` returns the expression's repr in `value`. **ADMIN scope.**
+  - `execute_plugin_menu_item` — click a plugin's menu item under the
+    Indigo client's **Plugins** menu via AppleScript GUI scripting.
+    The only known way to fire a third-party plugin's `<MenuItem>`
+    callback from outside (the `indigo.server.getPlugin()` wrapper has
+    no menu API). Requires the Indigo GUI running on the host.
+    **ADMIN scope.**
+- New tool package `mcp_server/tools/scripting_shell/`.
+- `scope_manager`: `fire_trigger`, `create_device_folder`,
+  `create_variable_folder` classified WRITE; `execute_indigo_python` and
+  `execute_plugin_menu_item` classified ADMIN.
 
 ### 2.3.2 (2026-05-12)
 - **`ServerApiVersion` lowered 3.6 → 3.4.** Plugin uses `requirements.txt`

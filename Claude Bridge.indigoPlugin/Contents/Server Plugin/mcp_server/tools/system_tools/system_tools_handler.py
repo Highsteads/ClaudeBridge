@@ -7,6 +7,9 @@ Provides Mac Mini system health reporting and Indigo housekeeping tools:
   - find_orphaned_scripts  : scripts referencing device/variable IDs that no longer exist
   - find_orphaned_plugin_data : Preferences/Plugins dirs with no matching installed plugin
   - find_large_files       : files over a size threshold in a given path
+  - get_reflector_url      : Indigo Reflector remote URL (if configured)
+  - create_device_folder   : create a new device folder
+  - create_variable_folder : create a new variable folder
 
 All filesystem paths are derived from indigo.server.getInstallFolderPath() at
 call time — no hardcoded paths.
@@ -412,3 +415,94 @@ class SystemToolsHandler(BaseToolHandler):
             return result
         except Exception as exc:
             return self.handle_exception(exc, "find_large_files")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # get_reflector_url
+    # ────────────────────────────────────────────────────────────────────────
+
+    def get_reflector_url(self) -> Dict[str, Any]:
+        """Return the configured Indigo Reflector URL, if any."""
+        self.log_incoming_request("get_reflector_url", {})
+        try:
+            url = ""
+            try:
+                url = indigo.server.getReflectorURL() or ""
+            except AttributeError:
+                return {"success": False,
+                        "error": "indigo.server.getReflectorURL() unavailable on this Indigo version"}
+            result = {
+                "success":   True,
+                "configured": bool(url),
+                "url":       url,
+            }
+            self.log_tool_outcome("get_reflector_url", True,
+                                  "configured" if url else "not configured")
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "get_reflector_url")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # create_device_folder / create_variable_folder
+    # ────────────────────────────────────────────────────────────────────────
+
+    def create_device_folder(self, name: str) -> Dict[str, Any]:
+        """Create a new device folder. Idempotent — returns existing folder if name matches."""
+        self.log_incoming_request("create_device_folder", {"name": name})
+        try:
+            name = (name or "").strip()
+            if not name:
+                return {"success": False, "error": "Folder name is required"}
+
+            for existing in indigo.devices.folders:
+                if existing.name.lower() == name.lower():
+                    return {
+                        "success":   True,
+                        "created":   False,
+                        "folder_id": existing.id,
+                        "name":      existing.name,
+                        "message":   f"Device folder '{existing.name}' already exists",
+                    }
+
+            folder = indigo.devices.folder.create(name)
+            result = {
+                "success":   True,
+                "created":   True,
+                "folder_id": folder.id,
+                "name":      folder.name,
+                "message":   f"Device folder '{folder.name}' created (ID {folder.id})",
+            }
+            self.log_tool_outcome("create_device_folder", True, result["message"])
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "create_device_folder")
+
+    def create_variable_folder(self, name: str) -> Dict[str, Any]:
+        """Create a new variable folder. Idempotent — returns existing folder if name matches."""
+        self.log_incoming_request("create_variable_folder", {"name": name})
+        try:
+            name = (name or "").strip()
+            if not name:
+                return {"success": False, "error": "Folder name is required"}
+
+            for existing in indigo.variables.folders:
+                if existing.name.lower() == name.lower():
+                    return {
+                        "success":   True,
+                        "created":   False,
+                        "folder_id": existing.id,
+                        "name":      existing.name,
+                        "message":   f"Variable folder '{existing.name}' already exists",
+                    }
+
+            folder = indigo.variables.folder.create(name)
+            result = {
+                "success":   True,
+                "created":   True,
+                "folder_id": folder.id,
+                "name":      folder.name,
+                "message":   f"Variable folder '{folder.name}' created (ID {folder.id})",
+            }
+            self.log_tool_outcome("create_variable_folder", True, result["message"])
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "create_variable_folder")

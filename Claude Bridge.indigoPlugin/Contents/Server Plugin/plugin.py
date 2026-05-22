@@ -4,8 +4,25 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
-# Date:        18-05-2026
-# Version:     2.3.3
+# Date:        22-05-2026
+# Version:     2.4.0
+#
+# v2.4.0 (22-05-2026):
+# - New tools (6):
+#   * fire_trigger              — execute an Indigo trigger directly by ID/name
+#                                 (indigo.trigger.execute). Complements fire_indigo_event
+#                                 which goes via the claudeEvent plugin-event channel.
+#   * get_reflector_url         — return Indigo Reflector remote-access URL
+#   * create_device_folder      — idempotent device folder creation
+#   * create_variable_folder    — idempotent variable folder creation
+#   * execute_indigo_python     — run arbitrary Python in this plugin's context
+#                                 via in-process exec() (same pattern as run_script
+#                                 but for ad-hoc code strings). ADMIN scope.
+#   * execute_plugin_menu_item  — click a plugin's menu item via AppleScript GUI
+#                                 scripting (the only known way to drive a third-
+#                                 party plugin's <MenuItem> from outside). ADMIN scope.
+# - scope_manager: fire_trigger / create_*_folder classified as WRITE;
+#   execute_indigo_python / execute_plugin_menu_item classified as ADMIN.
 #
 # v2.3.3 (18-05-2026):
 # - run_script now pre-injects `indigo` into the script's globals before exec,

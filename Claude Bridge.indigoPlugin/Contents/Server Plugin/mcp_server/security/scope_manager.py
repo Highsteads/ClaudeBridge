@@ -49,7 +49,9 @@ WRITE_TOOLS: Set[str] = {
     # Triggers / schedules / plugin lifecycle
     "enable_schedule", "disable_schedule",
     "enable_trigger",  "disable_trigger",
-    "fire_indigo_event",
+    "fire_indigo_event", "fire_trigger",
+    # Folder creation
+    "create_device_folder", "create_variable_folder",
     # Memory / events
     "remember", "forget", "clear_events",
     "subscribe", "unsubscribe",
@@ -61,6 +63,8 @@ WRITE_TOOLS: Set[str] = {
 ADMIN_TOOLS: Set[str] = {
     "write_script", "create_script", "delete_script",
     "restart_plugin",
+    # Arbitrary code execution and GUI scripting
+    "execute_indigo_python", "execute_plugin_menu_item",
 }
 
 # Anything not explicitly listed defaults to READ.

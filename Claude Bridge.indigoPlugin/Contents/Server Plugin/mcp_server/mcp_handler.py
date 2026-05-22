@@ -34,6 +34,7 @@ from .tools.script_tools import ScriptToolsHandler
 from .tools.events import EventsHandler
 from .tools.home_status import HomeStatusHandler
 from .tools.energy_tools import EnergyToolsHandler
+from .tools.scripting_shell import ScriptingShellHandler
 
 
 class MCPHandler:
@@ -201,7 +202,11 @@ class MCPHandler:
             data_provider=self.data_provider,
             logger=self.logger
         )
-    
+        self.scripting_shell_handler = ScriptingShellHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+
     def stop(self):
         """Stop the MCP handler and cleanup resources."""
         if self.vector_store_manager:
@@ -2238,6 +2243,132 @@ class MCPHandler:
             "function": self._tool_fire_indigo_event
         }
 
+        # ── Trigger firing by ID/name ─────────────────────────────────────
+        self._tools["fire_trigger"] = {
+            "description": (
+                "Execute a single Indigo trigger directly by ID or name "
+                "(indigo.trigger.execute). Use this when you want to invoke "
+                "a specific trigger's actions without going through the event "
+                "system used by fire_indigo_event."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": "Trigger ID (number) or trigger name (string)"
+                    }
+                },
+                "required": ["trigger_id"]
+            },
+            "function": self._tool_fire_trigger
+        }
+
+        # ── Reflector URL ─────────────────────────────────────────────────
+        self._tools["get_reflector_url"] = {
+            "description": (
+                "Return the Indigo Reflector remote-access URL if configured "
+                "on this server (indigo.server.getReflectorURL)."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_get_reflector_url
+        }
+
+        # ── Folder creation ───────────────────────────────────────────────
+        self._tools["create_device_folder"] = {
+            "description": (
+                "Create a new device folder. Returns the existing folder if one "
+                "with the same name already exists (idempotent)."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Folder name to create"
+                    }
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_create_device_folder
+        }
+
+        self._tools["create_variable_folder"] = {
+            "description": (
+                "Create a new variable folder. Returns the existing folder if one "
+                "with the same name already exists (idempotent)."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Folder name to create"
+                    }
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_create_variable_folder
+        }
+
+        # ── Arbitrary Indigo-context Python ───────────────────────────────
+        self._tools["execute_indigo_python"] = {
+            "description": (
+                "Run arbitrary Python in this plugin's Indigo context. Has full "
+                "access to the `indigo` module (devices, variables, triggers, "
+                "thermostat.setHeatSetpoint, etc). mode='exec' runs a statement "
+                "block and returns captured stdout/stderr. mode='eval' evaluates a "
+                "single expression and returns its repr in 'value'. ADMIN scope — "
+                "treat as arbitrary code execution on the Indigo server."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python source. For 'exec' use print() to surface output."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["exec", "eval"],
+                        "description": "exec (default) for statements, eval for a single expression"
+                    }
+                },
+                "required": ["code"]
+            },
+            "function": self._tool_execute_indigo_python
+        }
+
+        # ── Plugin menu item via AppleScript ──────────────────────────────
+        self._tools["execute_plugin_menu_item"] = {
+            "description": (
+                "Click a plugin's menu item under the Indigo client's Plugins menu "
+                "(e.g. plugin_name='Zigbee2MQTT Bridge', menu_item_name='Refresh "
+                "Device Capabilities'). Uses AppleScript GUI scripting — requires "
+                "the Indigo GUI client to be running and System Events permission "
+                "granted. ADMIN scope."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {
+                        "type": "string",
+                        "description": "The name shown under the Plugins menu"
+                    },
+                    "menu_item_name": {
+                        "type": "string",
+                        "description": "The menu item label to click"
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "osascript timeout in seconds (default 15)"
+                    }
+                },
+                "required": ["plugin_name", "menu_item_name"]
+            },
+            "function": self._tool_execute_plugin_menu_item
+        }
+
     # ── Plugin Event dispatch ──────────────────────────────────────────────
 
     def _tool_fire_indigo_event(self, name: str, data: dict = None, source: str = "claude") -> str:
@@ -2251,6 +2382,59 @@ class MCPHandler:
             return safe_json_dumps(result)
         except Exception as e:
             self.logger.error(f"fire_indigo_event error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_fire_trigger(self, trigger_id) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.fire_trigger(trigger_id))
+        except Exception as e:
+            self.logger.error(f"fire_trigger error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_get_reflector_url(self) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.get_reflector_url())
+        except Exception as e:
+            self.logger.error(f"get_reflector_url error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_create_device_folder(self, name: str) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.create_device_folder(name))
+        except Exception as e:
+            self.logger.error(f"create_device_folder error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_create_variable_folder(self, name: str) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.create_variable_folder(name))
+        except Exception as e:
+            self.logger.error(f"create_variable_folder error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_execute_indigo_python(self, code: str, mode: str = "exec") -> str:
+        try:
+            return safe_json_dumps(
+                self.scripting_shell_handler.execute_indigo_python(code, mode)
+            )
+        except Exception as e:
+            self.logger.error(f"execute_indigo_python error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_execute_plugin_menu_item(
+        self,
+        plugin_name: str,
+        menu_item_name: str,
+        timeout: int = 15,
+    ) -> str:
+        try:
+            return safe_json_dumps(
+                self.scripting_shell_handler.execute_plugin_menu_item(
+                    plugin_name, menu_item_name, timeout
+                )
+            )
+        except Exception as e:
+            self.logger.error(f"execute_plugin_menu_item error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     # ── System / housekeeping dispatch methods ─────────────────────────────

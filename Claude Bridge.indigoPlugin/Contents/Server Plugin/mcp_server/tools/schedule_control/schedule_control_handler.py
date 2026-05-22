@@ -8,6 +8,7 @@ Tools:
   - list_triggers      : list all Indigo triggers with enabled state and type
   - enable_trigger     : enable a trigger by ID or name
   - disable_trigger    : disable a trigger by ID or name
+  - fire_trigger       : execute a trigger directly by ID or name (indigo.trigger.execute)
 """
 
 import logging
@@ -211,3 +212,24 @@ class ScheduleControlHandler(BaseToolHandler):
             return result
         except Exception as exc:
             return self.handle_exception(exc, "disable_trigger")
+
+    def fire_trigger(self, trigger_id: Union[int, str]) -> Dict[str, Any]:
+        """Fire a trigger by ID or name via indigo.trigger.execute()."""
+        self.log_incoming_request("fire_trigger", {"trigger_id": trigger_id})
+        try:
+            t = _resolve_trigger(trigger_id)
+            if t is None:
+                return {"success": False,
+                        "error": f"Trigger '{trigger_id}' not found"}
+            if not t.enabled:
+                return {"success": False,
+                        "error": f"Trigger '{t.name}' (ID {t.id}) is disabled"}
+            indigo.trigger.execute(t)
+            result = {"success": True,
+                      "message": f"Trigger '{t.name}' (ID {t.id}) fired",
+                      "trigger_id":   t.id,
+                      "trigger_name": t.name}
+            self.log_tool_outcome("fire_trigger", True, result["message"])
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "fire_trigger")

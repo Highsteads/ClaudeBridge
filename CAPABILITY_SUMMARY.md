@@ -234,16 +234,18 @@ Reads SigenEnergyManager's daily log files for richer energy analysis than the l
 
 ---
 
-### 14. Triggers & schedules (7 tools)
+### 14. Triggers & schedules (8 tools)
 
 - `list_triggers` / `list_schedules`
 - `enable_trigger` / `disable_trigger` / `enable_schedule` / `disable_schedule`
 - `fire_indigo_event` — fire a custom "Claude Bridge → Claude Event" trigger with a JSON payload that Indigo Triggers can read via `%%eventData:name%%` etc.
+- `fire_trigger` — execute an Indigo trigger directly by ID or name (`indigo.trigger.execute`). Use when you want to invoke a specific trigger's actions without the eventData payload channel.
 
 **Example prompts:**
 > "Disable the Morning_Lights trigger for the rest of today"
 > "Are any of my schedules disabled that shouldn't be?"
 > "Fire a 'leak_detected' event with location=kitchen"
+> "Fire trigger 'Sunset Routine' now"
 
 ---
 
@@ -259,7 +261,31 @@ Reads SigenEnergyManager's daily log files for richer energy analysis than the l
 
 ---
 
-### 16. Plugin Development & Testing Workflow
+### 16. Folders & server info (3 tools)
+
+- `create_device_folder` / `create_variable_folder` — idempotent folder creation; returns the existing folder if one with the same name already exists.
+- `get_reflector_url` — returns the Indigo Reflector remote-access URL if configured (else reports it's not configured).
+
+**Example prompts:**
+> "Make a new variable folder called Forecasting"
+> "What's our reflector URL?"
+
+---
+
+### 17. Scripting shell (2 tools — ADMIN scope)
+
+These two tools require the token to hold the `admin` scope (default tokens do; restricted tokens won't). Treat them as full code execution on the Indigo server.
+
+- `execute_indigo_python` — run arbitrary Python in this plugin's Indigo context via in-process `exec()` (same pattern as `run_script` but for ad-hoc code strings). `mode='exec'` (default) returns captured stdout/stderr; `mode='eval'` evaluates a single expression and returns its repr in `value`. Useful when an action needs a one-shot Indigo API call that isn't covered by a dedicated tool (e.g. probing a brand-new API method, reading an obscure device property, calling `indigo.thermostat.setHeatSetpoint` from a script outside the Indigo context).
+- `execute_plugin_menu_item` — click a plugin's menu item under the Indigo client's **Plugins** menu via AppleScript GUI scripting (e.g. `plugin_name="Zigbee2MQTT Bridge"`, `menu_item_name="Refresh Device Capabilities"`). The only known way to invoke a third-party plugin's `<MenuItem>` callback from outside, because `indigo.server.getPlugin()` exposes no menu API. Requires the Indigo GUI client to be running on the host and System Events permission granted.
+
+**Example prompts:**
+> "Use execute_indigo_python to print the displayStateId of every Z2M button device"
+> "Click the 'Refresh Device Capabilities' menu item under Zigbee2MQTT Bridge"
+
+---
+
+### 18. Plugin Development & Testing Workflow
 
 ClaudeBridge makes Claude a hands-on partner for developing, debugging, and testing Indigo plugins — because it can see your live system at every step.
 
