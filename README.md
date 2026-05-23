@@ -19,14 +19,14 @@ Claude Bridge runs inside Indigo as a small **MCP server** (Model Context
 Protocol — an open standard from Anthropic for letting AI agents call
 external tools). [Claude Code](https://claude.ai/download), Anthropic's
 terminal-based coding agent, connects to that server via a tiny stdio
-proxy and gains access to **80 tools** that read and write your Indigo
+proxy and gains access to **86 tools** that read and write your Indigo
 system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
 │  Claude Code        │  stdio  │  indigo_mcp_proxy.py │  HTTPS  │  Indigo IWS  │
 │  (terminal)         │ ───────►│  (local Python)      │ ───────►│  + plugin    │
-│  asks for tool      │         │  adds Bearer token,  │         │  exposes 80  │
+│  asks for tool      │         │  adds Bearer token,  │         │  exposes 86  │
 │  Claude reasons     │         │  protocol bridging   │         │  MCP tools   │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
@@ -165,7 +165,7 @@ minutes; Claude does it in a couple of round-trips.
 
 ## Features
 
-- **80 MCP tools** — full read/write access to devices, variables, action groups, triggers, schedules, plugins, event log, scripts, memory, events, audit & health, heating, energy, notifications, and home intelligence
+- **86 MCP tools** — full read/write access to devices, variables, action groups, triggers, schedules, plugins, event log, scripts, memory, events, audit & health, heating, energy, notifications, folders, and home intelligence (plus admin-scope scripting shell)
 - **`device_control` — single-call search + action** — find and control a device by name in one round trip (~1s)
 - **Natural language entity search** — find devices by description ("conservatory lamp", "bedroom sensor")
 - **Fast slim search** — returns lightweight results by default; use `detail="full"` only when deep config is needed
@@ -209,7 +209,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 80 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 86 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first; the
@@ -290,7 +290,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 80 tools available.
+The `indigo-mcp` tools will appear on next session start. You should see 86 tools available.
 
 </details>
 
@@ -343,7 +343,7 @@ Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridg
 
 ## Available Tools
 
-**87 tools in 15 categories.** Counts verified against the plugin's tool
+**86 tools in 16 categories.** Counts verified against the plugin's tool
 registration at `mcp_server/mcp_handler.py`.
 
 ### Device queries & search (6)
@@ -554,7 +554,7 @@ Claude Bridge.indigoPlugin/
 │           │   └── vector_store/           # Text search store
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
-│           └── tools/                      # 22 MCP tool handlers
+│           └── tools/                      # 17 tool handler modules (86 tools)
 └── README.md
 
 indigo_mcp_proxy.py                         # Claude Code stdio proxy script

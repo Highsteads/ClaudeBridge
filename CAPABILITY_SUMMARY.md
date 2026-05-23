@@ -1,9 +1,9 @@
 # ClaudeBridge — Full Capability Summary
-*For anyone evaluating whether to download and install ClaudeBridge v2.3.1*
+*For anyone evaluating whether to download and install ClaudeBridge v2.4.0*
 
 ClaudeBridge connects **Claude Code** (Anthropic's AI coding agent) directly to your running **Indigo home automation server** via the Model Context Protocol (MCP). Instead of asking Claude to write scripts blindly, Claude can read your actual devices, check live states, query history, write and test scripts, and reason about your real home — all from a single conversation.
 
-**Current tool count: 80 tools across 13 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost.
+**Current tool count: 86 tools across 16 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost.
 
 ---
 
@@ -440,7 +440,7 @@ Script reads, writes, and backups are entirely local — no Anthropic round-trip
 | Energy intelligence | 4 | Live status + SigenEnergyManager daily logs |
 | Variable management | 5 | Full CRUD, folder support |
 | Action groups | 3 | List, get, execute |
-| Triggers & schedules | 7 | List, enable/disable, plus `fire_indigo_event` |
+| Triggers & schedules | 8 | List, enable/disable, plus `fire_indigo_event` + `fire_trigger` |
 | Plugin management | 4 | List, get, status, restart |
 | Scripts | 8 | Read/write/create/delete/run/scaffold/list/backups |
 | Events & subscriptions | 6 | Event log + real-time device/variable change feed |
@@ -448,7 +448,9 @@ Script reads, writes, and backups are entirely local — no Anthropic round-trip
 | Audit, health, diagnostics | 12 | Wide finder set + dependency map + conflict scan |
 | Notifications & logging | 3 | Email, Pushover, write to event log |
 | Reporting & analysis | 2 | `home_status_report` + `analyze_historical_data` |
-| **Total** | **80** | |
+| Folders & server info | 3 | Idempotent folder creation + Reflector URL |
+| Scripting shell (ADMIN scope) | 2 | `execute_indigo_python` + `execute_plugin_menu_item` |
+| **Total** | **86** | |
 
 **Requirements:** Indigo 2025.1+, macOS, Claude Code (requires Claude.ai Pro/Max or Anthropic API key)
 
