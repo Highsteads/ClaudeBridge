@@ -19,8 +19,12 @@ logger = logging.getLogger("Plugin")
 DEFAULT_SYSTEM_PROMPT = (
     "You are an automation assistant supporting a home automation system called Indigo."
 )
-DEFAULT_MODEL              = os.environ.get("LARGE_MODEL", "claude-sonnet-4-6")
-SMALL_MODEL                = os.environ.get("SMALL_MODEL", "claude-haiku-4-5-20251001")
+# Module-level constants kept as fallbacks for backward compatibility.
+# The selected model is now resolved live in `select_optimal_model` via
+# `runtime_config.get(...)` so a PluginConfig change does not require a
+# plugin reload to take effect.  See mcp_server/runtime_config.py.
+DEFAULT_MODEL              = "claude-sonnet-4-6"
+SMALL_MODEL                = "claude-haiku-4-5-20251001"
 
 # Claude context window limits (input tokens)
 MODEL_TOKEN_LIMITS = {
@@ -64,8 +68,9 @@ def select_optimal_model(
     small_model:   Optional[str] = None,
 ) -> str:
     """Select optimal Claude model based on estimated token count."""
-    default_model = default_model or DEFAULT_MODEL
-    small_model   = small_model   or SMALL_MODEL
+    from mcp_server import runtime_config
+    default_model = default_model or runtime_config.get("large_model") or DEFAULT_MODEL
+    small_model   = small_model   or runtime_config.get("small_model") or SMALL_MODEL
 
     if isinstance(messages, str):
         token_count = _count_tokens(messages)
@@ -92,9 +97,13 @@ def select_optimal_model(
 def _get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
-        key = os.getenv("ANTHROPIC_API_KEY")
+        from mcp_server import runtime_config
+        key = runtime_config.get("anthropic_api_key") or ""
         if not key:
-            raise RuntimeError("ANTHROPIC_API_KEY must be set before calling Claude")
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY must be configured (set in IndigoSecrets.py "
+                "or via Plugins -> Claude Bridge -> Configure) before calling Claude"
+            )
         _client = anthropic.Anthropic(api_key=key)
         logger.debug("Claude (Anthropic) client initialised")
     return _client

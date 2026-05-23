@@ -26,26 +26,31 @@ class InfluxDBClient:
     
     def is_enabled(self) -> bool:
         """
-        Check if InfluxDB is enabled via environment variables.
-        
+        Check if InfluxDB is enabled via the runtime config store.
+
+        (Moved off os.environ in v2.4.1 — see mcp_server/runtime_config.py
+        for the secrets-policy reasoning.)
+
         Returns:
             True if InfluxDB is enabled and configured
         """
-        return os.environ.get("INFLUXDB_ENABLED", "false").lower() == "true"
-    
+        from mcp_server import runtime_config
+        return runtime_config.is_influx_enabled()
+
     def get_connection_info(self) -> Dict[str, str]:
         """
-        Get InfluxDB connection information from environment variables.
-        
+        Get InfluxDB connection information from the runtime config store.
+
         Returns:
             Dictionary with connection parameters
         """
+        from mcp_server import runtime_config
         return {
-            "host": os.environ.get("INFLUXDB_HOST", "localhost"),
-            "port": int(os.environ.get("INFLUXDB_PORT", "8086")),
-            "username": os.environ.get("INFLUXDB_USERNAME", ""),
-            "password": os.environ.get("INFLUXDB_PASSWORD", ""),
-            "database": os.environ.get("INFLUXDB_DATABASE", "indigo")
+            "host":     runtime_config.get("influxdb_host"),
+            "port":     int(runtime_config.get("influxdb_port")),
+            "username": runtime_config.get("influxdb_username"),
+            "password": runtime_config.get("influxdb_password"),
+            "database": runtime_config.get("influxdb_database"),
         }
     
     @contextmanager

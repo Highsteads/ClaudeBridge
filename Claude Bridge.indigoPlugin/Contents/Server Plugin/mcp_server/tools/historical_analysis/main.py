@@ -105,7 +105,8 @@ class HistoricalAnalysisHandler(BaseToolHandler):
                 }
             
             # Check if InfluxDB is available
-            if os.environ.get("INFLUXDB_ENABLED", "false").lower() != "true":
+            from mcp_server import runtime_config
+            if not runtime_config.is_influx_enabled():
                 self.warning_log("InfluxDB is not enabled - historical analysis not available")
                 return {
                     "success": False,
@@ -563,7 +564,8 @@ class HistoricalAnalysisHandler(BaseToolHandler):
             True if InfluxDB is enabled and configured
         """
         try:
-            if os.environ.get("INFLUXDB_ENABLED", "false").lower() != "true":
+            from mcp_server import runtime_config
+            if not runtime_config.is_influx_enabled():
                 return False
             
             client = InfluxDBClient(logger=self.logger)

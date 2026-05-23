@@ -96,10 +96,12 @@ class MCPHandler:
         # Per-call ProgressEmitter — set in _handle_tools_call, read by tools.
         self._current_emitter: Optional[ProgressEmitter] = None
 
-        # Get database path from environment variable
-        db_path = os.environ.get("DB_FILE")
+        # Get database path from the in-process runtime config (moved off
+        # os.environ in v2.4.1 — see mcp_server/runtime_config.py).
+        from mcp_server import runtime_config
+        db_path = runtime_config.get("db_file")
         if not db_path:
-            raise ValueError("DB_FILE environment variable must be set")
+            raise ValueError("db_file must be configured via runtime_config")
 
         # Initialize vector store manager
         self.vector_store_manager = VectorStoreManager(

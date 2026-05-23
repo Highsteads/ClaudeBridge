@@ -5,7 +5,7 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
 # Date:        22-05-2026
-# Version:     2.4.0
+# Version:     2.4.1
 #
 # v2.4.0 (22-05-2026):
 # - New tools (6):
@@ -118,6 +118,7 @@ INFLUXDB_PASSWORD         = _get_secret("INFLUXDB_PASSWORD")
 INFLUXDB_DATABASE         = _get_secret("INFLUXDB_DATABASE")
 
 # Import our modules
+from mcp_server import runtime_config
 from mcp_server.adapters.indigo_data_provider import IndigoDataProvider
 from mcp_server.common.openai_client.langsmith_config import get_langsmith_config
 from mcp_server.mcp_handler import MCPHandler
@@ -430,32 +431,26 @@ class Plugin(indigo.PluginBase):
         # Log CPU architecture information
         self.check_cpu_compatibility()
 
-        # Set Anthropic API key in environment for the modules to use
-        os.environ["ANTHROPIC_API_KEY"] = self.anthropic_api_key
-
-        # Set model environment variables
-        os.environ["LARGE_MODEL"] = self.large_model
-        os.environ["SMALL_MODEL"] = self.small_model
-
-        # Set InfluxDB environment variables if enabled
-        if self.enable_influxdb:
-            os.environ["INFLUXDB_HOST"] = self.influx_url.replace(
-                "http://", ""
-            ).replace("https://", "")
-            os.environ["INFLUXDB_PORT"] = str(self.influx_port)
-            os.environ["INFLUXDB_USERNAME"] = self.influx_login
-            os.environ["INFLUXDB_PASSWORD"] = self.influx_password
-            os.environ["INFLUXDB_DATABASE"] = self.influx_database
-            os.environ["INFLUXDB_ENABLED"] = "true"
-        else:
-            os.environ["INFLUXDB_ENABLED"] = "false"
-
-        # Set DB_FILE environment variable for vector store
+        # Publish runtime config to the in-process store so downstream MCP
+        # modules can read credentials without us having to write them into
+        # os.environ (which would leak to every subprocess we spawn — see
+        # mcp_server/runtime_config.py for the full reasoning).
         db_path = os.path.join(
             indigo.server.getInstallFolderPath(),
             "Preferences/Plugins/com.clives.indigoplugin.claudebridge/vector_db",
         )
-        os.environ["DB_FILE"] = db_path
+        runtime_config.configure(
+            anthropic_api_key = self.anthropic_api_key,
+            large_model       = self.large_model,
+            small_model       = self.small_model,
+            influxdb_enabled  = bool(self.enable_influxdb),
+            influxdb_host     = self.influx_url.replace("http://", "").replace("https://", ""),
+            influxdb_port     = int(self.influx_port) if str(self.influx_port).isdigit() else 8086,
+            influxdb_username = self.influx_login,
+            influxdb_password = self.influx_password,
+            influxdb_database = self.influx_database,
+            db_file           = db_path,
+        )
 
         # Initialize data provider
         try:
@@ -1371,30 +1366,24 @@ class Plugin(indigo.PluginBase):
                 self.logger.warning(f"\t⚠️  Could not apply Phase 2 settings: {_e}")
 
 
-            # Set environment variables (same as startup)
-            os.environ["ANTHROPIC_API_KEY"] = self.anthropic_api_key
-            os.environ["LARGE_MODEL"] = self.large_model
-            os.environ["SMALL_MODEL"] = self.small_model
-
-            # Set InfluxDB environment variables
-            if self.enable_influxdb:
-                os.environ["INFLUXDB_HOST"] = self.influx_url.replace(
-                    "http://", ""
-                ).replace("https://", "")
-                os.environ["INFLUXDB_PORT"] = str(self.influx_port)
-                os.environ["INFLUXDB_USERNAME"] = self.influx_login
-                os.environ["INFLUXDB_PASSWORD"] = self.influx_password
-                os.environ["INFLUXDB_DATABASE"] = self.influx_database
-                os.environ["INFLUXDB_ENABLED"] = "true"
-            else:
-                os.environ["INFLUXDB_ENABLED"] = "false"
-
-            # Set DB_FILE environment variable for vector store (same as startup)
+            # Republish runtime config (same as startup — see runtime_config.py
+            # for why we avoid os.environ for credentials).
             db_path = os.path.join(
                 indigo.server.getInstallFolderPath(),
                 "Preferences/Plugins/com.clives.indigoplugin.claudebridge/vector_db",
             )
-            os.environ["DB_FILE"] = db_path
+            runtime_config.configure(
+                anthropic_api_key = self.anthropic_api_key,
+                large_model       = self.large_model,
+                small_model       = self.small_model,
+                influxdb_enabled  = bool(self.enable_influxdb),
+                influxdb_host     = self.influx_url.replace("http://", "").replace("https://", ""),
+                influxdb_port     = int(self.influx_port) if str(self.influx_port).isdigit() else 8086,
+                influxdb_username = self.influx_login,
+                influxdb_password = self.influx_password,
+                influxdb_database = self.influx_database,
+                db_file           = db_path,
+            )
 
             # Test connections with new configuration
             self.logger.info("Testing connections with new configuration...")
