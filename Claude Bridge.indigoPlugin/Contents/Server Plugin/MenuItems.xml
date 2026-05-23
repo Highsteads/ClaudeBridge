@@ -37,6 +37,13 @@
 
     <MenuItem id="sep3" isSeparator="true"/>
 
+    <MenuItem id="toggleTimestamps">
+        <Name>Toggle Timestamps in Log (on/off)</Name>
+        <CallbackMethod>menuToggleTimestamps</CallbackMethod>
+    </MenuItem>
+
+    <MenuItem id="sep4" isSeparator="true"/>
+
     <MenuItem id="showPluginInfo">
         <Name>Show Plugin Info</Name>
         <CallbackMethod>showPluginInfo</CallbackMethod>

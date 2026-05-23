@@ -4,8 +4,12 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
-# Date:        22-05-2026
-# Version:     2.4.1
+# Date:        23-05-2026
+# Version:     2.4.2
+#
+# v2.4.2 (23-05-2026): Millisecond timestamp [HH:MM:SS.mmm] prefix on every
+# log line via plugin_utils.install_timestamp_filter() — matches Device
+# Activity Monitor convention. New "Toggle Timestamps in Log" menu item.
 #
 # v2.4.0 (22-05-2026):
 # - New tools (6):
@@ -98,7 +102,8 @@ _pu = (_load_module_by_path("clives_plugin_utils",
                             "/Library/Application Support/Perceptive Automation/plugin_utils.py")
        or _load_module_by_path("clives_plugin_utils",
                                _os.path.join(_os.getcwd(), "plugin_utils.py")))
-log_startup_banner = getattr(_pu, "log_startup_banner", None) if _pu else None
+log_startup_banner      = getattr(_pu, "log_startup_banner",      None) if _pu else None
+install_timestamp_filter = getattr(_pu, "install_timestamp_filter", None) if _pu else None
 
 # Master IndigoSecrets.py.  Any KEY not present falls back to default ("").
 # Resolution order at runtime is: IndigoSecrets.py first, PluginConfig fallback.
@@ -148,6 +153,12 @@ class Plugin(indigo.PluginBase):
         super().__init__(
             plugin_id, plugin_display_name, plugin_version, plugin_prefs, **kwargs
         )
+
+        self.timestamp_enabled = bool(plugin_prefs.get("timestampEnabled", True))
+        if install_timestamp_filter:
+            self._ts_filter = install_timestamp_filter(self, enabled=self.timestamp_enabled)
+        else:
+            self._ts_filter = None
 
         if log_startup_banner:
             log_startup_banner(plugin_id, plugin_display_name, plugin_version)
@@ -1424,6 +1435,15 @@ class Plugin(indigo.PluginBase):
             extras.append(("Anthropic Key:", "configured" if self.anthropic_api_key else "MISSING"))
             extras.append(("InfluxDB:", "enabled" if self.enable_influxdb else "disabled"))
             extras.append(("Access Mode:", str(self.access_mode)))
+            extras.append(("Timestamps in Log:", "ON" if self.timestamp_enabled else "OFF"))
             log_startup_banner(self.pluginId, self.pluginDisplayName, self.pluginVersion, extras=extras)
         else:
             indigo.server.log(f"{self.pluginDisplayName} v{self.pluginVersion}")
+
+    def menuToggleTimestamps(self):
+        self.timestamp_enabled = not self.timestamp_enabled
+        self.pluginPrefs["timestampEnabled"] = self.timestamp_enabled
+        if self._ts_filter:
+            self._ts_filter.enabled = self.timestamp_enabled
+        state = "ON" if self.timestamp_enabled else "OFF"
+        indigo.server.log(f"[{self.pluginDisplayName}] Timestamps in Log -> {state}")

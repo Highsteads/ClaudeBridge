@@ -452,7 +452,7 @@ Script reads, writes, and backups are entirely local — no Anthropic round-trip
 | Scripting shell (ADMIN scope) | 2 | `execute_indigo_python` + `execute_plugin_menu_item` |
 | **Total** | **86** | |
 
-**Requirements:** Indigo 2025.1+, macOS, Claude Code (requires Claude.ai Pro/Max or Anthropic API key)
+**Requirements:** Indigo 2023.2+ (Python 3.11+), macOS, Claude Code (requires Claude.ai Pro/Max or Anthropic API key). Developed and tested on Indigo 2025.2 / Python 3.13.
 
 **Cost:** Included in Claude.ai Pro ($20/month) or under $1/month on API billing for typical home automation use
 

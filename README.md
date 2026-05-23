@@ -9,7 +9,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 *Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.4.1
+**Version:** 2.4.2
 
 ---
 
@@ -808,6 +808,21 @@ README.md
 
 ### 1.0.1
 - Initial release with OpenAI + Voyage AI embeddings
+
+---
+
+## Logging
+
+Every log line is prefixed with a millisecond timestamp `[HH:MM:SS.mmm]` so
+events can be correlated tightly with other CliveS plugins (Device Activity
+Monitor uses the same convention).
+
+To turn the prefix off (or back on) at any time:
+
+**Plugins → Claude Bridge → Toggle Timestamps in Log (on/off)**
+
+The setting is stored in `pluginPrefs` (`timestampEnabled`) and persists across
+restarts. Defaults to ON.
 
 ---
 

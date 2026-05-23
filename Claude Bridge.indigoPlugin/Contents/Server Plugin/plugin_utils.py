@@ -2,10 +2,15 @@
 # -*- coding: utf-8 -*-
 # Filename:    plugin_utils.py
 # Description: Shared utilities for all Indigo plugins (CliveS / Highsteads)
-#              Import via sys.path.insert using the same pattern as IndigoSecrets.py
-# Author:      CliveS & Claude Sonnet 4.6
-# Date:        10-05-2026
-# Version:     1.1
+#              Bundled inside every plugin at Contents/Server Plugin/.
+# Author:      CliveS & Claude Opus 4.7
+# Date:        23-05-2026
+# Version:     1.2
+#
+# v1.2 (23-05-2026): Added install_timestamp_filter() — a logging.Filter that
+# prepends [HH:MM:SS.mmm] to every self.logger record. Toggle at runtime via
+# the returned filter's .enabled flag. Matches the timestamp convention used
+# by Device Activity Monitor across all CliveS plugins.
 #
 # v1.1 (10-05-2026): Banner width reduced 110 -> 60 chars and label column
 # tightened 28 -> 20 chars.  Indigo prefixes every log line with the plugin
@@ -13,7 +18,9 @@
 # and wrapped to two lines per row.
 
 import indigo
+import logging
 import platform
+from datetime import datetime
 
 
 def log_startup_banner(plugin_id, display_name, version, extras=None):
@@ -27,26 +34,9 @@ def log_startup_banner(plugin_id, display_name, version, extras=None):
         extras          (list) Optional list of (label, value) tuples for plugin-specific
                                extra lines appended after the standard block.
                                e.g. [("Compatible Hardware:", "Ecowitt / Fine Offset")]
-
-    Usage in plugin __init__():
-        import sys as _sys
-        _sys.path.insert(0, "/Library/Application Support/Perceptive Automation")
-        try:
-            from plugin_utils import log_startup_banner
-        except ImportError:
-            log_startup_banner = None
-
-        # ... all other __init__ setup ...
-
-        if log_startup_banner:
-            log_startup_banner(pluginId, pluginDisplayName, pluginVersion)
-        else:
-            indigo.server.log(f"{pluginDisplayName} v{pluginVersion} starting")
     """
     title = f"Starting {display_name} Plugin"
     width = 60
-    # Centre the title within the bar; if title is longer than the bar (very
-    # long plugin names) just emit the title on its own line.
     if len(title) + 4 <= width:
         pad   = (width - len(title) - 2) // 2
         mid   = f"{'=' * pad} {title} {'=' * (width - pad - len(title) - 2)}"
@@ -72,3 +62,62 @@ def log_startup_banner(plugin_id, display_name, version, extras=None):
             indigo.server.log(f"  {label:<{label_w}} {value}")
 
     indigo.server.log(bar)
+
+
+class MillisecondTimestampFilter(logging.Filter):
+    """
+    Logging filter that prepends '[HH:MM:SS.mmm] ' to every log record's
+    message. Matches the timestamp convention used by Device Activity Monitor
+    so every CliveS plugin produces a consistent format in the event log.
+
+    The filter has a mutable .enabled flag so the plugin can toggle timestamps
+    on and off at runtime without removing/re-adding the filter.
+    """
+
+    def __init__(self, enabled=True):
+        super().__init__()
+        self.enabled = enabled
+
+    def filter(self, record):
+        if self.enabled:
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            try:
+                formatted = record.getMessage()
+            except Exception:
+                formatted = str(record.msg)
+            record.msg  = f"[{ts}] {formatted}"
+            record.args = None
+        return True
+
+
+def install_timestamp_filter(plugin, enabled=True):
+    """
+    Install a MillisecondTimestampFilter on the plugin's logger so every
+    self.logger.info/warning/error/debug call gets a '[HH:MM:SS.mmm] ' prefix.
+
+    Args:
+        plugin   The Indigo plugin instance (must expose .logger).
+        enabled  (bool) Initial on/off state — defaults to True.
+
+    Returns:
+        The installed filter. Flip filter.enabled to toggle at runtime.
+
+    Usage in plugin __init__() (after super().__init__):
+        self.timestamp_enabled = bool(pluginPrefs.get("timestampEnabled", True))
+        if install_timestamp_filter:
+            self._ts_filter = install_timestamp_filter(self, enabled=self.timestamp_enabled)
+        else:
+            self._ts_filter = None
+
+    Toggle from a menu callback:
+        def menuToggleTimestamps(self):
+            self.timestamp_enabled = not self.timestamp_enabled
+            self.pluginPrefs["timestampEnabled"] = self.timestamp_enabled
+            if self._ts_filter:
+                self._ts_filter.enabled = self.timestamp_enabled
+            state = "ON" if self.timestamp_enabled else "OFF"
+            indigo.server.log(f"[{self.pluginDisplayName}] Timestamps in Log -> {state}")
+    """
+    f = MillisecondTimestampFilter(enabled=enabled)
+    plugin.logger.addFilter(f)
+    return f
