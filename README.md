@@ -643,6 +643,67 @@ Indigo's web server uses HTTP Bearer token authentication. Claude Code's MCP cli
 → Bug fixes to existing tools: restart Indigo plugin only, no Claude Code restart needed.
 → New tools added: restart Claude Code once to pick up the updated tool list.
 
+**Plugin fails to start after a pip-install loop (`anthropic`/`influxdb`/etc. `__init__.py` missing)**
+→ Indigo's per-restart pip step occasionally leaves `Contents/Packages/` in a
+half-installed state: the package directory exists but the top-level
+`__init__.py` (and most other `.py` files) are gone, so every import fails with
+"cannot import name X from Y (unknown location)". `--force-reinstall` against
+the same target doesn't fix it — pip skips because the directory is "already
+present". The reliable recovery is to wipe and let Indigo re-install on the
+next start:
+```bash
+DST="/Library/Application Support/Perceptive Automation/Indigo 2025.2/Plugins/Claude Bridge.indigoPlugin"
+rm -rf "$DST/Contents/Packages"
+mkdir -p "$DST/Contents/Packages"
+# Then reload Claude Bridge via the Plugins menu (or the Indigo GUI), which
+# triggers a clean pip install from requirements.txt.
+```
+Confirmed 2026-05-23 — every package directory in Packages/ was missing its
+`__init__.py` after a routine restart, and clearing the whole tree restored a
+fully-working install. This pattern can affect any plugin that ships a
+`requirements.txt`; treat it as the standard recovery if a restart suddenly
+starts logging `module 'X' has no attribute 'Y'` for previously-working
+imports.
+
+---
+
+## Claude Code skills that complement this plugin
+
+Claude Bridge is the **runtime** bridge — it lets Claude Code talk to a live
+Indigo server (read state, control devices, query history). For the
+**design-time** side — Indigo SDK docs, plugin lifecycle reference, 16 example
+plugins, the IOM, and troubleshooting recipes — the companion is Simon's
+`indigo:dev` Claude Code skill, distributed via
+[simons-plugins/indigo-claude-plugin](https://github.com/simons-plugins/indigo-claude-plugin).
+
+Loaded with `/indigo:dev`, it provides ~40 KB of curated SDK references for
+Claude Code to draw on while writing new plugins or debugging existing ones,
+without ballooning the context window.
+
+How the two fit together:
+
+| Layer        | Tool                    | Provided by    | What it gives Claude Code |
+|--------------|-------------------------|----------------|---------------------------|
+| Design-time  | `indigo:dev` skill      | simons-plugins | SDK docs, example plugins, lifecycle reference, IOM, troubleshooting |
+| Runtime      | Claude Bridge MCP       | this plugin    | Live device control, variable / schedule access, event log, scripts, history |
+
+Typical workflow:
+
+1. **`/indigo:dev`** — Claude Code loads SDK context, scaffolds new plugin
+   code, looks up correct API signatures.
+2. **Claude Bridge** — Claude Code reads live device states via MCP to verify
+   the new code is doing what's expected, fires triggers / runs scripts /
+   updates variables to test integration end-to-end.
+
+Other related Claude Code skills published in the same repo
+(`indigo:api`, `indigo:control-pages`, `indigo:html-pages`, `indigo:update-plugins`,
+`indigo:debug-sqllogger`) follow the same pattern: design-time docs and
+guided workflows in the skill, runtime data and control via Claude Bridge.
+Neither side requires the other to function — Claude Bridge works fine
+without the skills installed, and the skills work fine without a live Indigo
+server — but together they give Claude Code a complete end-to-end loop for
+Indigo development.
+
 ---
 
 ## Project Structure
