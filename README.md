@@ -4,12 +4,12 @@
 
 Once installed, Claude can query device states, turn devices on and off, read and write variables, execute action groups, search your home's entity database, and query the Indigo event log — all in natural language, with no manual scripting required.
 
-**Author:** CliveS & Claude Sonnet 4.6
+**Author:** CliveS & Claude Opus 4.7
 **Platform:** Indigo 2023.2 or later, macOS (Python 3.11+ bundled with Indigo)
 
 *Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.3.2
+**Version:** 2.4.1
 
 ---
 
@@ -163,16 +163,128 @@ minutes; Claude does it in a couple of round-trips.
 
 ---
 
-## Features
+## What it does
 
-- **86 MCP tools** — full read/write access to devices, variables, action groups, triggers, schedules, plugins, event log, scripts, memory, events, audit & health, heating, energy, notifications, folders, and home intelligence (plus admin-scope scripting shell)
-- **`device_control` — single-call search + action** — find and control a device by name in one round trip (~1s)
-- **Natural language entity search** — find devices by description ("conservatory lamp", "bedroom sensor")
-- **Fast slim search** — returns lightweight results by default; use `detail="full"` only when deep config is needed
-- **Claude-powered** — uses Anthropic's Claude API directly; no OpenAI or third-party embedding services
-- **Local text search** — fast substring/fuzzy matching; no vector database required
-- **Session management** — persistent MCP sessions with per-session access control
-- **Secure** — Bearer token authentication on all requests; configurable access modes
+Claude Bridge exposes **86 MCP tools** across **16 categories** that give Claude
+Code full read/write access to a running Indigo server. The capability surface
+falls into the following groups — full per-tool listing is in
+[Available Tools](#available-tools) further down, and
+[`CAPABILITY_SUMMARY.md`](CAPABILITY_SUMMARY.md) covers each in detail with
+example prompts.
+
+### Devices
+- **List, search, and inspect** every Indigo device — by ID, exact / partial /
+  case-insensitive name, type (relay, dimmer, sensor, thermostat, speed
+  control, sprinkler, …), or current state.
+- **Natural-language entity search** across devices, variables, and action
+  groups (`search_entities`) — local substring/fuzzy matching, no vector DB
+  required. Slim results by default; pass `detail="full"` for the complete
+  property tree (Z-Wave config, plugin props, etc.).
+- **Control devices** — on / off / toggle, brightness (0–100), RGB and colour
+  temperature, fan speed, lock / unlock, force a hardware status refresh.
+- **Single-call shortcut** — `device_control` looks up a device by name and
+  performs the action in one round trip (~1 s instead of ~5 s).
+
+### Heating / HVAC
+- Per-zone snapshot, absolute setpoints, incremental bumps, and HVAC mode
+  switching (off / heat / cool / auto / program*) across any Indigo thermostat
+  device (Evohome, RAMSES, Z-Wave, etc.).
+
+### Energy intelligence
+- Live solar / battery / grid status, plus day-by-day analysis from
+  SigenEnergyManager's log files: list available days, daily summary
+  (imports, exports, PV, SOC trace), or compare days side-by-side.
+
+### Variables & action groups
+- Full CRUD on variables (list, get, update, create) and on folders.
+- List, inspect, and execute action groups.
+
+### Triggers & schedules
+- List, enable, and disable any trigger or schedule.
+- **`fire_indigo_event`** — fires the Claude Bridge plugin's custom
+  `claudeEvent` channel with a JSON payload that Indigo Triggers can read via
+  `%%eventData:name%%`.
+- **`fire_trigger`** — executes an Indigo trigger directly by ID or name via
+  `indigo.trigger.execute()`.
+
+### Plugins
+- Enumerate every installed plugin (version + enabled/running state), get
+  detail by ID, query status, and restart.
+
+### Scripts (auto-backed-up)
+- Read, write (with timestamped auto-backup, max 5 per script), create,
+  archive ("delete" moves to `_backups/_archived/`), and run scripts in
+  Indigo's Python context. Covers both the `Scripts` and `Python Scripts`
+  folders automatically.
+- **`scaffold_automation_script`** — generates a complete CliveS-convention
+  Python file with the standard file header, `log()` helper, and named
+  constants for every device/variable ID, all resolved live from Indigo.
+- **`run_script`** auto-injects `indigo` into the script's globals (matching
+  Indigo's GUI action runner) so ad-hoc scripts don't need their own
+  `import indigo`.
+
+### Event log & real-time push feed
+- Query the live Indigo event log with keyword, device, plugin, and time
+  filters — reads directly from the on-disk log files, so historical entries
+  beyond what the GUI shows are reachable.
+- **Push-model subscriptions** — register interest in all events / a specific
+  device / a specific variable. Plugin fills a ring buffer from
+  `deviceUpdated` and `variableUpdated` callbacks; Claude polls
+  `get_events` for new entries on demand (events for the same entity within
+  1 s are deduplicated).
+
+### Persistent memory
+- `remember` / `recall` / `recall_topics` / `forget` — JSON-on-disk cross-
+  session memory, topic-tagged, capped at 100 entries with per-topic
+  fairness (the oldest entry of the same topic is evicted first).
+
+### Audit, health, diagnostics
+- Whole-system audit (`audit_home`, `audit_variables`), security snapshot,
+  system-health summary.
+- Finders for devices in error, low battery, stale devices, orphaned plugin
+  data, orphaned scripts, oversized files, and naming/address/reference
+  conflicts.
+- **`dependency_map`** — given a device or variable, returns every entity
+  that references it (action groups, scripts, other plugins).
+
+### Reporting
+- **`home_status_report`** — prose-markdown narrative of the whole home,
+  configurable by section (energy, heating, security, devices, alerts,
+  automation).
+- **`analyze_historical_data`** — runs historical device/variable analysis,
+  using InfluxDB if the `INFLUXDB_*` keys are configured.
+
+### Notifications
+- `send_email` via Indigo's first SMTP device, `send_notification` via
+  Pushover (priority, sound, title, body), and `log_message` for writing a
+  line straight to the Indigo event log.
+
+### Folders & server info
+- Idempotent device-folder and variable-folder creation; `get_reflector_url`
+  for the Indigo Reflector remote-access URL.
+
+### Scripting shell — ADMIN scope
+- **`execute_indigo_python`** — runs arbitrary Python in this plugin's
+  Indigo context via in-process `exec()`. `mode='exec'` returns captured
+  stdout/stderr; `mode='eval'` returns the expression's repr. Used for
+  one-shot Indigo API calls not covered by a dedicated tool. Treat as
+  full code execution on the Indigo server.
+- **`execute_plugin_menu_item`** — clicks a plugin's `<MenuItem>` under the
+  Indigo client's Plugins menu via AppleScript GUI scripting; the only
+  known way to fire a third-party plugin's menu callback from outside.
+  Requires the Indigo GUI running plus System Events permission.
+
+### Architecture & security
+- **Claude-powered** — uses Anthropic's Claude API directly; no OpenAI,
+  Voyage AI, or other third-party embedding services.
+- **Local text search** — fast substring/fuzzy matching; no vector database
+  required.
+- **Session management** — persistent MCP sessions with per-session access
+  control.
+- **Secure** — Bearer token authentication on every IWS request;
+  configurable access modes (read-only / read-write); ADMIN-scope tools
+  gated separately so restricted tokens can still safely call the read/write
+  surface.
 
 ---
 
@@ -565,6 +677,21 @@ README.md
 
 ## Changelog
 
+### 2.4.1 (2026-05-23)
+- **Credentials no longer leaked to subprocesses (secrets-policy compliance).**
+  Up to v2.4.0 the plugin wrote `ANTHROPIC_API_KEY` plus the full InfluxDB
+  credential set (host / port / username / password / database) into
+  `os.environ` so the MCP server modules could read them via `os.environ.get(...)`.
+  Two tool handlers shell out without an explicit `env=` (`system_tools_handler.py`
+  and `scripting_shell_handler.py`), inheriting those credentials into every
+  child process — a real leak.
+- New `mcp_server/runtime_config.py` in-process config store. `plugin.py`
+  populates it at startup and on every PluginConfig save; downstream modules
+  (`influxdb/client.py`, `openai_client/main.py`, `tools/historical_analysis/main.py`,
+  `mcp_handler.py`) read via `runtime_config.get(...)` instead of `os.environ`.
+- No behaviour change for users — the plugin starts, MCP tools work, etc.
+  exactly as before. Subprocess leak gone.
+
 ### 2.4.0 (2026-05-22)
 - **Six new MCP tools** exposing recently-verified Indigo APIs:
   - `fire_trigger` — execute an Indigo trigger directly by ID/name
@@ -588,6 +715,14 @@ README.md
 - `scope_manager`: `fire_trigger`, `create_device_folder`,
   `create_variable_folder` classified WRITE; `execute_indigo_python` and
   `execute_plugin_menu_item` classified ADMIN.
+
+### 2.3.3 (2026-05-18)
+- **`run_script` now pre-injects `indigo` into the exec globals**, matching
+  Indigo's GUI action runner. Scripts run via this tool no longer need an
+  explicit `import indigo` at the top — bare `indigo.devices.iter(...)` works.
+  Discovered when an ad-hoc device-create script for MQTTExplorerBridge
+  failed with `name 'indigo' is not defined`. Fix in
+  `mcp_server/tools/script_tools/script_tools_handler.py:run_script`.
 
 ### 2.3.2 (2026-05-12)
 - **`ServerApiVersion` lowered 3.6 → 3.4.** Plugin uses `requirements.txt`
