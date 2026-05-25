@@ -5,7 +5,7 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
 # Date:        23-05-2026
-# Version:     2.4.2
+# Version:     2.4.3
 #
 # v2.4.2 (23-05-2026): Millisecond timestamp [HH:MM:SS.mmm] prefix on every
 # log line via plugin_utils.install_timestamp_filter() — matches Device
@@ -1176,6 +1176,15 @@ class Plugin(indigo.PluginBase):
             # Clear device reference
             if self.mcp_server_device and self.mcp_server_device.id == device.id:
                 self.mcp_server_device = None
+
+    @staticmethod
+    def didDeviceCommPropertyChange(oldDevice, newDevice):
+        """Restart comm only when the MCP server identity changes.
+
+        serverName is the only user-editable prop on the mcpServer device
+        type; nothing else justifies a stop/start cycle.
+        """
+        return oldDevice.pluginProps.get("serverName") != newDevice.pluginProps.get("serverName")
 
     def variableUpdated(self, origVar: indigo.Variable, newVar: indigo.Variable) -> None:
         """
