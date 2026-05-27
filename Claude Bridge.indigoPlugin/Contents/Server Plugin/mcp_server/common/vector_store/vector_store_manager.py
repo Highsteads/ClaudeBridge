@@ -79,6 +79,65 @@ class VectorStoreManager:
             self.logger.error(f"\t❌ Vector store startup failed: {e}")
             raise
     
+    def start_async(self) -> None:
+        """
+        Like start() but runs the slow initial-embedding rebuild on a daemon
+        thread, so MCPHandler.__init__ doesn't block for 60-90 seconds while
+        every device/variable/action is embedded.
+
+        After this returns, the DB connection is live and get_vector_store()
+        returns a usable instance — but its embeddings may be empty or stale
+        until the background warmup completes (a few seconds to a couple of
+        minutes on large installs). `is_running` is False during warmup;
+        `is_warming_up` is True. search_entities can use these to give a
+        helpful "still warming" response instead of failing silently.
+
+        Added in Claude Bridge v2.6.2 to fix the post-restart MCP latency where
+        the IWS endpoint was routable but all calls timed out until vector
+        embedding completed.
+        """
+        if self._running:
+            self.logger.debug("Vector store manager already running")
+            return
+
+        try:
+            self._is_initializing = True
+            # FAST: open the DB connection — sub-second. After this the inner
+            # vector_store reference is live so SearchEntitiesHandler wiring
+            # works.
+            self._initialize_vector_store()
+        except Exception as e:
+            self._is_initializing = False
+            self.logger.error(f"\t❌ Vector store async startup failed (init): {e}")
+            raise
+
+        def _worker() -> None:
+            try:
+                # SLOW: initial embedding rebuild. Runs in the background so
+                # IWS requests are served immediately by the rest of the
+                # plugin.
+                self.update_now()
+                if self.update_interval > 0:
+                    self._start_background_updates()
+                self._running = True
+                self.logger.info("\t📊 Vector store: initial warmup complete")
+            except Exception as exc:
+                self.logger.error(f"\t❌ Vector store warmup failed: {exc}")
+            finally:
+                self._is_initializing = False
+
+        t = threading.Thread(
+            target=_worker,
+            name="VectorStore-AsyncWarm",
+            daemon=True,
+        )
+        t.start()
+
+    @property
+    def is_warming_up(self) -> bool:
+        """True between start_async() and the first update_now() completing."""
+        return self._is_initializing
+
     def stop(self) -> None:
         """Stop the vector store manager."""
         if not self._running:

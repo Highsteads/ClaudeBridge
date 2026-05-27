@@ -4,8 +4,47 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
-# Date:        23-05-2026
-# Version:     2.4.3
+# Date:        27-05-2026
+# Version:     2.6.2
+#
+# v2.6.2 (27-05-2026): Defensive change. Vector store startup moved to a
+# daemon thread via VectorStoreManager.start_async() so any future heavy work
+# inside it can never block MCPHandler.__init__. NOT the fix for the
+# post-restart MCP latency — investigation found VectorStore is a
+# lightweight in-memory text-search store (no embeddings), so it was never
+# the bottleneck. The 3-5 minute post-restart latency remains an open issue
+# (cause appears to be IWS-layer or pre-startup() routing; no plugin log
+# lines appear during the dead zone, including the very first one inside
+# startup(), suggesting startup() either isn't running or its logger isn't
+# routing). is_warming_up property exposed for diagnostics.
+#
+# v2.6.1 (27-05-2026): plugin_lint missing_loop_guard rule refined — no longer
+# requires the `new_dev` exact identifier (now matches any param name including
+# annotated `newDev: indigo.Device`), recognises three guard idioms (pluginId
+# match, id-in-set, per-id equality), and only flags when deviceUpdated
+# actually writes back to the device (replaceOnServer/updateStateOnServer/etc).
+# Read-only mirrors no longer produce false positives. False positive against
+# Claude Bridge itself (its own deviceUpdated is read-only and guarded) gone.
+#
+# v2.6.0 (27-05-2026): +7 plugin-development helper tools wrapping common dev
+# workflows: plugin_diff_source_vs_installed (drift detection), plugin_refresh_deps
+# (delete pip success marker, optional restart), plugin_show_packages_versions
+# (read Contents/Packages/*.dist-info), plugin_validate_xml (Devices/Actions/
+# Events/MenuItems/PluginConfig naming-rule check), plugin_node_check_html
+# (node --check on inline JS in bundled HTML — catches stale-paste bugs),
+# plugin_lint (CliveS-plugin convention sweep against plugin.py), device_history
+# (focused SQL Logger sqlite query). Total tool count 129 → 136. New handler:
+# mcp_server/tools/plugin_dev_tools/plugin_dev_tools_handler.py
+#
+# v2.5.0 (27-05-2026): +43 new MCP tools wrapping previously-unexposed IOM
+# surface — device CRUD (delete/duplicate/move/enable/rename/toggle, dimmer
+# brighten/dim), variable delete + move, schedule CRUD (delete/duplicate/
+# execute_now/remove_delayed_actions/get_dependencies), trigger delete + move,
+# action group CRUD (delete/duplicate/enable/disable/get_dependencies),
+# sprinkler suite (7 tools), thermostat fan mode, speedcontrol index +/-,
+# server tools (speak/sunrise/sunset/lat-lon/web-server-url/getDeprecatedElems/
+# removeAllDelayedActions), control pages list+get, cross-plugin update sweep.
+# Total tool count 86 → 129. All implementations in tools/extended_tools/.
 #
 # v2.4.2 (23-05-2026): Millisecond timestamp [HH:MM:SS.mmm] prefix on every
 # log line via plugin_utils.install_timestamp_filter() — matches Device
