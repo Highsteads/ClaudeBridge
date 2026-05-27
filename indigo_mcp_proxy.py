@@ -13,7 +13,7 @@ import http.client
 INDIGO_HOST            = "localhost"
 INDIGO_PORT            = 8176
 INDIGO_MCP_PATH        = "/message/com.clives.indigoplugin.claudebridge/mcp/"
-BEARER_TOKEN           = "eoLRHTH2wgwhuoFIfm2Vsx2i5NdYzFfI1dKWUffkDDY"
+BEARER_TOKEN           = "REPLACE_AT_INSTALL"
 INDIGO_PROTOCOL_VER    = "2025-06-18"
 
 session_id  = None

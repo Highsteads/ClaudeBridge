@@ -35,6 +35,8 @@ from .tools.events import EventsHandler
 from .tools.home_status import HomeStatusHandler
 from .tools.energy_tools import EnergyToolsHandler
 from .tools.scripting_shell import ScriptingShellHandler
+from .tools.extended_tools import ExtendedToolsHandler
+from .tools.plugin_dev_tools import PluginDevToolsHandler
 
 
 class MCPHandler:
@@ -111,8 +113,13 @@ class MCPHandler:
             update_interval=300,  # 5 minutes
         )
 
-        # Start vector store manager (it will log its own progress)
-        self.vector_store_manager.start()
+        # Start vector store manager in background. The DB connection is
+        # opened synchronously so handlers wire up fine, but the slow initial
+        # embedding rebuild (60-90s on a 400-device install) runs on a daemon
+        # thread. Without this, every restart left the MCP endpoint routable
+        # but blocked until embeddings finished. See VectorStoreManager.start_async()
+        # for the split. v2.6.2 fix.
+        self.vector_store_manager.start_async()
 
         # Initialize handlers
         self._init_handlers()
@@ -205,6 +212,14 @@ class MCPHandler:
             logger=self.logger
         )
         self.scripting_shell_handler = ScriptingShellHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.extended_tools_handler = ExtendedToolsHandler(
+            data_provider=self.data_provider,
+            logger=self.logger
+        )
+        self.plugin_dev_tools_handler = PluginDevToolsHandler(
             data_provider=self.data_provider,
             logger=self.logger
         )
@@ -2371,6 +2386,588 @@ class MCPHandler:
             "function": self._tool_execute_plugin_menu_item
         }
 
+        # ══════════════════════════════════════════════════════════════════
+        # v2.5.0 — Extended IOM wrappers (35+ tools)
+        # All implementations live in tools/extended_tools/extended_tools_handler.py
+        # ══════════════════════════════════════════════════════════════════
+
+        # ── Device CRUD + folder ops ──────────────────────────────────────
+        self._tools["delete_device"] = {
+            "description": "Permanently delete a device. Destructive — cannot be undone.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}],
+                                  "description": "Device ID"}
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_delete_device
+        }
+        self._tools["duplicate_device"] = {
+            "description": "Duplicate a device. Optional new_name — Indigo defaults to 'Copy of <name>'.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}],
+                                  "description": "Source device ID"},
+                    "new_name":  {"type": "string", "description": "Optional name for the copy"}
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_duplicate_device
+        }
+        self._tools["move_device_to_folder"] = {
+            "description": "Move a device to a different folder. folder_id=0 means root.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "folder_id": {"anyOf": [{"type": "number"}, {"type": "string"}],
+                                  "description": "Target folder ID (0 = root)"}
+                },
+                "required": ["device_id", "folder_id"]
+            },
+            "function": self._tool_move_device_to_folder
+        }
+        self._tools["enable_device"] = {
+            "description": ("Enable or disable a device's communication. NOT the same as on/off "
+                            "— this controls whether Indigo polls/listens to the device at all."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "value":     {"type": "boolean",
+                                  "description": "True to enable, False to disable (default True)"}
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_enable_device
+        }
+        self._tools["rename_device"] = {
+            "description": "Rename a device.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "new_name":  {"type": "string", "description": "New device name"}
+                },
+                "required": ["device_id", "new_name"]
+            },
+            "function": self._tool_rename_device
+        }
+        self._tools["device_toggle"] = {
+            "description": "Toggle on/off state. Auto-detects dimmer/relay/speedcontrol.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_device_toggle
+        }
+        self._tools["dimmer_brighten_by"] = {
+            "description": "Increase dimmer brightness by N percent. Clamps at 100.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "amount":    {"type": "number", "description": "Percent points (1-100)"}
+                },
+                "required": ["device_id", "amount"]
+            },
+            "function": self._tool_dimmer_brighten_by
+        }
+        self._tools["dimmer_dim_by"] = {
+            "description": "Decrease dimmer brightness by N percent. Clamps at 0.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "amount":    {"type": "number", "description": "Percent points (1-100)"}
+                },
+                "required": ["device_id", "amount"]
+            },
+            "function": self._tool_dimmer_dim_by
+        }
+
+        # ── Variable gaps ─────────────────────────────────────────────────
+        self._tools["variable_delete"] = {
+            "description": "Permanently delete a variable. Destructive — cannot be undone.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "variable_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["variable_id"]
+            },
+            "function": self._tool_variable_delete
+        }
+        self._tools["variable_move_to_folder"] = {
+            "description": "Move a variable to a different folder. folder_id=0 means root.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "variable_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "folder_id":   {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["variable_id", "folder_id"]
+            },
+            "function": self._tool_variable_move_to_folder
+        }
+
+        # ── Schedule CRUD ─────────────────────────────────────────────────
+        self._tools["delete_schedule"] = {
+            "description": "Permanently delete a schedule.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["schedule_id"]
+            },
+            "function": self._tool_delete_schedule
+        }
+        self._tools["duplicate_schedule"] = {
+            "description": "Duplicate a schedule.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "new_name":    {"type": "string"}
+                },
+                "required": ["schedule_id"]
+            },
+            "function": self._tool_duplicate_schedule
+        }
+        self._tools["execute_schedule_now"] = {
+            "description": ("Execute a schedule immediately. ignore_conditions=True bypasses "
+                            "the schedule's own conditions."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id":       {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "ignore_conditions": {"type": "boolean"}
+                },
+                "required": ["schedule_id"]
+            },
+            "function": self._tool_execute_schedule_now
+        }
+        self._tools["schedule_remove_delayed_actions"] = {
+            "description": "Remove any pending delayed actions for a schedule.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["schedule_id"]
+            },
+            "function": self._tool_schedule_remove_delayed_actions
+        }
+        self._tools["schedule_get_dependencies"] = {
+            "description": ("Get dependents of a schedule (which devices/variables it "
+                            "references). Useful before deleting."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["schedule_id"]
+            },
+            "function": self._tool_schedule_get_dependencies
+        }
+
+        # ── Trigger CRUD ──────────────────────────────────────────────────
+        self._tools["delete_trigger"] = {
+            "description": "Permanently delete a trigger.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["trigger_id"]
+            },
+            "function": self._tool_delete_trigger
+        }
+        self._tools["move_trigger_to_folder"] = {
+            "description": "Move a trigger to a different folder. folder_id=0 means root.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "folder_id":  {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["trigger_id", "folder_id"]
+            },
+            "function": self._tool_move_trigger_to_folder
+        }
+
+        # ── Action group CRUD ─────────────────────────────────────────────
+        self._tools["delete_action_group"] = {
+            "description": "Permanently delete an action group.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action_group_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["action_group_id"]
+            },
+            "function": self._tool_delete_action_group
+        }
+        self._tools["duplicate_action_group"] = {
+            "description": "Duplicate an action group.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action_group_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "new_name":        {"type": "string"}
+                },
+                "required": ["action_group_id"]
+            },
+            "function": self._tool_duplicate_action_group
+        }
+        self._tools["enable_action_group"] = {
+            "description": "Enable or disable an action group.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action_group_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "value":           {"type": "boolean", "description": "True to enable"}
+                },
+                "required": ["action_group_id"]
+            },
+            "function": self._tool_enable_action_group
+        }
+        self._tools["disable_action_group"] = {
+            "description": "Disable an action group (convenience for enable_action_group value=False).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action_group_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["action_group_id"]
+            },
+            "function": self._tool_disable_action_group
+        }
+        self._tools["action_group_get_dependencies"] = {
+            "description": "Get dependents of an action group. Useful before deleting.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action_group_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["action_group_id"]
+            },
+            "function": self._tool_action_group_get_dependencies
+        }
+
+        # ── Sprinkler suite ───────────────────────────────────────────────
+        self._tools["sprinkler_set_zone"] = {
+            "description": "Set the active zone on a sprinkler device (1-based index).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id":  {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "zone_index": {"type": "number", "description": "Zone index (1-based)"}
+                },
+                "required": ["device_id", "zone_index"]
+            },
+            "function": self._tool_sprinkler_set_zone
+        }
+        self._tools["sprinkler_run"] = {
+            "description": "Run a sprinkler programme.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}},
+                "required": ["device_id"]
+            },
+            "function": self._tool_sprinkler_run
+        }
+        self._tools["sprinkler_stop"] = {
+            "description": "Stop the sprinkler.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}},
+                "required": ["device_id"]
+            },
+            "function": self._tool_sprinkler_stop
+        }
+        self._tools["sprinkler_pause"] = {
+            "description": "Pause the sprinkler.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}},
+                "required": ["device_id"]
+            },
+            "function": self._tool_sprinkler_pause
+        }
+        self._tools["sprinkler_resume"] = {
+            "description": "Resume a paused sprinkler.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}},
+                "required": ["device_id"]
+            },
+            "function": self._tool_sprinkler_resume
+        }
+        self._tools["sprinkler_next_zone"] = {
+            "description": "Advance to the next sprinkler zone.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}},
+                "required": ["device_id"]
+            },
+            "function": self._tool_sprinkler_next_zone
+        }
+        self._tools["sprinkler_previous_zone"] = {
+            "description": "Go back to the previous sprinkler zone.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}},
+                "required": ["device_id"]
+            },
+            "function": self._tool_sprinkler_previous_zone
+        }
+
+        # ── Thermostat fan mode ───────────────────────────────────────────
+        self._tools["set_fan_mode"] = {
+            "description": "Set thermostat fan mode. mode ∈ {auto, alwaysOn}.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "mode":      {"type": "string", "enum": ["auto", "alwaysOn", "always_on"]}
+                },
+                "required": ["device_id", "mode"]
+            },
+            "function": self._tool_set_fan_mode
+        }
+
+        # ── Speed control ─────────────────────────────────────────────────
+        self._tools["speedcontrol_set_index"] = {
+            "description": "Set speed index on a speed-control device (0=off, 1=low, 2=med, 3=high).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "index":     {"type": "number"}
+                },
+                "required": ["device_id", "index"]
+            },
+            "function": self._tool_speedcontrol_set_index
+        }
+        self._tools["speedcontrol_increase"] = {
+            "description": "Increase speed index by one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}},
+                "required": ["device_id"]
+            },
+            "function": self._tool_speedcontrol_increase
+        }
+        self._tools["speedcontrol_decrease"] = {
+            "description": "Decrease speed index by one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}},
+                "required": ["device_id"]
+            },
+            "function": self._tool_speedcontrol_decrease
+        }
+
+        # ── Server-level tools ────────────────────────────────────────────
+        self._tools["server_speak"] = {
+            "description": "Speak text through Indigo server (macOS text-to-speech).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "wait": {"type": "boolean", "description": "Block until speech done"}
+                },
+                "required": ["text"]
+            },
+            "function": self._tool_server_speak
+        }
+        self._tools["calculate_sunrise"] = {
+            "description": "Sunrise for today (default) or YYYY-MM-DD date_iso.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "date_iso": {"type": "string", "description": "Optional YYYY-MM-DD"}
+                }
+            },
+            "function": self._tool_calculate_sunrise
+        }
+        self._tools["calculate_sunset"] = {
+            "description": "Sunset for today (default) or YYYY-MM-DD date_iso.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "date_iso": {"type": "string", "description": "Optional YYYY-MM-DD"}
+                }
+            },
+            "function": self._tool_calculate_sunset
+        }
+        self._tools["get_latitude_longitude"] = {
+            "description": "Return the latitude/longitude configured in Indigo preferences.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_get_latitude_longitude
+        }
+        self._tools["get_web_server_url"] = {
+            "description": "Return the local Indigo web server URL.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_get_web_server_url
+        }
+        self._tools["get_deprecated_elements"] = {
+            "description": ("Scan for deprecated Indigo objects. "
+                            "include_warnings=True also surfaces warning-level items."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_warnings": {"type": "boolean"}
+                }
+            },
+            "function": self._tool_get_deprecated_elements
+        }
+        self._tools["remove_all_delayed_actions"] = {
+            "description": ("Remove every pending delayed action across all schedules. "
+                            "Destructive — confirm with the user first."),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_remove_all_delayed_actions
+        }
+
+        # ── Control pages ─────────────────────────────────────────────────
+        self._tools["list_control_pages"] = {
+            "description": "List all control pages with id/name/folder/etc.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_list_control_pages
+        }
+        self._tools["get_control_page"] = {
+            "description": "Return a control page's properties (and controls if available).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "page_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["page_id"]
+            },
+            "function": self._tool_get_control_page
+        }
+
+        # ── Cross-plugin update sweep ─────────────────────────────────────
+        self._tools["check_plugin_updates"] = {
+            "description": ("Sweep every installed plugin and report which have a "
+                            "compatible update available. Single call replaces N "
+                            "get_plugin_status calls."),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_check_plugin_updates
+        }
+
+        # ══════════════════════════════════════════════════════════════════
+        # v2.6.0 — Plugin-development helpers (7 tools)
+        # All implementations live in tools/plugin_dev_tools/plugin_dev_tools_handler.py
+        # ══════════════════════════════════════════════════════════════════
+        self._tools["plugin_diff_source_vs_installed"] = {
+            "description": ("Diff a plugin's source repo bundle against its installed "
+                            "bundle. Catches static-asset stale-sync, gutted Packages dir, "
+                            "version-bump mismatches and any drift between dev and runtime."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string",
+                                    "description": "Plugin display name or .indigoPlugin dir name"}
+                },
+                "required": ["plugin_name"]
+            },
+            "function": self._tool_plugin_diff_source_vs_installed
+        }
+        self._tools["plugin_refresh_deps"] = {
+            "description": ("Delete the pip-install success marker so Indigo re-runs "
+                            "requirements.txt on next plugin restart. restart=true also "
+                            "triggers the restart immediately."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string"},
+                    "restart":     {"type": "boolean", "description": "Restart plugin after (default false)"}
+                },
+                "required": ["plugin_name"]
+            },
+            "function": self._tool_plugin_refresh_deps
+        }
+        self._tools["plugin_show_packages_versions"] = {
+            "description": ("Walk a plugin's Contents/Packages/*.dist-info and return the "
+                            "{name: version} map of every bundled third-party library. "
+                            "Useful for diagnosing wrong-version-of-paho-mqtt class bugs."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string"}
+                },
+                "required": ["plugin_name"]
+            },
+            "function": self._tool_plugin_show_packages_versions
+        }
+        self._tools["plugin_validate_xml"] = {
+            "description": ("Parse Devices/Actions/Events/MenuItems/PluginConfig XML and "
+                            "check Indigo naming rules: state IDs must be camelCase ASCII "
+                            "(no underscores), Actions uiPath must have no spaces, "
+                            "batteryLevel is reserved."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string"}
+                },
+                "required": ["plugin_name"]
+            },
+            "function": self._tool_plugin_validate_xml
+        }
+        self._tools["plugin_node_check_html"] = {
+            "description": ("Run `node --check` on every inline <script> block in any "
+                            "HTML file under the plugin's Contents/Resources/. Catches "
+                            "stale-paste JS syntax bugs in 50ms per block."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string"}
+                },
+                "required": ["plugin_name"]
+            },
+            "function": self._tool_plugin_node_check_html
+        }
+        self._tools["plugin_lint"] = {
+            "description": ("Lint plugin.py against CliveS-plugin conventions: header "
+                            "format, log() helper, no bare print(), open() of .py needs "
+                            "encoding='utf-8', no hardcoded Indigo version paths, "
+                            "subscribeToChanges needs the pluginId loop-guard."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string"}
+                },
+                "required": ["plugin_name"]
+            },
+            "function": self._tool_plugin_lint
+        }
+        self._tools["device_history"] = {
+            "description": ("Read recent SQL Logger history for one device. Returns "
+                            "timestamp + non-null state columns. Far cheaper than "
+                            "analyze_historical_data for a focused trend query."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "hours":     {"type": "number", "description": "Lookback in hours (default 24)"},
+                    "limit":     {"type": "number", "description": "Max rows (default 500, max 5000)"},
+                    "columns":   {"type": "array", "items": {"type": "string"},
+                                  "description": "Optional list of column names to return"}
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_device_history
+        }
+
     # ── Plugin Event dispatch ──────────────────────────────────────────────
 
     def _tool_fire_indigo_event(self, name: str, data: dict = None, source: str = "claude") -> str:
@@ -2438,6 +3035,160 @@ class MCPHandler:
         except Exception as e:
             self.logger.error(f"execute_plugin_menu_item error: {e}")
             return safe_json_dumps({"error": str(e)})
+
+    # ══════════════════════════════════════════════════════════════════════
+    # v2.5.0 extended IOM dispatch methods — thin wrappers around
+    # extended_tools_handler. Each follows the established try/safe_json_dumps
+    # pattern so all errors come through the same channel.
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _ext_call(self, method_name: str, *args, **kwargs) -> str:
+        """Shared dispatch: call extended_tools_handler.<method_name> and jsonify."""
+        try:
+            fn = getattr(self.extended_tools_handler, method_name)
+            return safe_json_dumps(fn(*args, **kwargs))
+        except Exception as e:
+            self.logger.error(f"{method_name} error: {e}")
+            return safe_json_dumps({"error": str(e), "tool": method_name})
+
+    # Device CRUD ----------------------------------------------------------
+    def _tool_delete_device(self, device_id) -> str:
+        return self._ext_call("delete_device", device_id)
+    def _tool_duplicate_device(self, device_id, new_name: str = None) -> str:
+        return self._ext_call("duplicate_device", device_id, new_name=new_name)
+    def _tool_move_device_to_folder(self, device_id, folder_id) -> str:
+        return self._ext_call("move_device_to_folder", device_id, folder_id)
+    def _tool_enable_device(self, device_id, value: bool = True) -> str:
+        return self._ext_call("enable_device", device_id, value=value)
+    def _tool_rename_device(self, device_id, new_name: str) -> str:
+        return self._ext_call("rename_device", device_id, new_name)
+    def _tool_device_toggle(self, device_id) -> str:
+        return self._ext_call("device_toggle", device_id)
+    def _tool_dimmer_brighten_by(self, device_id, amount: int) -> str:
+        return self._ext_call("dimmer_brighten_by", device_id, amount)
+    def _tool_dimmer_dim_by(self, device_id, amount: int) -> str:
+        return self._ext_call("dimmer_dim_by", device_id, amount)
+
+    # Variable gaps --------------------------------------------------------
+    def _tool_variable_delete(self, variable_id) -> str:
+        return self._ext_call("variable_delete", variable_id)
+    def _tool_variable_move_to_folder(self, variable_id, folder_id) -> str:
+        return self._ext_call("variable_move_to_folder", variable_id, folder_id)
+
+    # Schedule CRUD --------------------------------------------------------
+    def _tool_delete_schedule(self, schedule_id) -> str:
+        return self._ext_call("delete_schedule", schedule_id)
+    def _tool_duplicate_schedule(self, schedule_id, new_name: str = None) -> str:
+        return self._ext_call("duplicate_schedule", schedule_id, new_name=new_name)
+    def _tool_execute_schedule_now(self, schedule_id, ignore_conditions: bool = False) -> str:
+        return self._ext_call("execute_schedule_now", schedule_id,
+                              ignore_conditions=ignore_conditions)
+    def _tool_schedule_remove_delayed_actions(self, schedule_id) -> str:
+        return self._ext_call("schedule_remove_delayed_actions", schedule_id)
+    def _tool_schedule_get_dependencies(self, schedule_id) -> str:
+        return self._ext_call("schedule_get_dependencies", schedule_id)
+
+    # Trigger CRUD ---------------------------------------------------------
+    def _tool_delete_trigger(self, trigger_id) -> str:
+        return self._ext_call("delete_trigger", trigger_id)
+    def _tool_move_trigger_to_folder(self, trigger_id, folder_id) -> str:
+        return self._ext_call("move_trigger_to_folder", trigger_id, folder_id)
+
+    # Action group CRUD ---------------------------------------------------
+    def _tool_delete_action_group(self, action_group_id) -> str:
+        return self._ext_call("delete_action_group", action_group_id)
+    def _tool_duplicate_action_group(self, action_group_id, new_name: str = None) -> str:
+        return self._ext_call("duplicate_action_group", action_group_id, new_name=new_name)
+    def _tool_enable_action_group(self, action_group_id, value: bool = True) -> str:
+        return self._ext_call("enable_action_group", action_group_id, value=value)
+    def _tool_disable_action_group(self, action_group_id) -> str:
+        return self._ext_call("disable_action_group", action_group_id)
+    def _tool_action_group_get_dependencies(self, action_group_id) -> str:
+        return self._ext_call("action_group_get_dependencies", action_group_id)
+
+    # Sprinkler suite ------------------------------------------------------
+    def _tool_sprinkler_set_zone(self, device_id, zone_index: int) -> str:
+        return self._ext_call("sprinkler_set_zone", device_id, zone_index)
+    def _tool_sprinkler_run(self, device_id) -> str:
+        return self._ext_call("sprinkler_run", device_id)
+    def _tool_sprinkler_stop(self, device_id) -> str:
+        return self._ext_call("sprinkler_stop", device_id)
+    def _tool_sprinkler_pause(self, device_id) -> str:
+        return self._ext_call("sprinkler_pause", device_id)
+    def _tool_sprinkler_resume(self, device_id) -> str:
+        return self._ext_call("sprinkler_resume", device_id)
+    def _tool_sprinkler_next_zone(self, device_id) -> str:
+        return self._ext_call("sprinkler_next_zone", device_id)
+    def _tool_sprinkler_previous_zone(self, device_id) -> str:
+        return self._ext_call("sprinkler_previous_zone", device_id)
+
+    # Thermostat fan mode --------------------------------------------------
+    def _tool_set_fan_mode(self, device_id, mode: str) -> str:
+        return self._ext_call("set_fan_mode", device_id, mode)
+
+    # Speed control -------------------------------------------------------
+    def _tool_speedcontrol_set_index(self, device_id, index: int) -> str:
+        return self._ext_call("speedcontrol_set_index", device_id, index)
+    def _tool_speedcontrol_increase(self, device_id) -> str:
+        return self._ext_call("speedcontrol_increase", device_id)
+    def _tool_speedcontrol_decrease(self, device_id) -> str:
+        return self._ext_call("speedcontrol_decrease", device_id)
+
+    # Server tools --------------------------------------------------------
+    def _tool_server_speak(self, text: str, wait: bool = False) -> str:
+        return self._ext_call("server_speak", text, wait=wait)
+    def _tool_calculate_sunrise(self, date_iso: str = None) -> str:
+        return self._ext_call("calculate_sunrise", date_iso=date_iso)
+    def _tool_calculate_sunset(self, date_iso: str = None) -> str:
+        return self._ext_call("calculate_sunset", date_iso=date_iso)
+    def _tool_get_latitude_longitude(self) -> str:
+        return self._ext_call("get_latitude_longitude")
+    def _tool_get_web_server_url(self) -> str:
+        return self._ext_call("get_web_server_url")
+    def _tool_get_deprecated_elements(self, include_warnings: bool = False) -> str:
+        return self._ext_call("get_deprecated_elements", include_warnings=include_warnings)
+    def _tool_remove_all_delayed_actions(self) -> str:
+        return self._ext_call("remove_all_delayed_actions")
+
+    # Control pages -------------------------------------------------------
+    def _tool_list_control_pages(self) -> str:
+        return self._ext_call("list_control_pages")
+    def _tool_get_control_page(self, page_id) -> str:
+        return self._ext_call("get_control_page", page_id)
+
+    # Plugin updates ------------------------------------------------------
+    def _tool_check_plugin_updates(self) -> str:
+        return self._ext_call("check_plugin_updates")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # v2.6.0 plugin-development helper dispatch methods
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _pd_call(self, method_name: str, *args, **kwargs) -> str:
+        """Shared dispatch for plugin_dev_tools_handler — same shape as _ext_call."""
+        try:
+            fn = getattr(self.plugin_dev_tools_handler, method_name)
+            return safe_json_dumps(fn(*args, **kwargs))
+        except Exception as e:
+            self.logger.error(f"{method_name} error: {e}")
+            return safe_json_dumps({"error": str(e), "tool": method_name})
+
+    def _tool_plugin_diff_source_vs_installed(self, plugin_name: str) -> str:
+        return self._pd_call("plugin_diff_source_vs_installed", plugin_name)
+    def _tool_plugin_refresh_deps(self, plugin_name: str, restart: bool = False) -> str:
+        return self._pd_call("plugin_refresh_deps", plugin_name, restart=restart)
+    def _tool_plugin_show_packages_versions(self, plugin_name: str) -> str:
+        return self._pd_call("plugin_show_packages_versions", plugin_name)
+    def _tool_plugin_validate_xml(self, plugin_name: str) -> str:
+        return self._pd_call("plugin_validate_xml", plugin_name)
+    def _tool_plugin_node_check_html(self, plugin_name: str) -> str:
+        return self._pd_call("plugin_node_check_html", plugin_name)
+    def _tool_plugin_lint(self, plugin_name: str) -> str:
+        return self._pd_call("plugin_lint", plugin_name)
+    def _tool_device_history(self, device_id, hours: int = 24,
+                             limit: int = 500, columns=None) -> str:
+        return self._pd_call("device_history", device_id,
+                             hours=hours, limit=limit, columns=columns)
 
     # ── System / housekeeping dispatch methods ─────────────────────────────
 
