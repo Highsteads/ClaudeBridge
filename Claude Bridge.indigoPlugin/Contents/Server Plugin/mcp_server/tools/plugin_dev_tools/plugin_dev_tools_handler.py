@@ -26,6 +26,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -537,10 +538,24 @@ class PluginDevToolsHandler(BaseToolHandler):
                     total_blocks += 1
                     # Compute line number of <script> open
                     line_no = content.count("\n", 0, m.start()) + 1
-                    proc = subprocess.run(
-                        [node_bin, "--check", "-e", body],
-                        capture_output=True, text=True, timeout=10
-                    )
+                    # node rejects --check and -e together ("either --check or
+                    # --eval can be used, not both"), so write the block to a
+                    # temp .js file and --check that.
+                    with tempfile.NamedTemporaryFile(
+                        "w", suffix=".js", delete=False, encoding="utf-8"
+                    ) as _tf:
+                        _tf.write(body)
+                        _tmp = _tf.name
+                    try:
+                        proc = subprocess.run(
+                            [node_bin, "--check", _tmp],
+                            capture_output=True, text=True, timeout=10
+                        )
+                    finally:
+                        try:
+                            os.unlink(_tmp)
+                        except OSError:
+                            pass
                     if proc.returncode != 0:
                         # Trim noisy node output to first 3 lines
                         err = "\n".join((proc.stderr or "").splitlines()[:3])

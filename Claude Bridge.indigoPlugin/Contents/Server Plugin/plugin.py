@@ -11,7 +11,10 @@
 # an absolute path (_resolve_node: shutil.which, then /opt/homebrew/bin etc.).
 # Indigo's plugin-host PATH omits Homebrew dirs on Apple Silicon, so the bare
 # ["node", ...] lookup always failed with "node not found on PATH" even though
-# node was installed. Tool now works.
+# node was installed. Also fixed a second latent bug the PATH failure had
+# masked: the check ran `node --check -e <code>`, which node rejects ("either
+# --check or --eval can be used, not both") — now writes each block to a temp
+# .js file and `node --check`s that. Tool works end-to-end (verified live).
 #
 # v2.6.3 (27-05-2026): Added prepare_to_sleep / wake_up observability hooks
 # harvested from the 27-May plugin_base.py sweep. ClaudeBridge is
