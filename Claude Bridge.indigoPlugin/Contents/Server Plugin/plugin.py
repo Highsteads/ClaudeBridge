@@ -4,8 +4,14 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
-# Date:        27-05-2026
-# Version:     2.6.3
+# Date:        28-05-2026
+# Version:     2.6.4
+#
+# v2.6.4 (28-05-2026): plugin_node_check_html now resolves the node binary via
+# an absolute path (_resolve_node: shutil.which, then /opt/homebrew/bin etc.).
+# Indigo's plugin-host PATH omits Homebrew dirs on Apple Silicon, so the bare
+# ["node", ...] lookup always failed with "node not found on PATH" even though
+# node was installed. Tool now works.
 #
 # v2.6.3 (27-05-2026): Added prepare_to_sleep / wake_up observability hooks
 # harvested from the 27-May plugin_base.py sweep. ClaudeBridge is
