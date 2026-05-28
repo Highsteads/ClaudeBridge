@@ -5,7 +5,14 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
 # Date:        27-05-2026
-# Version:     2.6.2
+# Version:     2.6.3
+#
+# v2.6.3 (27-05-2026): Added prepare_to_sleep / wake_up observability hooks
+# harvested from the 27-May plugin_base.py sweep. ClaudeBridge is
+# request/response over IWS with no persistent connections to manage, so
+# these hooks log only — no operational change. Value is diagnostic: future
+# "MCP unreachable between X and Y" investigations can correlate the gap
+# with the Mac sleeping rather than hunting for a fault.
 #
 # v2.6.2 (27-05-2026): Defensive change. Vector store startup moved to a
 # daemon thread via VectorStoreManager.start_async() so any future heavy work
@@ -677,6 +684,29 @@ class Plugin(indigo.PluginBase):
                 self.logger.error(f"\t❌ Error stopping MCP handler: {e}")
             finally:
                 self.mcp_handler = None
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Mac sleep / wake — lightweight observability hooks.
+    #
+    # ClaudeBridge is request/response over IWS, with no persistent client
+    # connections to manage (each MCP request opens its own HTTP transaction
+    # via Indigo's web server). Sleep/wake therefore needs no operational
+    # cleanup — IWS itself goes dark on sleep and comes back on wake. The
+    # value here is purely diagnostic: a clear log marker so future
+    # "claude-code couldn't reach the server between X and Y" investigations
+    # can correlate the gap with the Mac sleeping rather than hunting for
+    # a fault. Vector store manager is left running (its SQLite backend
+    # survives sleep fine; no background thread holds external resources).
+    # ────────────────────────────────────────────────────────────────────────
+    def prepare_to_sleep(self) -> None:
+        self.logger.info("Mac going to sleep — MCP endpoint will be unreachable until wake")
+        super().prepare_to_sleep()
+    prepareToSleep = prepare_to_sleep
+
+    def wake_up(self) -> None:
+        super().wake_up()
+        self.logger.info("Mac woke — MCP endpoint reachable again")
+    wakeUp = wake_up
 
     ########################################
     # MCP Endpoint Handler for IWS
