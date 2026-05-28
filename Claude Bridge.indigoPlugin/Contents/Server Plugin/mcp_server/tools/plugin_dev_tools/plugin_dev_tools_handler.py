@@ -23,6 +23,7 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import xml.etree.ElementTree as ET
@@ -53,6 +54,19 @@ def _sql_logger_db() -> str:
 def _github_root() -> str:
     """Best-effort: the user's GitHub clone root."""
     return os.path.expanduser("~/Documents/GitHub")
+
+def _resolve_node() -> Optional[str]:
+    """Locate the node binary. Indigo's plugin host runs with a minimal PATH
+    that omits Homebrew dirs, so a bare 'node' lookup fails on Apple Silicon
+    even when node is installed. Try PATH first, then the common Homebrew /
+    system install locations."""
+    found = shutil.which("node")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"):
+        if os.path.exists(candidate):
+            return candidate
+    return None
 
 
 def _resolve_installed_bundle(plugin_name: str) -> Optional[str]:
@@ -464,13 +478,19 @@ class PluginDevToolsHandler(BaseToolHandler):
         """
         self.log_incoming_request("plugin_node_check_html", {"plugin_name": plugin_name})
         try:
-            # Confirm node is available
+            # Confirm node is available (resolve absolute path — Indigo's
+            # plugin host PATH omits Homebrew dirs on Apple Silicon)
+            node_bin = _resolve_node()
+            if not node_bin:
+                return {"success": False,
+                        "error": "node not found (looked on PATH and in "
+                                 "/opt/homebrew/bin, /usr/local/bin, /usr/bin)"}
             try:
-                v = subprocess.run(["node", "--version"], capture_output=True,
+                v = subprocess.run([node_bin, "--version"], capture_output=True,
                                    text=True, timeout=5)
                 node_version = v.stdout.strip()
             except (FileNotFoundError, subprocess.TimeoutExpired):
-                return {"success": False, "error": "node not found on PATH"}
+                return {"success": False, "error": f"node at {node_bin} failed to run"}
 
             installed = _resolve_installed_bundle(plugin_name)
             if not installed:
@@ -518,7 +538,7 @@ class PluginDevToolsHandler(BaseToolHandler):
                     # Compute line number of <script> open
                     line_no = content.count("\n", 0, m.start()) + 1
                     proc = subprocess.run(
-                        ["node", "--check", "-e", body],
+                        [node_bin, "--check", "-e", body],
                         capture_output=True, text=True, timeout=10
                     )
                     if proc.returncode != 0:
