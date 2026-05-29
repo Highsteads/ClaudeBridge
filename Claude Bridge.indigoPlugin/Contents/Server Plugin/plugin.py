@@ -4,8 +4,19 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
-# Date:        28-05-2026
-# Version:     2.6.4
+# Date:        29-05-2026
+# Version:     2.6.5
+#
+# v2.6.5 (29-05-2026): Fixed VectorStoreManager.stop() race — it early-returned
+# `if not self._running`, but _running is only set True AFTER the async warmup
+# finishes, so a restart landing mid-warmup (the usual case) orphaned the
+# VectorStore-AsyncWarm daemon thread mid IOM-walk. stop() now always signals +
+# joins the (now stored) warmup thread. Also bounded the Anthropic connection
+# test in startup() to timeout=10s/max_retries=0 (was the unbounded SDK default
+# connect=5s/read=600s/2 retries on the startup thread). Both shrink
+# ClaudeBridge's restart shutdown/startup window. Whether they shorten the
+# ~4m37s IWS dead zone is being re-measured — the dead zone itself is upstream
+# in Indigo's IWS↔host channel (see repo CLAUDE.md "Known open issue").
 #
 # v2.6.4 (28-05-2026): plugin_node_check_html now resolves the node binary via
 # an absolute path (_resolve_node: shutil.which, then /opt/homebrew/bin etc.).
@@ -288,7 +299,14 @@ class Plugin(indigo.PluginBase):
                 self.logger.error("\t❌ Anthropic API key not configured")
                 all_required_connections_ok = False
             else:
-                test_client = anthropic.Anthropic(api_key=self.anthropic_api_key)
+                # Bounded so a slow or unreachable Anthropic API cannot stall
+                # startup() for minutes. The SDK default is connect=5s,
+                # read=600s, 2 retries — far too long for a startup-path probe.
+                test_client = anthropic.Anthropic(
+                    api_key=self.anthropic_api_key,
+                    timeout=10.0,
+                    max_retries=0,
+                )
                 try:
                     resp = test_client.messages.create(
                         model="claude-haiku-4-5-20251001",

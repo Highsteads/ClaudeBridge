@@ -128,41 +128,61 @@ Not worth their own forum threads but useful while we're on the subject:
 
 ---
 
-## One more — IWS goes silent for ~4m 37s after every plugin restart
+## One more — IWS goes silent for ~4m 37s, but only when Claude Bridge restarts
 
-This one I only spotted today after a stretch of restart-heavy development.
-After ANY plugin restart, Indigo's entire IWS stops responding for almost
-exactly 4 minutes 37 seconds. Not just the restarted plugin's endpoint —
-everything served by IWS, including Dashboards (`/public/dashboards/...`)
-and Claude Bridge (`/message/.../mcp/`). Reproducible across four
-consecutive restarts in a row on the same day, on three different plugin
-versions, all timing to the same window.
+I had this one filed as a Reflector problem, and I want to correct myself before
+that spreads, because I finally sat down and measured it properly this morning
+and the Reflector turns out to be innocent.
 
-The smoking gun in the event log:
+The symptom is real enough. After I restart Claude Bridge, Indigo's entire IWS
+stops responding for almost exactly 4 minutes 37 seconds. Not just Claude
+Bridge's own endpoint but everything IWS serves, the plain web root included. It
+then recovers on its own, bang on the 4m37s mark, very consistently.
 
-```
-07:59:54  Error    reflector connection test failed: local server unreachable
-07:59:54  Warning  reflector reconnection scheduled in 5 seconds
-08:00:22  Web Server Error  message handler failed: attempt to communicate
-                            with plugin com.clives.indigoplugin.claudebridge
-08:00:23  Web Server Error  internal server error for /public/dashboards/streams.json
-08:00:30  Error    failed to create reflector connection: local server unreachable
-08:00:30  Warning  reflector reconnection scheduled in 15 minutes
-```
+What threw me was the Reflector noise in the log during that window, the
+`reflector connection test failed: local server unreachable` and
+`reconnection scheduled in 15 minutes` lines, which made it look like a
+Reflector poll was holding up the IWS event loop. So I measured IWS liveness
+independently of the MCP path, by curling the local web root
+`http://127.0.0.1:8176/` once a second (a 302 means alive, a refused connection
+means dead), and ran three small experiments:
 
-The Reflector client polls localhost to verify connectivity. During and after
-a plugin restart those polls block for ~4 minutes (looks like the connection-
-establishment timeout) and seem to hold up the IWS event loop the whole time.
-When the Reflector finally times out and reschedules itself 15 minutes out,
-IWS frees up and the next 15 minutes are problem-free until the next poll.
+- Restarting any OTHER plugin only blips IWS for about a second. I tried Humax,
+  and separately a batch of seven of my own plugins, and in every case the web
+  root stayed up and the MCP endpoint kept answering throughout. No dead zone.
+- Restarting Claude Bridge takes the whole IWS down for ~4m37s every time.
+- Doing that Claude Bridge restart with the Reflector connected, and then again
+  with the Reflector disconnected, gives an identical ~4m37s either way.
 
-Doesn't matter if it's Claude Bridge restarting or Dashboards or anything else
-— same behaviour. Disabling the Reflector altogether removes the dead zone
-(but obviously loses remote access).
+So it is not the Reflector. The clincher is that in the Reflector-connected run
+the IWS stayed dead for nearly three minutes AFTER the Reflector had already
+given up and rescheduled itself fifteen minutes out. If the Reflector poll were
+holding the loop, IWS would have freed the moment it stopped polling, and it
+didn't. Those `local server unreachable` lines are the Reflector failing to
+reach an IWS that is already wedged, rather than the thing doing the wedging. My
+apologies for the earlier misdiagnosis.
 
-If this is a known one happy to drop it. If not, it'd be a really nice one to
-fix, especially for anyone doing iterative plugin development where every
-restart costs you five minutes.
+What I can say with confidence now is that it is specific to Claude Bridge
+restarting, not plugin restarts in general, so it is presumably something in my
+own plugin's restart path that stalls the shared web server. A couple of clues
+in case they ring a bell: Claude Bridge's shutdown hangs for about 21 seconds
+every single time ("process failed to quit after polite request, forcing it to
+quit now"), and the plugin does a fair bit on startup (a vector-store warmup of
+roughly 60 to 90 seconds, plus some heavy imports), though none of that
+obviously adds up to 277 seconds, and none of it explains why the WHOLE web
+server goes quiet rather than just my own endpoint.
+
+One related gotcha for anyone chasing something similar. If a request lands on
+the `/message/.../mcp/` handler at the precise moment IWS comes back, it logs
+`message handler failed` and Indigo sometimes reloads the plugin, which restarts
+the whole 4m37s clock. I spent a fair while last night accidentally extending my
+own dead zone by impatiently retrying, and the lesson was to probe only the
+plain web root while waiting and never the message endpoint.
+
+If this is a known characteristic of heavier plugins, or if there is something
+obvious I'm doing in shutdown or startup that would block IWS like this, I'd be
+very grateful for a pointer. And if it's worth raising as a proper bug with a
+minimal reproducer, just say the word and I'll put one together.
 
 ---
 

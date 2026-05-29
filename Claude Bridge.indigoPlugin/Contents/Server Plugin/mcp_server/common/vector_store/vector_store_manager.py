@@ -43,6 +43,7 @@ class VectorStoreManager:
         
         # Background update thread
         self._update_thread = None
+        self._warmup_thread = None
         self._stop_updates = threading.Event()
         self._running = False
         
@@ -113,10 +114,15 @@ class VectorStoreManager:
 
         def _worker() -> None:
             try:
+                # Bail immediately if shutdown was requested before we started.
+                if self._stop_updates.is_set():
+                    return
                 # SLOW: initial embedding rebuild. Runs in the background so
                 # IWS requests are served immediately by the rest of the
                 # plugin.
                 self.update_now()
+                if self._stop_updates.is_set():
+                    return
                 if self.update_interval > 0:
                     self._start_background_updates()
                 self._running = True
@@ -126,12 +132,14 @@ class VectorStoreManager:
             finally:
                 self._is_initializing = False
 
-        t = threading.Thread(
+        # Store the handle on self so stop() can join it. Previously this was a
+        # local, so a restart during warmup orphaned the thread (see stop()).
+        self._warmup_thread = threading.Thread(
             target=_worker,
             name="VectorStore-AsyncWarm",
             daemon=True,
         )
-        t.start()
+        self._warmup_thread.start()
 
     @property
     def is_warming_up(self) -> bool:
@@ -139,17 +147,30 @@ class VectorStoreManager:
         return self._is_initializing
 
     def stop(self) -> None:
-        """Stop the vector store manager."""
-        if not self._running:
-            return
+        """Stop the vector store manager.
+
+        Safe to call at ANY point, including while the async warmup thread is
+        still in flight. The old `if not self._running: return` guard meant a
+        restart that landed mid-warmup (the usual restart case, since _running
+        is only set True AFTER warmup finishes) returned here without stopping
+        anything — orphaning the VectorStore-AsyncWarm daemon thread mid
+        IOM-walk. Now we always signal then join, regardless of _running.
+        """
+        # Signal warmup AND the periodic loop to stop first, before checking
+        # any running flag.
+        self._stop_updates.set()
+        self._running = False
 
         try:
-            self._running = False
+            # Join the async warmup thread if still running (bounded — the IOM
+            # walk has no artificial sleeps, so it completes quickly).
+            if self._warmup_thread and self._warmup_thread.is_alive():
+                self._warmup_thread.join(timeout=3.0)
 
-            # Stop background updates
+            # Stop the periodic background update thread.
             self._stop_background_updates()
 
-            # Close vector store
+            # Close vector store.
             if self.vector_store:
                 self.vector_store.close()
                 self.vector_store = None
