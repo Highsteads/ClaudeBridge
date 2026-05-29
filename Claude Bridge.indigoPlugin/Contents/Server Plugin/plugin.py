@@ -5,8 +5,9 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
 # Date:        29-05-2026
-# Version:     2.6.5
+# Version:     2.6.6
 #
+# v2.6.6 (29-05-2026): Fixed check_plugin_updates (getPluginList returns PluginInfo objects).
 # v2.6.5 (29-05-2026): Fixed VectorStoreManager.stop() race — it early-returned
 # `if not self._running`, but _running is only set True AFTER the async warmup
 # finishes, so a restart landing mid-warmup (the usual case) orphaned the

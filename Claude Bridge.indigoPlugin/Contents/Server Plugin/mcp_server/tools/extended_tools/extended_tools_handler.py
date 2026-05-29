@@ -688,12 +688,15 @@ class ExtendedToolsHandler(BaseToolHandler):
         self.log_incoming_request("check_plugin_updates", {})
         try:
             results: List[Dict[str, Any]] = []
-            plugin_ids = indigo.server.getPluginList() or []
-            for pid in plugin_ids:
+            # getPluginList() returns PluginInfo objects, not id strings — use them
+            # directly. Passing one back into getPlugin() raised a
+            # getPlugin(PluginInfo) signature mismatch and serialised plugin_id as {}.
+            plugins = indigo.server.getPluginList() or []
+            for p in plugins:
                 try:
-                    p = indigo.server.getPlugin(pid)
                     if p is None:
                         continue
+                    pid = getattr(p, "pluginId", "")
                     results.append({
                         "plugin_id":             pid,
                         "display_name":          getattr(p, "pluginDisplayName", pid),
