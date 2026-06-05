@@ -5,7 +5,7 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.7
 # Date:        29-05-2026
-# Version:     2.6.6
+# Version:     2.6.7
 #
 # v2.6.6 (29-05-2026): Fixed check_plugin_updates (getPluginList returns PluginInfo objects).
 # v2.6.5 (29-05-2026): Fixed VectorStoreManager.stop() race — it early-returned

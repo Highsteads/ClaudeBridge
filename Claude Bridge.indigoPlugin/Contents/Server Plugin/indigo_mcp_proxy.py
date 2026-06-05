@@ -49,10 +49,13 @@ def _coerce_args(args: dict) -> dict:
                     continue
                 except (json.JSONDecodeError, ValueError):
                     pass
-            # Plain integer
+            # Plain integer ("--5" passes lstrip("-").isdigit() but int() raises — guard it)
             if stripped.lstrip("-").isdigit():
-                coerced[key] = int(stripped)
-                continue
+                try:
+                    coerced[key] = int(stripped)
+                    continue
+                except ValueError:
+                    pass   # fall through to float / leave as string
             # Plain float
             try:
                 coerced[key] = float(stripped)
