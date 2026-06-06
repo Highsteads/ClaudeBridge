@@ -31,9 +31,19 @@ MODEL_TOKEN_LIMITS = {
     "claude-sonnet-4-6":         200000,
     "claude-haiku-4-5-20251001": 200000,
 }
-DEFAULT_RESPONSE_TOKEN_RESERVE = int(os.environ.get("OPENAI_RESPONSE_TOKEN_RESERVE", 2000))
-DEFAULT_MAX_ITEMS_PER_CHUNK    = int(os.environ.get("OPENAI_MAX_ITEMS_PER_CHUNK", 100))
-DEFAULT_SUMMARIZATION_MODEL    = os.environ.get("OPENAI_SUMMARIZATION_MODEL", DEFAULT_MODEL)
+# Tuning knobs (renamed from OPENAI_* to ANTHROPIC_* after the Claude rewrite).
+# Guarded so a non-numeric env value can never crash import.
+try:
+    DEFAULT_RESPONSE_TOKEN_RESERVE = int(os.environ.get("ANTHROPIC_RESPONSE_TOKEN_RESERVE", 2000))
+except (ValueError, TypeError):
+    DEFAULT_RESPONSE_TOKEN_RESERVE = 2000
+try:
+    DEFAULT_MAX_ITEMS_PER_CHUNK    = int(os.environ.get("ANTHROPIC_MAX_ITEMS_PER_CHUNK", 100))
+except (ValueError, TypeError):
+    DEFAULT_MAX_ITEMS_PER_CHUNK    = 100
+DEFAULT_SUMMARIZATION_MODEL    = os.environ.get("ANTHROPIC_SUMMARIZATION_MODEL", DEFAULT_MODEL)
+# Default output token cap for a single completion (configurable per call).
+DEFAULT_MAX_OUTPUT_TOKENS      = 4096
 
 _template_dir = Path(__file__).parent.parent.parent / "prompts"
 _env = Environment(
@@ -214,8 +224,13 @@ def perform_completion(
     Perform a completion using Anthropic Claude.
     Maintains the same public interface as the original OpenAI implementation.
     """
-    model      = model or DEFAULT_MODEL
-    max_tokens = 4096  # Generous default; override per call if needed
+    # Resolve max output tokens (configurable via config dict, else default).
+    max_tokens = DEFAULT_MAX_OUTPUT_TOKENS
+    if config and isinstance(config, dict):
+        try:
+            max_tokens = int(config.get("max_tokens", DEFAULT_MAX_OUTPUT_TOKENS))
+        except (ValueError, TypeError):
+            max_tokens = DEFAULT_MAX_OUTPUT_TOKENS
 
     # ---- Multi-stage RAG ----
     if isinstance(messages, dict) and "context" in messages and "question" in messages:
@@ -244,6 +259,17 @@ def perform_completion(
         msgs = _normalise_messages(messages)
 
     system, user_msgs = _split_system(msgs)
+
+    # Auto-select model from estimated token count when the caller didn't
+    # pin one explicitly (previously this logic was dead — the default path
+    # always used DEFAULT_MODEL).
+    if not model:
+        try:
+            model = select_optimal_model(user_msgs)
+        except Exception as e:
+            logger.debug(f"Model auto-selection failed ({e}); using default")
+            model = DEFAULT_MODEL
+
     client = _get_client()
 
     # ---- Streaming ----

@@ -4,12 +4,12 @@
 
 Once installed, Claude can query device states, turn devices on and off, read and write variables, execute action groups, search your home's entity database, and query the Indigo event log — all in natural language, with no manual scripting required.
 
-**Author:** CliveS & Claude Opus 4.7
+**Author:** CliveS & Claude Opus 4.8
 **Platform:** Indigo 2023.2 or later, macOS (Python 3.11+ bundled with Indigo)
 
 *Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.4.2
+**Version:** 2.7.0
 
 ---
 
@@ -19,14 +19,14 @@ Claude Bridge runs inside Indigo as a small **MCP server** (Model Context
 Protocol — an open standard from Anthropic for letting AI agents call
 external tools). [Claude Code](https://claude.ai/download), Anthropic's
 terminal-based coding agent, connects to that server via a tiny stdio
-proxy and gains access to **86 tools** that read and write your Indigo
+proxy and gains access to **136 tools** that read and write your Indigo
 system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
 │  Claude Code        │  stdio  │  indigo_mcp_proxy.py │  HTTPS  │  Indigo IWS  │
 │  (terminal)         │ ───────►│  (local Python)      │ ───────►│  + plugin    │
-│  asks for tool      │         │  adds Bearer token,  │         │  exposes 86  │
+│  asks for tool      │         │  adds Bearer token,  │         │  exposes 136 │
 │  Claude reasons     │         │  protocol bridging   │         │  MCP tools   │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
@@ -165,7 +165,7 @@ minutes; Claude does it in a couple of round-trips.
 
 ## What it does
 
-Claude Bridge exposes **86 MCP tools** across **16 categories** that give Claude
+Claude Bridge exposes **136 MCP tools** across **16 categories** that give Claude
 Code full read/write access to a running Indigo server. The capability surface
 falls into the following groups — full per-tool listing is in
 [Available Tools](#available-tools) further down, and
@@ -321,7 +321,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 86 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 136 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first; the
@@ -402,7 +402,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 86 tools available.
+The `indigo-mcp` tools will appear on next session start. You should see 136 tools available.
 
 </details>
 
@@ -455,7 +455,7 @@ Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridg
 
 ## Available Tools
 
-**86 tools in 16 categories.** Counts verified against the plugin's tool
+**136 tools in 16 categories.** Counts verified against the plugin's tool
 registration at `mcp_server/mcp_handler.py`.
 
 ### Device queries & search (6)
@@ -727,7 +727,7 @@ Claude Bridge.indigoPlugin/
 │           │   └── vector_store/           # Text search store
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
-│           └── tools/                      # 17 tool handler modules (86 tools)
+│           └── tools/                      # 17 tool handler modules (136 tools)
 └── README.md
 
 indigo_mcp_proxy.py                         # Claude Code stdio proxy script
@@ -737,6 +737,18 @@ README.md
 ---
 
 ## Changelog
+
+### 2.7.0 (2026-06-06)
+A thorough security and robustness pass off the back of a full multi-agent review. The headline is that the optional per-token scope layer now does what it says on the tin.
+
+- **Per-token scopes are properly enforced now (deny-by-default).** If you hand out a `scopes.json` token marked read-only, it really is read-only. Before this, a good number of the device, variable, schedule and script tools weren't classified and quietly fell through to the read bucket, so a read-only token could still change things. Every one of the 136 tools is now sorted into read, write or admin, anything destructive (deleting, running scripts, unlocking a lock, restarting a plugin) needs admin, and a token with an empty scope list or one that isn't listed at all is denied rather than waved through. There is also a startup self-check that shouts in the log if a newly added tool ever slips through unclassified. If you don't use `scopes.json` at all then nothing changes for you — your single Indigo bearer token still has full access exactly as before, gated by Indigo's own web-server authentication.
+- **The file-handling tools now stay where they belong.** The script tools, the plugin-dev helpers and `find_large_files` are confined to the Indigo and script folders, so a stray or mistyped name can't wander off elsewhere on the Mac.
+- **The proxy is gentler with your arguments.** A value like `true`, `null` or a code with a leading zero is left exactly as you typed it rather than being turned into something else, the connection timeout is more generous for long-running tools, and a dropped connection no longer risks running the same action twice.
+- **`restart_plugin` will no longer restart Claude Bridge itself** — that only ever pulled the rug out from under the live session. Use the Indigo Plugins menu for that.
+- **A long tail of smaller robustness fixes** — guarded number handling throughout (a blank or odd config field can't crash startup any more), a couple of threading tidy-ups, a brightness request of 1 now means 1 per cent rather than full, and the historical-analysis property suggestion talks to Claude properly (it had been silently falling back).
+- **New test suite** — 75 tests covering the scope model, the proxy coercion, the state filters and the script-path safety, so these don't quietly regress.
+
+No action needed on your part — update the plugin and carry on as before.
 
 ### 2.4.1 (2026-05-23)
 - **Credentials no longer leaked to subprocesses (secrets-policy compliance).**

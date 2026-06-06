@@ -96,9 +96,20 @@ class LogQueryHandler(BaseToolHandler):
             if os.path.exists(log_file):
                 try:
                     with open(log_file, "r", encoding="utf-8", errors="replace") as fh:
+                        # last_kept tracks the entry the most recent matched line
+                        # produced (None if that entry was filtered out). Lines
+                        # that do not match the timestamp prefix are continuation
+                        # lines of a multi-line message (tracebacks, status
+                        # blocks) — append them to the current entry rather than
+                        # dropping them.
+                        last_kept: Optional[Dict[str, Any]] = None
                         for line in fh:
-                            m = _LOG_LINE_RE.match(line.rstrip("\n"))
+                            stripped = line.rstrip("\n")
+                            m = _LOG_LINE_RE.match(stripped)
                             if not m:
+                                # Continuation of the previous (kept) entry.
+                                if last_kept is not None:
+                                    last_kept["Message"] += "\n" + stripped
                                 continue
                             ts_str, source, message = (
                                 m.group(1), m.group(2), m.group(3)
@@ -106,16 +117,21 @@ class LogQueryHandler(BaseToolHandler):
                             try:
                                 ts = datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S")
                             except ValueError:
+                                last_kept = None
                                 continue
                             if after_dt  and ts <= after_dt:
+                                last_kept = None
                                 continue
                             if before_dt and ts >= before_dt:
+                                last_kept = None
                                 continue
-                            results.append({
+                            entry = {
                                 "TimeStamp": ts_str,
                                 "TypeStr":   source,
                                 "Message":   message,
-                            })
+                            }
+                            results.append(entry)
+                            last_kept = entry
                 except OSError as exc:
                     self.logger.warning(f"Could not read log file {log_file}: {exc}")
             current += timedelta(days=1)

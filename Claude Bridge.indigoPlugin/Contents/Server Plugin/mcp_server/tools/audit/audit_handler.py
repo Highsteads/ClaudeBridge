@@ -217,6 +217,13 @@ class AuditHandler(BaseToolHandler):
         """Return devices with a batteryLevel state below the given threshold (%)."""
         self.log_incoming_request("find_low_battery", {"threshold": threshold})
         try:
+            try:
+                threshold = int(threshold)
+            except (ValueError, TypeError):
+                self.logger.warning(
+                    f"find_low_battery: non-numeric threshold {threshold!r}; using 20"
+                )
+                threshold = 20
             low = self._collect_low_battery(threshold)
             result = {
                 "success":   True,
@@ -262,6 +269,13 @@ class AuditHandler(BaseToolHandler):
         """
         self.log_incoming_request("find_stale_devices", {"days": days})
         try:
+            try:
+                days = int(days)
+            except (ValueError, TypeError):
+                self.logger.warning(
+                    f"find_stale_devices: non-numeric days {days!r}; using 7"
+                )
+                days = 7
             stale = self._collect_stale_devices(days)
             result = {
                 "success":   True,
@@ -388,7 +402,7 @@ class AuditHandler(BaseToolHandler):
                 name_map.setdefault(dev.name.lower(), []).append(
                     {"id": dev.id, "name": dev.name, "enabled": dev.enabled}
                 )
-                addr = getattr(dev, "address", "").strip()
+                addr = (getattr(dev, "address", "") or "").strip()
                 if addr:
                     addr_map.setdefault(addr, []).append(
                         {"id": dev.id, "name": dev.name, "address": addr}
@@ -417,13 +431,43 @@ class AuditHandler(BaseToolHandler):
 
             # ── Script analysis ────────────────────────────────────────────
             scripts_dir = _scripts_dir()
-            id_map      = _scan_scripts_for_ids(scripts_dir)
 
-            # Orphaned: IDs in scripts that aren't any device or variable
+            # Orphaned-ref detection deliberately uses a NARROW, context-aware
+            # scan rather than the broad 8-12 digit scan used elsewhere: an
+            # 8-12 digit literal on its own is just as likely to be a phone
+            # number, epoch, port or magic constant as an Indigo ID. Only count
+            # a numeric literal as an entity reference when it appears inside an
+            # Indigo entity-access pattern (indigo.devices[N], indigo.variables[N],
+            # devices[N], variables[N], device(N), variable(N) and the
+            # getDependencies/by-id helper forms).
+            ref_pat = re.compile(
+                r"(?:indigo\.)?(?:devices|variables|device|variable)"
+                r"(?:\s*\[\s*|\s*\(\s*|_by_id\s*\(\s*)(\d{6,12})\b"
+            )
+            ctx_id_map: Dict[int, List[str]] = {}
+            if os.path.isdir(scripts_dir):
+                for entry in os.scandir(scripts_dir):
+                    if not (entry.name.endswith(".py") and entry.is_file()):
+                        continue
+                    try:
+                        with open(entry.path, "r", encoding="utf-8",
+                                  errors="replace") as fh:
+                            content = fh.read()
+                    except OSError:
+                        continue
+                    for m in ref_pat.findall(content):
+                        iid = int(m)
+                        ctx_id_map.setdefault(iid, [])
+                        if entry.name not in ctx_id_map[iid]:
+                            ctx_id_map[iid].append(entry.name)
+
+            # Orphaned: context-qualified IDs in scripts that aren't any device
+            # or variable.
             orphaned_refs = [
                 {"id": iid, "scripts": scripts,
-                 "note": "ID in scripts but no matching device or variable"}
-                for iid, scripts in id_map.items()
+                 "note": "ID referenced via an Indigo entity accessor in scripts "
+                         "but no matching device or variable"}
+                for iid, scripts in ctx_id_map.items()
                 if iid not in all_known
             ]
 
@@ -492,13 +536,42 @@ class AuditHandler(BaseToolHandler):
         except Exception as exc:
             return self.handle_exception(exc, "find_conflicts")
 
+    @staticmethod
+    def _deps_to_dict(deps) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Normalise an indigo.Dict returned by getDependencies() into a plain
+        dict keyed by category, each holding a list of {"id", "name"} entries.
+
+        getDependencies returns categories (triggers, schedules, actionGroups,
+        devices, variables, controlPages) each a list of indigo.Dict entries
+        keyed "ID" / "Name" (capitalised).
+        """
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        if not deps:
+            return out
+        try:
+            for category, items in dict(deps).items():
+                bucket: List[Dict[str, Any]] = []
+                for it in (items or []):
+                    try:
+                        bucket.append({"id": it["ID"], "name": it["Name"]})
+                    except Exception:
+                        # Unexpected entry shape — preserve it as a string.
+                        bucket.append({"raw": str(it)})
+                out[category] = bucket
+        except Exception:
+            pass
+        return out
+
     def dependency_map(self, entity_id: Union[int, str]) -> Dict[str, Any]:
         """
         Build a dependency map for a device or variable.
-        Returns which Python scripts reference it by numeric ID.
-        Also returns all triggers and action groups (names only — the Indigo
-        API does not expose their internal conditions or action steps, so
-        content-level filtering is not possible).
+
+        Uses indigo.<ns>.getDependencies(), the authoritative reverse-dependency
+        API, to return exactly which triggers, schedules, action groups, control
+        pages, devices and variables reference this entity. Also returns which
+        Python scripts reference it by numeric ID (scripts are not covered by
+        getDependencies).
         """
         self.log_incoming_request("dependency_map", {"entity_id": entity_id})
         try:
@@ -535,21 +608,22 @@ class AuditHandler(BaseToolHandler):
                 return {"success": False,
                         "error": f"No device or variable found matching '{entity_id}'"}
 
-            # Scan scripts
+            # Scan scripts (getDependencies does not cover script bodies)
             scripts_dir  = _scripts_dir()
             id_map       = _scan_scripts_for_ids(scripts_dir)
             scripts_refs = id_map.get(eid, [])
 
-            # List all triggers and action groups (content not accessible via API)
-            all_triggers = [
-                {"id": indigo.triggers[t].id, "name": indigo.triggers[t].name,
-                 "enabled": indigo.triggers[t].enabled}
-                for t in indigo.triggers
-            ]
-            all_ags = [
-                {"id": indigo.actionGroups[a].id, "name": indigo.actionGroups[a].name}
-                for a in indigo.actionGroups
-            ]
+            # Authoritative reverse-dependency set via getDependencies
+            references: Dict[str, List[Dict[str, Any]]] = {}
+            dep_note = None
+            try:
+                ns = indigo.device if entity_type == "device" else indigo.variable
+                references = self._deps_to_dict(ns.getDependencies(eid))
+            except Exception as dep_exc:
+                dep_note = (
+                    f"getDependencies unavailable for this entity ({dep_exc}); "
+                    f"only script references are shown."
+                )
 
             result = {
                 "success":      True,
@@ -560,15 +634,17 @@ class AuditHandler(BaseToolHandler):
                     "count":   len(scripts_refs),
                     "scripts": scripts_refs,
                 },
-                "api_limitation": (
-                    "Indigo's Python API does not expose trigger conditions or "
-                    "action group steps — content-level dependency mapping is not "
-                    "possible. The lists below show ALL triggers and action groups; "
-                    "manual inspection is needed to find which ones reference this entity."
+                "references": references,
+                "note": (
+                    "'references' is the authoritative reverse-dependency set from "
+                    "indigo.getDependencies (triggers/schedules/action groups/control "
+                    "pages/devices/variables that reference this entity). It does NOT "
+                    "include Python scripts (see 'script_references') or any plugin "
+                    "that hard-codes the ID in its own source."
                 ),
-                "all_triggers":      all_triggers,
-                "all_action_groups": all_ags,
             }
+            if dep_note:
+                result["dependency_warning"] = dep_note
             self.log_tool_outcome("dependency_map", True,
                                   f"{len(scripts_refs)} script refs for '{ename}'")
             return result

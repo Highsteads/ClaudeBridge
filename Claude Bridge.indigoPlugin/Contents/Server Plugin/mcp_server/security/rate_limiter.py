@@ -64,6 +64,7 @@ class RateLimiter:
         self._minute_log: Dict[str, Deque[float]] = defaultdict(deque)
         self._day_log:    Dict[str, Deque[float]] = defaultdict(deque)
         self._lock = threading.Lock()
+        self._last_sweep = 0.0   # monotonic ts of last stale-key sweep
 
     def _limits_for_scope(self, scopes: set) -> Tuple[int, int]:
         if "admin" in scopes:
@@ -72,6 +73,24 @@ class RateLimiter:
                 int(self.per_day    * self.admin_multiplier),
             )
         return self.per_minute, self.per_day
+
+    def _sweep_locked(self, now: float) -> None:
+        """
+        Drop keys whose day-window is fully expired. Runs at most once a minute
+        so the per-key dicts cannot grow unbounded from rotating session ids.
+        MUST hold _lock.
+        """
+        if now - self._last_sweep < self.MINUTE:
+            return
+        self._last_sweep = now
+        day_cutoff = now - self.DAY
+        for sid in list(self._day_log.keys()):
+            dl = self._day_log[sid]
+            while dl and dl[0] < day_cutoff:
+                dl.popleft()
+            if not dl:
+                self._day_log.pop(sid, None)
+                self._minute_log.pop(sid, None)   # minute entries are older still
 
     def check(self, session_id: str, scopes: set) -> None:
         """
@@ -85,6 +104,7 @@ class RateLimiter:
         per_minute, per_day = self._limits_for_scope(scopes or set())
 
         with self._lock:
+            self._sweep_locked(now)
             min_log = self._minute_log[session_id]
             day_log = self._day_log[session_id]
 

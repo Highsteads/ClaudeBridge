@@ -3,9 +3,9 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Opus 4.7
-# Date:        29-05-2026
-# Version:     2.6.7
+# Author:      CliveS & Claude Opus 4.8
+# Date:        06-06-2026
+# Version:     2.7.0
 #
 # v2.6.6 (29-05-2026): Fixed check_plugin_updates (getPluginList returns PluginInfo objects).
 # v2.6.5 (29-05-2026): Fixed VectorStoreManager.stop() race — it early-returned
@@ -242,7 +242,9 @@ class Plugin(indigo.PluginBase):
         self.small_model       = plugin_prefs.get("small_model", "claude-haiku-4-5-20251001")
 
         # InfluxDB configuration — same resolution pattern
-        self.enable_influxdb   = plugin_prefs.get("enable_influxdb", False)
+        # Normalise to a real bool once here (a saved pref may be "true"/"false"
+        # strings) so callers don't each need their own bool() wrap.
+        self.enable_influxdb   = self._as_bool(plugin_prefs.get("enable_influxdb", False))
         # Strip protocol from host (clients add their own) — accept either form in config
         _influx_url            = (INFLUXDB_HOST or plugin_prefs.get("influx_url", "")).strip()
         self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
@@ -279,11 +281,41 @@ class Plugin(indigo.PluginBase):
         # Plugin start time (used by /health endpoint)
         self._start_time = time.time()
 
-        # Set up logging properly
-        self.log_level = int(plugin_prefs.get("log_level", logging.INFO))
+        # Set up logging properly — guard the coercion (a blank/non-numeric
+        # stored value must not crash plugin start).
+        try:
+            self.log_level = int(plugin_prefs.get("log_level", logging.INFO))
+        except (TypeError, ValueError):
+            self.log_level = logging.INFO
+            self.logger.warning("\tlog_level pref not numeric — defaulting to INFO")
         self.indigo_log_handler.setLevel(self.log_level)
         self.plugin_file_handler.setLevel(self.log_level)
         logging.getLogger("Plugin").setLevel(self.log_level)
+
+    @staticmethod
+    def _as_bool(value) -> bool:
+        """Coerce a pref/config value to bool. A saved dialog re-serialises a
+        checkbox as the string 'true'/'false'/'0'/'1', so bool('false') would
+        wrongly be True — handle the string forms explicitly."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+
+    def _as_port(self, value, field="port", default=8086) -> int:
+        """Coerce a port pref to a valid 1-65535 int, falling back (with a
+        WARNING) on a blank/non-numeric/out-of-range value. isdigit() alone
+        silently accepts nothing-useful and rejects negatives oddly."""
+        try:
+            p = int(value)
+        except (TypeError, ValueError):
+            self.logger.warning(f"\t{field} {value!r} not numeric — using {default}")
+            return default
+        if not (1 <= p <= 65535):
+            self.logger.warning(f"\t{field} {p} out of range 1-65535 — using {default}")
+            return default
+        return p
 
     def test_connections(self) -> bool:
         """
@@ -527,7 +559,7 @@ class Plugin(indigo.PluginBase):
             small_model       = self.small_model,
             influxdb_enabled  = bool(self.enable_influxdb),
             influxdb_host     = self.influx_url.replace("http://", "").replace("https://", ""),
-            influxdb_port     = int(self.influx_port) if str(self.influx_port).isdigit() else 8086,
+            influxdb_port     = self._as_port(self.influx_port, "influx_port"),
             influxdb_username = self.influx_login,
             influxdb_password = self.influx_password,
             influxdb_database = self.influx_database,
@@ -636,8 +668,12 @@ class Plugin(indigo.PluginBase):
             if secrets_path.exists():
                 try:
                     iws_secrets = _json.loads(secrets_path.read_text())
-                    if isinstance(iws_secrets, list) and iws_secrets:
-                        token = iws_secrets[0]
+                    # Validate shape/content before trusting element 0 — a non-list
+                    # or an empty/blank/non-string entry falls through cleanly to
+                    # the IndigoSecrets.py fallback rather than patching in junk.
+                    if (isinstance(iws_secrets, list) and iws_secrets
+                            and isinstance(iws_secrets[0], str) and iws_secrets[0].strip()):
+                        token = iws_secrets[0].strip()
                 except Exception as _e:
                     self.logger.warning(f"\tIWS secrets.json read failed: {_e}")
             if not token:
@@ -655,14 +691,25 @@ class Plugin(indigo.PluginBase):
             else:
                 try:
                     text     = dest_proxy.read_text(encoding="utf-8")
+                    # Callable replacement so a token containing backslashes,
+                    # '\g<...>' or quotes is inserted LITERALLY — a plain re.sub
+                    # replacement string would interpret backreferences and
+                    # silently corrupt the token.
                     new_text = _re.sub(
                         r'^(BEARER_TOKEN\s*=\s*")[^"]*(")',
-                        rf'\g<1>{token}\g<2>',
+                        lambda m: m.group(1) + token + m.group(2),
                         text, flags=_re.MULTILINE
                     )
                     dest_proxy.write_text(new_text, encoding="utf-8")
                 except Exception as _e:
                     self.logger.error(f"[Config] Bearer token patch failed: {_e}")
+
+            # The deployed proxy now holds the live bearer token — tighten perms
+            # so it is not group/world readable (was inheriting umask 0o640).
+            try:
+                _os.chmod(dest_proxy, 0o600)
+            except Exception as _e:
+                self.logger.warning(f"\tCould not chmod deployed proxy to 0o600: {_e}")
 
             changed.append("proxy script")
         else:
@@ -790,6 +837,11 @@ class Plugin(indigo.PluginBase):
         GET /message/com.clives.indigoplugin.claudebridge/health/
         Returns plugin uptime, session count, tool inventory and recent
         tool-call latencies as JSON. Cheap to call — safe for monitors.
+
+        Auth: gated by IWS bearer auth only (like every /message/ endpoint) —
+        it does NOT pass through the plugin's per-token scope layer. That is
+        intentional: it exposes no secrets and no mutation, only read-only
+        diagnostics, so a 'read'-equivalent gate is sufficient.
         """
         if not self.mcp_handler:
             return {
@@ -825,6 +877,10 @@ class Plugin(indigo.PluginBase):
         Returns an interactive HTML page documenting every registered MCP tool
         — its description, arguments, and required fields. Useful for users,
         plugin testers, and debugging during development.
+
+        Auth: gated by IWS bearer auth only (not the per-token scope layer).
+        Intentional — the page is read-only tool documentation, no secrets and
+        no mutation, so it carries no token strings or live data.
         """
         if not self.mcp_handler:
             return {
@@ -1184,10 +1240,12 @@ class Plugin(indigo.PluginBase):
         string event ID.  Neither indigo.server.fireEvent() nor
         self.triggerEvent() exist on PluginBase; both raise AttributeError.
         """
+        super().triggerStartProcessing(trigger)
         self.event_triggers[trigger.id] = trigger
 
     def triggerStopProcessing(self, trigger):
         """Indigo lifecycle: trigger disabled or deleted."""
+        super().triggerStopProcessing(trigger)
         self.event_triggers.pop(trigger.id, None)
 
     def fire_claude_event(self, event_name: str, data=None, source: str = "claude") -> dict:
@@ -1285,6 +1343,7 @@ class Plugin(indigo.PluginBase):
         Called when an Indigo variable value changes.
         Queues the event for any active Claude subscriptions.
         """
+        super().variableUpdated(origVar, newVar)
         if (
             self.mcp_handler
             and hasattr(self.mcp_handler, "events_handler")
@@ -1314,6 +1373,7 @@ class Plugin(indigo.PluginBase):
         self-checks aren't sufficient if the plugin ever has more than one
         device — block the whole pluginId at the top.
         """
+        super().deviceUpdated(origDev, newDev)
         if newDev.pluginId == self.pluginId:
             # Still process mcpServer config tracking for our own device, but
             # skip the events-queue path entirely (no MCP subscriber wants
@@ -1440,7 +1500,10 @@ class Plugin(indigo.PluginBase):
             self.logger.info("Applying configuration changes...")
 
             # Update ALL configuration values from the dialog
-            self.log_level = int(values_dict.get("log_level", 20))
+            try:
+                self.log_level = int(values_dict.get("log_level", 20))
+            except (TypeError, ValueError):
+                self.log_level = logging.INFO
             self.indigo_log_handler.setLevel(self.log_level)
             self.plugin_file_handler.setLevel(self.log_level)
             logging.getLogger("Plugin").setLevel(self.log_level)
@@ -1492,7 +1555,7 @@ class Plugin(indigo.PluginBase):
                 small_model       = self.small_model,
                 influxdb_enabled  = bool(self.enable_influxdb),
                 influxdb_host     = self.influx_url.replace("http://", "").replace("https://", ""),
-                influxdb_port     = int(self.influx_port) if str(self.influx_port).isdigit() else 8086,
+                influxdb_port     = self._as_port(self.influx_port, "influx_port"),
                 influxdb_username = self.influx_login,
                 influxdb_password = self.influx_password,
                 influxdb_database = self.influx_database,
@@ -1534,7 +1597,11 @@ class Plugin(indigo.PluginBase):
                     extras.append(("MCP Local URL:", urls[0].get("url", "")))
             except Exception:
                 pass
-            extras.append(("Tools:", "64+"))
+            _tool_count = (len(self.mcp_handler._tools)
+                           if getattr(self, "mcp_handler", None) is not None
+                           and getattr(self.mcp_handler, "_tools", None) is not None
+                           else "?")
+            extras.append(("Tools:", str(_tool_count)))
             extras.append(("Anthropic Key:", "configured" if self.anthropic_api_key else "MISSING"))
             extras.append(("InfluxDB:", "enabled" if self.enable_influxdb else "disabled"))
             extras.append(("Access Mode:", str(self.access_mode)))

@@ -101,6 +101,10 @@ class EnergyToolsHandler(BaseToolHandler):
                 return {"success": False,
                         "error": "SigenEnergyManager log directory not found"}
 
+            try:
+                days = int(days)
+            except (ValueError, TypeError):
+                days = 3
             days = max(1, min(days, 14))  # cap at 14 days
             today  = datetime.now()
             result_lines: Dict[str, List[str]] = {}
@@ -147,6 +151,10 @@ class EnergyToolsHandler(BaseToolHandler):
                 return {"success": False,
                         "error": "SigenEnergyManager log directory not found"}
 
+            try:
+                days = int(days)
+            except (ValueError, TypeError):
+                days = 14
             days  = max(1, min(days, 90))
             today = datetime.now()
             daily: List[Dict[str, Any]] = []
@@ -241,6 +249,20 @@ class EnergyToolsHandler(BaseToolHandler):
                 return {"success": False,
                         "error": "SigenEnergyManager log directory not found"}
 
+            # Coerce defensively — a lax client may send these as strings
+            try:
+                period_a_days = int(period_a_days)
+            except (ValueError, TypeError):
+                period_a_days = 7
+            try:
+                period_b_days = int(period_b_days)
+            except (ValueError, TypeError):
+                period_b_days = 7
+            try:
+                period_b_offset = int(period_b_offset)
+            except (ValueError, TypeError):
+                period_b_offset = 7
+
             today = datetime.now()
 
             def _sum_period(start_offset: int, n_days: int) -> Dict[str, Any]:
@@ -253,17 +275,22 @@ class EnergyToolsHandler(BaseToolHandler):
                     if not logpath:
                         continue
                     dates.append(date.strftime("%Y-%m-%d"))
+                    # Collect per-day totals so multiple [Daily] lines in one
+                    # file don't double-count — last [Daily] line wins per day,
+                    # matching energy_daily_summary's day_data.update(parsed).
+                    day_data: Dict[str, Any] = {}
                     try:
                         with open(logpath, "r", encoding="utf-8",
                                   errors="replace") as fh:
                             for line in fh:
                                 parsed = _parse_daily_line(line)
                                 if parsed:
-                                    for k in totals:
-                                        totals[k] = round(
-                                            totals[k] + parsed.get(k, 0.0), 2)
+                                    day_data.update(parsed)
                     except OSError:
                         pass
+                    for k in totals:
+                        totals[k] = round(
+                            totals[k] + day_data.get(k, 0.0), 2)
                 home   = totals["home_kwh"]
                 imp    = totals["import_kwh"]
                 sself  = (round((1 - imp / home) * 100, 1)

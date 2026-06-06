@@ -17,7 +17,17 @@ from ..common.json_encoder import filter_json, KEYS_TO_KEEP_MINIMAL_DEVICES
 
 class IndigoDataProvider(DataProvider):
     """Data provider implementation for accessing Indigo entities."""
-    
+
+    # Sane client-side bounds for thermostat setpoints (degrees Celsius).
+    # Indigo / the device driver may clamp further, but this rejects absurd
+    # values before they ever reach the hardware. Heat range covers a sensible
+    # household band; cool allows a slightly higher ceiling.
+    SETPOINT_HEAT_MIN_C = 5.0
+    SETPOINT_HEAT_MAX_C = 35.0
+    SETPOINT_COOL_MIN_C = 5.0
+    SETPOINT_COOL_MAX_C = 40.0
+
+
     def __init__(self, logger: Optional[logging.Logger] = None):
         """
         Initialize the Indigo data provider.
@@ -220,13 +230,34 @@ class IndigoDataProvider(DataProvider):
             "actions": self.get_all_actions()
         }
     
+    def _poll_for_change(self, device_id: int, attr: str, previous: Any,
+                         timeout: float = 0.5, interval: float = 0.05) -> Any:
+        """
+        Briefly poll a device attribute for a change after issuing a command,
+        instead of an unconditional full-second sleep on the synchronous IWS
+        request thread. Returns as soon as the attribute differs from
+        ``previous`` (or after ``timeout`` seconds), so a settled command
+        returns quickly and the worker thread is not held for a fixed second.
+        """
+        deadline = time.monotonic() + timeout
+        current = previous
+        while time.monotonic() < deadline:
+            time.sleep(interval)
+            try:
+                current = getattr(indigo.devices[device_id], attr)
+            except Exception:
+                break
+            if current != previous:
+                break
+        return current
+
     def turn_on_device(self, device_id: int) -> Dict[str, Any]:
         """
         Turn on a device.
-        
+
         Args:
             device_id: The device ID to turn on
-            
+
         Returns:
             Dictionary with operation results
         """
@@ -240,21 +271,21 @@ class IndigoDataProvider(DataProvider):
             
             # Turn on the device
             indigo.device.turnOn(device_id)
-            
-            # Wait 1 second for device state to update
-            time.sleep(1)
-            
-            # Get fresh device object from Indigo to detect actual state changes
+
+            # Briefly poll for the state to update (early exit on change) instead
+            # of an unconditional 1s sleep that would stall the IWS worker thread.
+            current_state = self._poll_for_change(device_id, "onState", previous_state)
+
+            # Get fresh device object from Indigo for the device name
             device_after = indigo.devices[device_id]
-            current_state = device_after.onState
-            
+
             return {
                 "changed": previous_state != current_state,
                 "previous": previous_state,
                 "current": current_state,
                 "device_name": device_after.name
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error turning on device {device_id}: {e}")
             return {"error": str(e)}
@@ -279,21 +310,21 @@ class IndigoDataProvider(DataProvider):
             
             # Turn off the device
             indigo.device.turnOff(device_id)
-            
-            # Wait 1 second for device state to update
-            time.sleep(1)
-            
-            # Get fresh device object from Indigo to detect actual state changes
+
+            # Briefly poll for the state to update (early exit on change) instead
+            # of an unconditional 1s sleep that would stall the IWS worker thread.
+            current_state = self._poll_for_change(device_id, "onState", previous_state)
+
+            # Get fresh device object from Indigo for the device name
             device_after = indigo.devices[device_id]
-            current_state = device_after.onState
-            
+
             return {
                 "changed": previous_state != current_state,
                 "previous": previous_state,
                 "current": current_state,
                 "device_name": device_after.name
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error turning off device {device_id}: {e}")
             return {"error": str(e)}
@@ -322,25 +353,28 @@ class IndigoDataProvider(DataProvider):
             
             previous_brightness = device_before.brightness
             
-            # Normalize brightness value
-            # If value is between 0 and 1, convert to 0-100 range
-            if 0 <= brightness <= 1:
-                brightness_value = int(brightness * 100)
-            elif 0 <= brightness <= 100:
-                brightness_value = int(brightness)
+            # Normalize brightness value.
+            # A strict fraction in [0, 1) is treated as 0-1 and scaled to 0-100;
+            # everything from 1 upwards is treated as a 0-100 percent. This avoids
+            # the boundary collision where brightness=1 was scaled to 100% (a
+            # request for 1% drove the device to full brightness).
+            if 0 <= brightness < 1:
+                brightness_value = int(round(brightness * 100))
+            elif 1 <= brightness <= 100:
+                brightness_value = int(round(brightness))
             else:
                 return {"error": f"Invalid brightness value: {brightness}. Must be 0-1 or 0-100"}
             
             # Set brightness
             indigo.dimmer.setBrightness(device_id, value=brightness_value)
-            
-            # Wait 1 second for device state to update
-            time.sleep(1)
-            
-            # Get fresh device object from Indigo to detect actual state changes
+
+            # Briefly poll for the level to update (early exit on change) instead
+            # of an unconditional 1s sleep that would stall the IWS worker thread.
+            current_brightness = self._poll_for_change(device_id, "brightness", previous_brightness)
+
+            # Get fresh device object from Indigo for the device name
             device_after = indigo.devices[device_id]
-            current_brightness = device_after.brightness
-            
+
             return {
                 "changed": previous_brightness != current_brightness,
                 "previous": previous_brightness,
@@ -377,11 +411,15 @@ class IndigoDataProvider(DataProvider):
             
             # Update variable value - convert to string as Indigo variables are strings
             indigo.variable.updateValue(variable_id, value=str(value))
-            
-            # Get updated value
-            variable.refreshFromServer()
-            current_value = variable.value
-            
+
+            # Re-index from the server (consistent with the device methods) rather
+            # than refreshing a stale local object. A concurrent delete surfaces a
+            # clear message rather than a generic error.
+            try:
+                current_value = indigo.variables[variable_id].value
+            except KeyError:
+                return {"error": f"Variable {variable_id} was removed during update"}
+
             return {
                 "previous": previous_value,
                 "current": current_value
@@ -444,7 +482,16 @@ class IndigoDataProvider(DataProvider):
             }
 
             if line_count is not None:
-                params["lineCount"] = line_count
+                # Coerce + clamp to a sane range. A client (especially an AI)
+                # may emit a stringified or out-of-range value; never forward it
+                # to Indigo verbatim.
+                try:
+                    coerced = int(line_count)
+                    params["lineCount"] = max(1, min(2000, coerced))
+                except (ValueError, TypeError):
+                    self.logger.warning(
+                        f"Ignoring invalid line_count {line_count!r}; returning recent entries"
+                    )
 
             # Get log entries from Indigo server
             log_entries = indigo.server.getEventLogList(**params)
@@ -529,13 +576,25 @@ class IndigoDataProvider(DataProvider):
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found", "success": False}
             dev = indigo.devices[device_id]
+            try:
+                setpoint_c = float(setpoint)
+            except (ValueError, TypeError):
+                return {"error": f"Invalid heat setpoint '{setpoint}' (not a number)",
+                        "success": False}
+            if not (self.SETPOINT_HEAT_MIN_C <= setpoint_c <= self.SETPOINT_HEAT_MAX_C):
+                return {"error": f"Heat setpoint {setpoint_c} degC out of range "
+                                 f"({self.SETPOINT_HEAT_MIN_C}-{self.SETPOINT_HEAT_MAX_C} degC)",
+                        "success": False}
             previous = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else None
-            indigo.thermostat.setHeatSetpoint(device_id, value=float(setpoint))
+            indigo.thermostat.setHeatSetpoint(device_id, value=setpoint_c)
             dev = indigo.devices[device_id]
-            current = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else setpoint
+            # Report None (not the echoed request) when the device cannot confirm,
+            # so a silent no-op is not reported as the requested value taking effect.
+            confirmed = hasattr(dev, 'heatSetpoint')
+            current = dev.heatSetpoint if confirmed else None
             self.logger.info(f"Set heat setpoint '{dev.name}': {previous} -> {current} degC")
             return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current}
+                    "previous": previous, "current": current, "confirmed": confirmed}
         except Exception as e:
             self.logger.error(f"Error setting heat setpoint on {device_id}: {e}")
             return {"error": str(e), "success": False}
@@ -546,13 +605,24 @@ class IndigoDataProvider(DataProvider):
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found", "success": False}
             dev = indigo.devices[device_id]
+            try:
+                setpoint_c = float(setpoint)
+            except (ValueError, TypeError):
+                return {"error": f"Invalid cool setpoint '{setpoint}' (not a number)",
+                        "success": False}
+            if not (self.SETPOINT_COOL_MIN_C <= setpoint_c <= self.SETPOINT_COOL_MAX_C):
+                return {"error": f"Cool setpoint {setpoint_c} degC out of range "
+                                 f"({self.SETPOINT_COOL_MIN_C}-{self.SETPOINT_COOL_MAX_C} degC)",
+                        "success": False}
             previous = dev.coolSetpoint if hasattr(dev, 'coolSetpoint') else None
-            indigo.thermostat.setCoolSetpoint(device_id, value=float(setpoint))
+            indigo.thermostat.setCoolSetpoint(device_id, value=setpoint_c)
             dev = indigo.devices[device_id]
-            current = dev.coolSetpoint if hasattr(dev, 'coolSetpoint') else setpoint
+            # Report None (not the echoed request) when the device cannot confirm.
+            confirmed = hasattr(dev, 'coolSetpoint')
+            current = dev.coolSetpoint if confirmed else None
             self.logger.info(f"Set cool setpoint '{dev.name}': {previous} -> {current} degC")
             return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current}
+                    "previous": previous, "current": current, "confirmed": confirmed}
         except Exception as e:
             self.logger.error(f"Error setting cool setpoint on {device_id}: {e}")
             return {"error": str(e), "success": False}
@@ -612,9 +682,16 @@ class IndigoDataProvider(DataProvider):
             else:
                 indigo.device.unlock(device_id)
             dev = indigo.devices[device_id]
-            self.logger.info(f"Unlocked '{dev.name}'")
+            current = dev.onState  # locked = onState True for lock devices
+            # Log the observed transition rather than asserting success
+            # unconditionally — a rejected code leaves the lock locked.
+            # (The PIN code is deliberately never logged.)
+            if current != previous:
+                self.logger.info(f"Unlock command sent to '{dev.name}' (locked -> unlocked)")
+            else:
+                self.logger.info(f"Unlock command sent to '{dev.name}'; no state change observed")
             return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": dev.onState}
+                    "previous": previous, "current": current}
         except Exception as e:
             self.logger.error(f"Error unlocking device {device_id}: {e}")
             return {"error": str(e), "success": False}
@@ -652,10 +729,12 @@ class IndigoDataProvider(DataProvider):
             previous = dev.speedLevel if hasattr(dev, 'speedLevel') else None
             indigo.speedcontrol.setSpeedLevel(device_id, value=speed_val)
             dev = indigo.devices[device_id]
-            current = dev.speedLevel if hasattr(dev, 'speedLevel') else speed_val
+            # Report None (not the echoed request) when the device cannot confirm.
+            confirmed = hasattr(dev, 'speedLevel')
+            current = dev.speedLevel if confirmed else None
             self.logger.info(f"Set fan speed '{dev.name}': {previous} -> {current}%")
             return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current}
+                    "previous": previous, "current": current, "confirmed": confirmed}
         except Exception as e:
             self.logger.error(f"Error setting fan speed on {device_id}: {e}")
             return {"error": str(e), "success": False}
@@ -683,12 +762,18 @@ class IndigoDataProvider(DataProvider):
             if previous is None:
                 return {"error": f"Device '{dev.name}' has no heat setpoint", "success": False}
             new_setpoint = round(float(previous) + float(delta), 1)
+            # Clamp the adjusted value to the sane heat band before sending.
+            new_setpoint = max(self.SETPOINT_HEAT_MIN_C,
+                               min(self.SETPOINT_HEAT_MAX_C, new_setpoint))
             indigo.thermostat.setHeatSetpoint(device_id, value=new_setpoint)
             dev = indigo.devices[device_id]
-            current = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else new_setpoint
+            # Report None (not the echoed request) when the device cannot confirm.
+            confirmed = hasattr(dev, 'heatSetpoint')
+            current = dev.heatSetpoint if confirmed else None
             self.logger.info(f"Increased heat setpoint '{dev.name}': {previous} -> {current} degC")
             return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current, "delta": delta}
+                    "previous": previous, "current": current, "delta": delta,
+                    "confirmed": confirmed}
         except Exception as e:
             self.logger.error(f"Error increasing heat setpoint on {device_id}: {e}")
             return {"error": str(e), "success": False}
@@ -703,12 +788,18 @@ class IndigoDataProvider(DataProvider):
             if previous is None:
                 return {"error": f"Device '{dev.name}' has no heat setpoint", "success": False}
             new_setpoint = round(float(previous) - float(delta), 1)
+            # Clamp the adjusted value to the sane heat band before sending.
+            new_setpoint = max(self.SETPOINT_HEAT_MIN_C,
+                               min(self.SETPOINT_HEAT_MAX_C, new_setpoint))
             indigo.thermostat.setHeatSetpoint(device_id, value=new_setpoint)
             dev = indigo.devices[device_id]
-            current = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else new_setpoint
+            # Report None (not the echoed request) when the device cannot confirm.
+            confirmed = hasattr(dev, 'heatSetpoint')
+            current = dev.heatSetpoint if confirmed else None
             self.logger.info(f"Decreased heat setpoint '{dev.name}': {previous} -> {current} degC")
             return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current, "delta": delta}
+                    "previous": previous, "current": current, "delta": delta,
+                    "confirmed": confirmed}
         except Exception as e:
             self.logger.error(f"Error decreasing heat setpoint on {device_id}: {e}")
             return {"error": str(e), "success": False}
@@ -726,10 +817,20 @@ class IndigoDataProvider(DataProvider):
             for dev in indigo.devices:
                 if dev.name.lower() == name_lower:
                     return dict(dev)
-            # Partial match
-            for dev in indigo.devices:
-                if name_lower in dev.name.lower():
-                    return dict(dev)
+            # Partial match — collect ALL substring matches so we never silently
+            # return the first of several candidates (which could mutate the
+            # wrong physical device). One match: return it. More than one:
+            # return an ambiguity error listing the candidates to disambiguate.
+            partial = [dev for dev in indigo.devices if name_lower in dev.name.lower()]
+            if len(partial) == 1:
+                return dict(partial[0])
+            if len(partial) > 1:
+                candidates = [{"id": dev.id, "name": dev.name} for dev in partial]
+                return {
+                    "error": f"Ambiguous device name '{name}': {len(partial)} devices "
+                             f"match. Specify the exact name or use the device id.",
+                    "candidates": candidates,
+                }
             return None
         except Exception as e:
             self.logger.error(f"Error finding device by name '{name}': {e}")

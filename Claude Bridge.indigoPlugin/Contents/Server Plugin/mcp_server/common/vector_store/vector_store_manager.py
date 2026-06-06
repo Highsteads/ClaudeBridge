@@ -46,6 +46,11 @@ class VectorStoreManager:
         self._warmup_thread = None
         self._stop_updates = threading.Event()
         self._running = False
+
+        # Guards start/stop transitions so set()/clear() of _stop_updates
+        # cannot interleave (a stop() landing mid-warmup must not have its
+        # signal wiped by a concurrent clear()).
+        self._lifecycle_lock = threading.Lock()
         
         # Track last update time for optimization
         self._last_update_time = 0
@@ -58,6 +63,12 @@ class VectorStoreManager:
         if self._running:
             self.logger.debug("Vector store manager already running")
             return
+
+        # Clear the stop flag up front under the lifecycle lock so it cannot
+        # race a concurrent stop(). _start_background_updates() no longer
+        # clears it itself.
+        with self._lifecycle_lock:
+            self._stop_updates.clear()
 
         try:
             self._is_initializing = True
@@ -100,6 +111,15 @@ class VectorStoreManager:
         if self._running:
             self.logger.debug("Vector store manager already running")
             return
+
+        # Clear the stop flag before spawning the warmup worker. start()
+        # achieves this indirectly via _start_background_updates(), but
+        # start_async() must do it explicitly — otherwise a manager reused
+        # after stop() (which leaves the flag SET) would have its warmup worker
+        # bail immediately and the store would silently stay empty. Done under
+        # the lifecycle lock so it cannot race a concurrent stop().
+        with self._lifecycle_lock:
+            self._stop_updates.clear()
 
         try:
             self._is_initializing = True
@@ -162,10 +182,18 @@ class VectorStoreManager:
         self._running = False
 
         try:
-            # Join the async warmup thread if still running (bounded — the IOM
-            # walk has no artificial sleeps, so it completes quickly).
+            # Join the async warmup thread if still running. Bounded at 3s.
+            # This completes quickly for the current simplified in-memory store
+            # (no embedding/LLM keyword generation), but the IOM walk could
+            # exceed the timeout on a very large install or if a heavier
+            # embedding path is ever restored — so leave a breadcrumb if the
+            # join expires (matching the project's threaded-shutdown convention).
             if self._warmup_thread and self._warmup_thread.is_alive():
                 self._warmup_thread.join(timeout=3.0)
+                if self._warmup_thread.is_alive():
+                    self.logger.warning(
+                        "VectorStore warmup did not stop within 3s during shutdown"
+                    )
 
             # Stop the periodic background update thread.
             self._stop_background_updates()
@@ -230,10 +258,17 @@ class VectorStoreManager:
     
     def _start_background_updates(self) -> None:
         """Start background update thread."""
+        # Never clear _stop_updates here — that would wipe a shutdown signal
+        # set by a stop() that landed during warmup, resurrecting the periodic
+        # loop the stop was meant to kill. The flag is cleared only in
+        # start()/start_async() under the lifecycle lock. If a stop has already
+        # been requested, do not spawn the loop at all.
+        if self._stop_updates.is_set():
+            return
+
         if self._update_thread and self._update_thread.is_alive():
             return
-        
-        self._stop_updates.clear()
+
         self._update_thread = threading.Thread(
             target=self._background_update_loop,
             daemon=True,

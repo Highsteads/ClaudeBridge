@@ -17,6 +17,10 @@ from ...adapters.data_provider import DataProvider
 from ..base_handler import BaseToolHandler
 from .plugin_scanner import PluginScanner
 
+# Restarting ClaudeBridge from within its own MCP session tears down the very
+# connection serving the request (IWS goes dark for several minutes). Refuse it.
+_OWN_PLUGIN_ID = "com.clives.indigoplugin.claudebridge"
+
 
 class PluginControlHandler(BaseToolHandler):
     """Handler for plugin control operations"""
@@ -139,6 +143,15 @@ class PluginControlHandler(BaseToolHandler):
                     "error": "Indigo module not available",
                 }
 
+            # Refuse to restart ourselves — it kills the in-flight MCP session
+            # mid-response and blacks out IWS for minutes.
+            if plugin_id == _OWN_PLUGIN_ID:
+                return {
+                    "success": False,
+                    "error": ("Refusing to restart ClaudeBridge from within its own MCP "
+                              "session — restart it from the Indigo Plugins menu instead."),
+                }
+
             # Get plugin from Indigo API
             plugin = indigo.server.getPlugin(plugin_id)
 
@@ -150,19 +163,17 @@ class PluginControlHandler(BaseToolHandler):
                     "suggestion": "Enable the plugin in Indigo before restarting",
                 }
 
-            # Restart the plugin
+            # Restart the plugin (fire-and-forget — restart is asynchronous, so
+            # don't block the IWS request thread waiting for it).
             self.logger.info(f"Restarting plugin: {plugin_id}")
             plugin.restart()
 
             # Invalidate plugin cache
             self._invalidate_cache()
 
-            # Wait a moment for restart to complete
-            time.sleep(1)
-
             return {
                 "success": True,
-                "message": f"Plugin '{plugin_id}' restarted successfully",
+                "message": f"Plugin '{plugin_id}' restart requested",
                 "plugin_id": plugin_id,
             }
 

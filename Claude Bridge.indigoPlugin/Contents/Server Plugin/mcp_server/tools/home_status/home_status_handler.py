@@ -220,6 +220,12 @@ class HomeStatusHandler(BaseToolHandler):
                 else list(VALID_SECTIONS)
             )
 
+            # Snapshot the device collection ONCE and reuse it for every
+            # section that iterates devices (alerts, heating, security, devices).
+            # Iterating the live indigo.devices collection separately per
+            # section meant several full passes over the whole estate per call.
+            all_devices = list(indigo.devices)
+
             ts    = datetime.now().strftime("%A %-d %B %Y, %H:%M")
             lines: List[str] = [f"# Home Status Report\n*{ts}*\n"]
 
@@ -227,8 +233,7 @@ class HomeStatusHandler(BaseToolHandler):
             if "alerts" in active:
                 errors   = []
                 low_batt = []
-                for did in indigo.devices:
-                    dev = indigo.devices[did]
+                for dev in all_devices:
                     if not dev.enabled:
                         continue
                     try:
@@ -333,8 +338,7 @@ class HomeStatusHandler(BaseToolHandler):
             # ── Heating section ────────────────────────────────────────────
             if "heating" in active:
                 zones: List[Dict] = []
-                for did in indigo.devices:
-                    dev = indigo.devices[did]
+                for dev in all_devices:
                     if not dev.enabled:
                         continue
                     if not any(
@@ -379,8 +383,7 @@ class HomeStatusHandler(BaseToolHandler):
                 open_contacts: List[str] = []
                 active_motion: List[str] = []
                 active_alarms: List[str] = []
-                for did in indigo.devices:
-                    dev = indigo.devices[did]
+                for dev in all_devices:
                     if not dev.enabled:
                         continue
                     name_l = dev.name.lower()
@@ -419,8 +422,8 @@ class HomeStatusHandler(BaseToolHandler):
 
             # ── Devices section ────────────────────────────────────────────
             if "devices" in active:
-                total    = len(list(indigo.devices))
-                enabled  = sum(1 for d in indigo.devices if indigo.devices[d].enabled)
+                total    = len(all_devices)
+                enabled  = sum(1 for d in all_devices if d.enabled)
                 disabled = total - enabled
                 lines.append("## Devices")
                 lines.append(

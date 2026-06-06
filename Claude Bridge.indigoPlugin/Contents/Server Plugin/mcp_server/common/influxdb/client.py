@@ -45,9 +45,16 @@ class InfluxDBClient:
             Dictionary with connection parameters
         """
         from mcp_server import runtime_config
+        try:
+            port = int(runtime_config.get("influxdb_port") or 8086)
+        except (ValueError, TypeError):
+            self.logger.warning(
+                "Invalid influxdb_port in runtime config; falling back to 8086"
+            )
+            port = 8086
         return {
             "host":     runtime_config.get("influxdb_host"),
-            "port":     int(runtime_config.get("influxdb_port")),
+            "port":     port,
             "username": runtime_config.get("influxdb_username"),
             "password": runtime_config.get("influxdb_password"),
             "database": runtime_config.get("influxdb_database"),
@@ -70,7 +77,10 @@ class InfluxDBClient:
         client = None
         try:
             conn_info = self.get_connection_info()
-            
+
+            if not conn_info["host"]:
+                raise RuntimeError("InfluxDB host is not configured")
+
             client = InfluxClient(
                 host=conn_info["host"],
                 port=conn_info["port"],

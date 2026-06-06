@@ -82,7 +82,12 @@ def _run(cmd: List[str], timeout: int = 5) -> str:
     try:
         return subprocess.run(cmd, capture_output=True, text=True,
                               timeout=timeout).stdout.strip()
-    except Exception:
+    except Exception as e:
+        # Don't fail silently — a missing binary or timeout otherwise looks like
+        # an empty/zero metric in system_health with no breadcrumb.
+        logging.getLogger("Plugin").debug(
+            f"_run({cmd[0] if cmd else '?'}) failed: {type(e).__name__}: {e}"
+        )
         return ""
 
 def _parse_ram() -> Dict[str, Any]:
@@ -129,7 +134,9 @@ def _bundle_id_from_plist(plugin_path: str) -> Optional[str]:
     try:
         with open(plist_path, "rb") as fh:
             info = plistlib.load(fh)
-        return info.get("CFBundleIdentifier") or info.get("PluginVersion")
+        # CFBundleIdentifier only — the old `or PluginVersion` fallback returned
+        # a version string masquerading as a bundle id when the key was missing.
+        return info.get("CFBundleIdentifier")
     except Exception:
         return None
 
@@ -250,14 +257,35 @@ class SystemToolsHandler(BaseToolHandler):
             live_var_ids     = {v["id"]   for v in
                                  (self.data_provider.get_all_variables_unfiltered() or [])}
             live_ids         = live_device_ids | live_var_ids
+            # Also treat action-group / schedule / trigger IDs as live so a
+            # script referencing one is not mis-flagged as orphaned. Best-effort
+            # — only included if the data provider exposes the getter.
+            for _getter in ("get_all_actions", "get_all_action_groups",
+                            "get_all_schedules", "get_all_triggers"):
+                _fn = getattr(self.data_provider, _getter, None)
+                if callable(_fn):
+                    try:
+                        live_ids |= {x["id"] for x in (_fn() or [])
+                                     if isinstance(x, dict) and "id" in x}
+                    except Exception:
+                        pass
 
             all_dirs = _all_scripts_dirs()
             if not all_dirs:
                 return {"success": True, "orphaned": [],
                         "note": "No scripts folders found"}
 
-            # Indigo IDs are typically 8–10 digit integers
-            id_pattern = re.compile(r"\b(\d{8,12})\b")
+            # Match an 8–12 digit number ONLY in an ID-ish context — e.g.
+            # indigo.devices[NNN], DEVICE_ID = NNN, id=NNN. A bare digit run
+            # (epoch timestamp, port, hash fragment) is no longer treated as a
+            # device ID, which previously produced false "dead ID" positives.
+            id_pattern = re.compile(
+                r"(?:indigo\.(?:devices|variables|actionGroups|schedules|triggers)\s*\[\s*"
+                r"|(?:device|variable|var|dev|action|schedule|trigger)[_ ]?id\w*\s*[=:]\s*"
+                r"|\bid\s*[=:]\s*)"
+                r"(\d{8,12})\b",
+                re.IGNORECASE,
+            )
 
             orphaned   = []
             clean      = []
@@ -280,7 +308,9 @@ class SystemToolsHandler(BaseToolHandler):
                             "script":   entry.name,
                             "folder":   scripts_dir,
                             "dead_ids": sorted(dead_ids),
-                            "note":     "Contains references to IDs not found in Indigo",
+                            "note":     ("Advisory — references IDs not found among live "
+                                         "devices/variables/action-groups/schedules/triggers; "
+                                         "verify (plugins may hard-code IDs) before deleting"),
                         })
                     elif found_ids:
                         clean.append(entry.name)
@@ -377,7 +407,34 @@ class SystemToolsHandler(BaseToolHandler):
         self.log_incoming_request("find_large_files",
                                   {"path": path, "min_mb": min_mb})
         try:
-            scan_path = path.strip() if path.strip() else _indigo_base()
+            # Guard client-supplied numerics (a string/blank arg must not raise).
+            try:
+                min_mb = float(min_mb)
+            except (TypeError, ValueError):
+                min_mb = 10.0
+            try:
+                max_results = int(max_results)
+            except (TypeError, ValueError):
+                max_results = 50
+            max_results = max(1, min(max_results, 1000))
+
+            # Confine the walk to the Indigo install folder + the two script
+            # folders. A read-scoped client must not be able to enumerate the
+            # whole filesystem via an arbitrary absolute/relative path.
+            base = os.path.realpath(_indigo_base())
+            pa   = os.path.dirname(base)
+            allowed = [base]
+            for _d in ("Python Scripts", "Scripts"):
+                _p = os.path.realpath(os.path.join(pa, _d))
+                if os.path.isdir(_p):
+                    allowed.append(_p)
+
+            raw_path  = path.strip() if (path or "").strip() else base
+            scan_path = os.path.realpath(raw_path)
+            if not any(scan_path == a or scan_path.startswith(a + os.sep) for a in allowed):
+                return {"success": False,
+                        "error": ("Path not permitted — find_large_files is confined to the "
+                                  f"Indigo install and script folders, got: {raw_path}")}
             if not os.path.isdir(scan_path):
                 return {"success": False,
                         "error": f"Path not found or not a directory: {scan_path}"}

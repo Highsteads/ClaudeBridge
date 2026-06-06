@@ -3,6 +3,7 @@ Time formatting utilities for InfluxDB data.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Tuple, Optional
 from zoneinfo import ZoneInfo
@@ -31,9 +32,10 @@ class TimeFormatter:
             Local timezone-aware datetime object
         """
         try:
-            # Handle both 'Z' suffix and without
-            if datetime_str.endswith('Z'):
-                datetime_str = datetime_str.rstrip('Z')
+            # Handle both 'Z' suffix and without. Use removesuffix so only a
+            # single trailing 'Z' is dropped (rstrip would strip every trailing
+            # 'Z', mangling an unusual '...ZZ' value).
+            datetime_str = datetime_str.removesuffix('Z')
             
             # Parse the datetime and set UTC timezone
             utc_datetime = datetime.fromisoformat(datetime_str).replace(tzinfo=ZoneInfo("UTC"))
@@ -230,31 +232,28 @@ class TimeFormatter:
         try:
             time_str = time_str.lower().strip()
             now = datetime.now().astimezone()
-            
-            if "hour" in time_str:
-                if time_str.startswith("1 hour"):
-                    return now - timedelta(hours=1)
-                elif time_str.startswith("2 hour"):
-                    return now - timedelta(hours=2)
-                # Add more patterns as needed
-            
-            elif "day" in time_str:
-                if time_str.startswith("1 day"):
-                    return now - timedelta(days=1)
-                elif time_str.startswith("2 day"):
-                    return now - timedelta(days=2)
-                elif time_str.startswith("7 day") or "week" in time_str:
-                    return now - timedelta(days=7)
-                # Add more patterns as needed
-            
-            elif "minute" in time_str:
-                if time_str.startswith("30 minute"):
-                    return now - timedelta(minutes=30)
-                elif time_str.startswith("15 minute"):
-                    return now - timedelta(minutes=15)
-            
+
+            # General "N unit ago" parse, e.g. "3 days ago", "6 hours ago",
+            # "45 minutes", "1 week". Returns None for anything that doesn't match.
+            match = re.match(
+                r"^\s*(\d+)\s*(minute|hour|day|week)s?\s*(?:ago)?\s*$", time_str
+            )
+            if not match:
+                return None
+
+            amount = int(match.group(1))
+            unit   = match.group(2)
+            if unit == "minute":
+                return now - timedelta(minutes=amount)
+            elif unit == "hour":
+                return now - timedelta(hours=amount)
+            elif unit == "day":
+                return now - timedelta(days=amount)
+            elif unit == "week":
+                return now - timedelta(weeks=amount)
+
             return None
-            
+
         except Exception as e:
             self.logger.error(f"Failed to parse relative time '{time_str}': {e}")
             return None

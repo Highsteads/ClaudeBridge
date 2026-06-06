@@ -23,7 +23,17 @@ class BaseToolHandler:
             logger: Optional logger instance
         """
         self.tool_name = tool_name
-        self.logger = logger or logging.getLogger("Plugin")
+        if logger is not None:
+            self.logger = logger
+        else:
+            # Fall back to the shared 'Plugin' logger, but make the missing
+            # wiring visible — a handler built without the plugin's configured
+            # logger won't carry its timestamp/format filter.
+            self.logger = logging.getLogger("Plugin")
+            self.logger.warning(
+                f"[{tool_name}] constructed without a logger — using the shared "
+                f"'Plugin' logger (timestamp formatting may differ)"
+            )
     
     def info_log(self, message: str) -> None:
         """

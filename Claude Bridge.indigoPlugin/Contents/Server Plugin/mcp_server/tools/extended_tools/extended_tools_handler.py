@@ -161,13 +161,17 @@ class ExtendedToolsHandler(BaseToolHandler):
                                   {"device_id": device_id, "amount": amount})
         try:
             did = _coerce_id(device_id)
+            try:
+                amount = int(amount)
+            except (TypeError, ValueError):
+                return {"success": False, "error": "amount must be an integer"}
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.DimmerDevice):
                 return {"success": False, "error": f"'{dev.name}' is not a dimmer"}
-            indigo.dimmer.brightenBy(did, value=int(amount))
+            indigo.dimmer.brightenBy(did, value=amount)
             msg = f"Brightened '{dev.name}' by {amount}%"
             self.log_tool_outcome("dimmer_brighten_by", True, msg)
-            return {"success": True, "device_id": did, "amount": int(amount), "message": msg}
+            return {"success": True, "device_id": did, "amount": amount, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "dimmer_brighten_by")
 
@@ -177,13 +181,17 @@ class ExtendedToolsHandler(BaseToolHandler):
                                   {"device_id": device_id, "amount": amount})
         try:
             did = _coerce_id(device_id)
+            try:
+                amount = int(amount)
+            except (TypeError, ValueError):
+                return {"success": False, "error": "amount must be an integer"}
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.DimmerDevice):
                 return {"success": False, "error": f"'{dev.name}' is not a dimmer"}
-            indigo.dimmer.dimBy(did, value=int(amount))
+            indigo.dimmer.dimBy(did, value=amount)
             msg = f"Dimmed '{dev.name}' by {amount}%"
             self.log_tool_outcome("dimmer_dim_by", True, msg)
-            return {"success": True, "device_id": did, "amount": int(amount), "message": msg}
+            return {"success": True, "device_id": did, "amount": amount, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "dimmer_dim_by")
 
@@ -403,14 +411,18 @@ class ExtendedToolsHandler(BaseToolHandler):
                                   {"device_id": device_id, "zone_index": zone_index})
         try:
             did = _coerce_id(device_id)
+            try:
+                zone_index = int(zone_index)
+            except (TypeError, ValueError):
+                return {"success": False, "error": "zone_index must be an integer"}
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.SprinklerDevice):
                 return {"success": False, "error": f"'{dev.name}' is not a sprinkler"}
-            indigo.sprinkler.setActiveZone(did, index=int(zone_index))
+            indigo.sprinkler.setActiveZone(did, index=zone_index)
             msg = f"Set sprinkler '{dev.name}' to zone {zone_index}"
             self.log_tool_outcome("sprinkler_set_zone", True, msg)
             return {"success": True, "device_id": did,
-                    "zone_index": int(zone_index), "message": msg}
+                    "zone_index": zone_index, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "sprinkler_set_zone")
 
@@ -485,14 +497,18 @@ class ExtendedToolsHandler(BaseToolHandler):
                                   {"device_id": device_id, "index": index})
         try:
             did = _coerce_id(device_id)
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                return {"success": False, "error": "index must be an integer"}
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.SpeedControlDevice):
                 return {"success": False,
                         "error": f"'{dev.name}' is not a speed control device"}
-            indigo.speedcontrol.setSpeedIndex(did, value=int(index))
+            indigo.speedcontrol.setSpeedIndex(did, value=index)
             msg = f"Set '{dev.name}' speed index to {index}"
             self.log_tool_outcome("speedcontrol_set_index", True, msg)
-            return {"success": True, "device_id": did, "index": int(index), "message": msg}
+            return {"success": True, "device_id": did, "index": index, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "speedcontrol_set_index")
 

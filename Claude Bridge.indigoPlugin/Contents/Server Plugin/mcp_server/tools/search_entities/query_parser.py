@@ -1,18 +1,13 @@
 """
 Query parser for natural language search queries.
-Enhanced with LLM-based query expansion for better semantic matching.
 """
 
-import hashlib
 import logging
 import re
 from typing import Dict, Any, List, Optional
 from ...common.state_filter import StateFilter
 
 logger = logging.getLogger("Plugin")
-
-# Global cache for query expansions
-_query_expansion_cache = {}
 
 
 class QueryParser:
@@ -116,120 +111,3 @@ class QueryParser:
         
         # Default threshold
         return 0.15
-    
-    def expand_query(self, query: str, enable_llm: bool = True) -> str:
-        """
-        Expand query with synonyms and related terms for better semantic matching.
-        
-        Args:
-            query: Original search query
-            enable_llm: Whether to use LLM for query expansion
-            
-        Returns:
-            Expanded query string with additional terms
-        """
-        try:
-            if not enable_llm or not query.strip():
-                logger.debug(f"Query expansion skipped (LLM disabled or empty query)")
-                return query
-            
-            # Check cache first
-            cache_key = hashlib.sha256(query.encode()).hexdigest()
-            if cache_key in _query_expansion_cache:
-                expanded = _query_expansion_cache[cache_key]
-                logger.debug(f"Using cached query expansion for: '{query}'")
-                return expanded
-            
-            # Generate expanded query with LLM
-            expanded = self._generate_llm_query_expansion(query)
-            if expanded and expanded != query:
-                _query_expansion_cache[cache_key] = expanded
-                logger.debug(f"Query expanded: '{query}' -> '{expanded}'")
-                return expanded
-            
-            return query
-            
-        except Exception as e:
-            logger.warning(f"Query expansion failed for '{query}': {e}")
-            return query
-    
-    def _generate_llm_query_expansion(self, query: str) -> str:
-        """
-        Use LLM to generate expanded query with synonyms and related terms.
-        
-        Args:
-            query: Original search query
-            
-        Returns:
-            Expanded query or original query if expansion fails
-        """
-        try:
-            # Import here to avoid circular imports
-            from ...common.openai_client.main import perform_completion, SMALL_MODEL
-            
-            # Create prompt for query expansion
-            prompt = f"""Expand this home automation search query with relevant synonyms and related terms:
-
-Original query: "{query}"
-
-Generate an expanded version that includes:
-- Synonyms for device types (light/lamp/illumination, switch/control, sensor/detector)
-- Related location terms (living room/lounge/family room)
-- Function synonyms (dimmer/brightness/lighting)
-
-Keep the expansion concise and focused. Return only the expanded query text, no explanations.
-Example: "living room light" -> "living room light lamp illumination lighting fixture"
-"""
-
-            # Call LLM with small model for efficiency
-            response = perform_completion(
-                messages=prompt,
-                model=SMALL_MODEL,
-                response_token_reserve=50
-            )
-            
-            if not response:
-                logger.debug(f"Empty LLM response for query expansion")
-                return query
-            
-            # Use standardized response handling utility
-            from ...common.response_utils import extract_text_content
-            
-            expanded = extract_text_content(response, f"query_expansion[{query[:50]}...]")
-            
-            if not expanded or not expanded.strip():
-                # If extraction failed or returned empty string, fallback to original query
-                logger.debug(f"LLM expansion extraction failed, using original query")
-                expanded = query
-            else:
-                # Clean up the expanded query
-                expanded = expanded.strip().strip('"').strip("'")
-            
-            # Validate and potentially truncate the expansion if too long
-            max_length = min(len(query) * 6, 250)  # Allow up to 250 chars or 6x original, whichever is smaller
-            if len(expanded) > max_length:
-                # Truncate at word boundary to preserve meaning
-                truncated = expanded[:max_length].rstrip()
-                # Find the last space to avoid cutting words in half
-                last_space = truncated.rfind(' ')
-                if last_space > max_length * 0.8:  # Only use word boundary if we don't lose too much
-                    truncated = truncated[:last_space]
-                
-                expanded = truncated
-            
-            # Check for obvious malformed content (but allow reasonable punctuation)
-            if any(char in expanded for char in ['<', '>', '{', '}', '[', ']', '|']):
-                return query
-            
-            return expanded
-            
-        except Exception as e:
-            logger.warning(f"LLM query expansion failed: {e}")
-            return query
-
-
-def clear_query_expansion_cache():
-    """Clear the query expansion cache. Useful for testing."""
-    global _query_expansion_cache
-    _query_expansion_cache.clear()
-    logger.debug("Cleared query expansion cache")

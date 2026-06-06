@@ -1,5 +1,14 @@
 """
 Vector store validation utilities for comprehensive data consistency checking.
+
+DORMANT / UNWIRED: this module is a leftover from the retired
+OpenAI-embedding / LanceDB vector store and has no callers anywhere in the
+shipped plugin. validate_embedding() defaults to a 1536-dim
+(text-embedding-3-small) vector and load_validation_data() assumes a LanceDB
+table — neither matches the current embedding-free difflib store (main.py,
+get_stats() reports dimension 0). Retained only for a possible future
+re-enable; if reactivated, decouple it from the 1536-dim / LanceDB assumptions
+first.
 """
 
 import json

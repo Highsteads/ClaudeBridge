@@ -28,7 +28,7 @@ import sqlite3
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -80,10 +80,20 @@ def _resolve_installed_bundle(plugin_name: str) -> Optional[str]:
     pd = _plugins_dir()
     if not os.path.isdir(pd):
         return None
-    pn = plugin_name.strip()
+    # Force a flat name — a client value with path separators or '..' must not
+    # escape the Plugins folder (these tools read files / restart by bundle id).
+    pn = os.path.basename((plugin_name or "").strip())
+    if not pn or pn in (".", ".."):
+        return None
+    pd_real = os.path.realpath(pd)
+
+    def _contained(p: str) -> bool:
+        rp = os.path.realpath(p)
+        return rp == pd_real or rp.startswith(pd_real + os.sep)
+
     # Exact dir
     direct = os.path.join(pd, pn if pn.endswith(".indigoPlugin") else pn + ".indigoPlugin")
-    if os.path.isdir(direct):
+    if os.path.isdir(direct) and _contained(direct):
         return direct
     # Case-insensitive scan
     pn_low = pn.lower().replace(".indigoplugin", "")
@@ -91,7 +101,9 @@ def _resolve_installed_bundle(plugin_name: str) -> Optional[str]:
         if entry.endswith(".indigoPlugin"):
             stem = entry[:-len(".indigoPlugin")].lower()
             if stem == pn_low or pn_low in stem:
-                return os.path.join(pd, entry)
+                cand = os.path.join(pd, entry)
+                if _contained(cand):
+                    return cand
     return None
 
 
@@ -105,24 +117,34 @@ def _resolve_source_repo(plugin_name: str) -> Optional[str]:
     root = _github_root()
     if not os.path.isdir(root):
         return None
+    # Force a flat name so a separator/'..' can't escape the GitHub root.
+    pn = os.path.basename((plugin_name or "").strip())
+    if not pn or pn in (".", ".."):
+        return None
+    root_real = os.path.realpath(root)
+
+    def _contained(p: str) -> Optional[str]:
+        rp = os.path.realpath(p)
+        return p if (rp == root_real or rp.startswith(root_real + os.sep)) else None
+
     candidates = [
-        plugin_name,
-        plugin_name.replace(" ", ""),
-        plugin_name.replace(".indigoPlugin", ""),
-        plugin_name.replace(" ", "").replace(".indigoPlugin", ""),
+        pn,
+        pn.replace(" ", ""),
+        pn.replace(".indigoPlugin", ""),
+        pn.replace(" ", "").replace(".indigoPlugin", ""),
     ]
     entries = os.listdir(root)
     low_map = {e.lower(): e for e in entries}
     for cand in candidates:
         if cand in entries:
-            return os.path.join(root, cand)
+            return _contained(os.path.join(root, cand))
         if cand.lower() in low_map:
-            return os.path.join(root, low_map[cand.lower()])
+            return _contained(os.path.join(root, low_map[cand.lower()]))
     # Partial fallback
-    stem = plugin_name.replace(" ", "").replace(".indigoPlugin", "").lower()
+    stem = pn.replace(" ", "").replace(".indigoPlugin", "").lower()
     for e in entries:
         if stem and stem in e.lower():
-            return os.path.join(root, e)
+            return _contained(os.path.join(root, e))
     return None
 
 
@@ -749,8 +771,18 @@ class PluginDevToolsHandler(BaseToolHandler):
             except (TypeError, ValueError):
                 return {"success": False, "error": f"Bad device_id {device_id!r}"}
 
-            limit = max(1, min(int(limit or 500), 5000))
-            hours = max(1, int(hours or 24))
+            try:
+                limit = max(1, min(int(limit or 500), 5000))
+            except (TypeError, ValueError):
+                limit = 500
+            try:
+                hours = max(1, int(hours or 24))
+            except (TypeError, ValueError):
+                hours = 24
+
+            # Compute the window cutoff once (used by both column branches below).
+            cutoff = (datetime.now(timezone.utc).replace(tzinfo=None)
+                      - timedelta(hours=hours)).isoformat(sep=" ")
 
             db_path = _sql_logger_db()
             if not os.path.isfile(db_path):
@@ -788,7 +820,6 @@ class PluginDevToolsHandler(BaseToolHandler):
                                 "error": f"None of the requested columns exist in {table}"}
                 else:
                     # Probe: which columns have at least one non-null value in the window?
-                    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat(sep=" ")
                     keep = []
                     for c in all_cols:
                         if c in ("id",):
@@ -808,7 +839,6 @@ class PluginDevToolsHandler(BaseToolHandler):
                         # Move ts to front
                         cols = ["ts"] + [c for c in cols if c != "ts"]
 
-                cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat(sep=" ")
                 col_list = ", ".join(cols)
                 cur.execute(
                     f"SELECT {col_list} FROM {table} "

@@ -41,12 +41,16 @@ class IndigoJSONEncoder(json.JSONEncoder):
         """
         if isinstance(obj, (datetime, date)):
             return obj.isoformat()
-        elif hasattr(obj, '__dict__'):
-            # Handle custom objects by converting to dict
-            return obj.__dict__
         elif isinstance(obj, bytes):
-            # Handle bytes by decoding to string
-            return obj.decode('utf-8', errors='ignore')
+            # Handle bytes by decoding to string. Use errors='replace' so
+            # non-UTF-8 bytes leave a U+FFFD marker rather than being silently
+            # dropped.
+            return obj.decode('utf-8', errors='replace')
+        elif hasattr(obj, '__dict__'):
+            # Handle custom objects by converting to dict, but exclude
+            # underscore-prefixed (private) attributes so internal/credential
+            # references aren't accidentally serialised into a tool response.
+            return {k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
         
         # Let the base class raise TypeError for unsupported types
         return super().default(obj)

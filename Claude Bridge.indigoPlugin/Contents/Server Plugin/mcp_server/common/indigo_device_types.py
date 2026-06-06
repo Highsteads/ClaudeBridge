@@ -123,9 +123,12 @@ class DeviceTypeResolver:
         # Convert to lowercase for case-insensitive matching
         device_type_lower = device_type.lower().strip()
 
-        # First check if it's already a valid type
-        if IndigoDeviceType.is_valid_type(device_type):
-            return device_type
+        # First check if it's already a valid type. Enum values are all
+        # lowercase, so check the lowercased form (otherwise a case-variant
+        # valid type with no alias entry, e.g. 'Thermostat'/'Sprinkler', would
+        # fall through both checks and resolve to None).
+        if IndigoDeviceType.is_valid_type(device_type_lower):
+            return device_type_lower
 
         # Then check aliases
         if device_type_lower in cls.DEVICE_TYPE_ALIASES:

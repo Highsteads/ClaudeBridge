@@ -2,11 +2,21 @@
 Semantic keyword generation for Indigo entities to enhance vector search quality.
 Generates contextual keywords based on device types, capabilities, and relationships.
 Uses hybrid approach: rule-based keywords + LLM-generated contextual keywords.
+
+DORMANT / UNWIRED: this module is a leftover from the retired
+OpenAI-embedding / LanceDB vector store. The shipped store (main.py) is the
+embedding-free difflib implementation and never imports anything here — the
+only importer is parallel_keywords.py, which is itself unwired (closed import
+loop). Nothing in this module is reachable in the current Anthropic-based
+bridge. It is retained only for a possible future re-enable; the cache lock
+below and the empty-input guards in parallel_keywords.py are pre-emptive
+hardening for that scenario.
 """
 
 import hashlib
 import json
 import logging
+import threading
 from typing import List, Dict, Any, Set, Optional
 
 from pydantic import BaseModel
@@ -24,8 +34,14 @@ class BatchKeywordsResponse(BaseModel):
     """Structured response for batch keyword generation."""
     devices: List[DeviceKeywords]
 
-# Global cache for LLM-generated keywords
+# Global cache for LLM-generated keywords.
+# Read-then-written from ThreadPoolExecutor workers (parallel_keywords.py), so
+# guard the check-then-act regions with a lock to avoid two batches both
+# missing and both calling the LLM for the same cache key (redundant cost,
+# last-writer-wins). The GIL prevents structural corruption, but not the
+# duplicate-compute race.
 _llm_keyword_cache = {}
+_llm_keyword_cache_lock = threading.Lock()
 
 
 def _calculate_optimal_batch_size(entity_count: int, estimated_tokens_per_entity: int = 85) -> int:
@@ -583,7 +599,9 @@ def _generate_llm_keywords_batch(entities: List[Dict[str, Any]], entity_type: st
                 
             # Check cache first
             cache_key = _create_entity_cache_key(entity)
-            if cache_key in _llm_keyword_cache:
+            with _llm_keyword_cache_lock:
+                already_cached = cache_key in _llm_keyword_cache
+            if already_cached:
                 continue
             
             name = entity.get("name", "")
@@ -717,7 +735,8 @@ def _process_structured_response(response, entity_ids: List[str], cache_keys: Li
                 if cleaned_keywords:
                     keywords_map[entity_id] = cleaned_keywords
                     # Cache the results
-                    _llm_keyword_cache[cache_key] = cleaned_keywords
+                    with _llm_keyword_cache_lock:
+                        _llm_keyword_cache[cache_key] = cleaned_keywords
                     successful_mappings += 1
                     
                     # Enhanced logging with entity name and keywords
@@ -874,9 +893,10 @@ def _generate_llm_keywords(entity: Dict[str, Any], entity_type: str) -> List[str
         
         # Create cache key from entity static fields
         cache_key = _create_entity_cache_key(entity)
-        if cache_key in _llm_keyword_cache:
-            pass  # Using cached keywords
-            return _llm_keyword_cache[cache_key]
+        with _llm_keyword_cache_lock:
+            if cache_key in _llm_keyword_cache:
+                # Using cached keywords
+                return _llm_keyword_cache[cache_key]
         
         logger.debug(f"🤖 Calling LLM for semantic keywords: {entity_name}")
         
@@ -948,8 +968,9 @@ Return only the keywords as a comma-separated list, no explanations."""
             keywords = []
         
         # Cache the results
-        _llm_keyword_cache[cache_key] = keywords
-        
+        with _llm_keyword_cache_lock:
+            _llm_keyword_cache[cache_key] = keywords
+
         if keywords:
             logger.debug(f"🎯 LLM generated {len(keywords)} keywords for {entity_name}: {', '.join(keywords[:3])}{' (+more)' if len(keywords) > 3 else ''}")
         else:

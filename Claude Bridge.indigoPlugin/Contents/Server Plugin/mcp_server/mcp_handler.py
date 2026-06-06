@@ -7,7 +7,9 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
+from collections import deque
 from typing import Any, Dict, List, Optional, Union
 
 from .adapters.data_provider import DataProvider
@@ -72,13 +74,19 @@ class MCPHandler:
         self.logger = logger or logging.getLogger("Plugin")
         self.plugin = plugin
 
-        # Session management
+        # Session management. _sessions_lock guards every read/write/iteration
+        # of _sessions under concurrent IWS dispatch.
         self._sessions = {}  # session_id -> {created, last_seen, client_info}
+        self._sessions_lock = threading.Lock()
+        self._session_idle_ttl = 24 * 3600   # prune sessions idle longer than this
+        self._session_max = 500              # hard cap as a backstop
 
         # Tool-call telemetry — rolling window of recent calls for /health metrics.
+        # deque(maxlen) is append-atomic and self-trimming; _telemetry_lock guards
+        # the snapshot reads in get_health_data and the error counter.
         # Each entry: {"name": str, "duration_ms": int, "ok": bool, "ts": float}
-        self._tool_call_log: List[Dict[str, Any]] = []
-        self._tool_call_log_max = 200
+        self._tool_call_log: "deque[Dict[str, Any]]" = deque(maxlen=200)
+        self._telemetry_lock = threading.Lock()
         self._tool_error_count = 0
 
         # ── Phase 2 hardening ─────────────────────────────────────────────
@@ -95,8 +103,9 @@ class MCPHandler:
             scopes_file=scopes_file or "",
             logger=self.logger,
         )
-        # Per-call ProgressEmitter — set in _handle_tools_call, read by tools.
-        self._current_emitter: Optional[ProgressEmitter] = None
+        # Per-call ProgressEmitter — stored per-thread so concurrent tools/call
+        # requests cannot clobber each other's emitter (was a shared attribute).
+        self._emitter_local = threading.local()
 
         # Get database path from the in-process runtime config (moved off
         # os.environ in v2.4.1 — see mcp_server/runtime_config.py).
@@ -129,6 +138,12 @@ class MCPHandler:
         self._resources = {}
         self._register_tools()
         self._register_resources()
+
+        # Deny-by-default self-check: every registered tool must be classified
+        # into exactly one scope bucket. Logs an ERROR for any unclassified tool
+        # (which then fails closed to admin) so a new tool can never silently
+        # land in READ. See ScopeManager.audit_classification().
+        self.scope_manager.audit_classification(list(self._tools.keys()))
 
         self.logger.info(f"\t🚀 Claude Bridge ready ({len(self._tools)} tools, {len(self._resources)} resources)")
         self.logger.info(f"\t🌐 Endpoint: /message/com.clives.indigoplugin.claudebridge/mcp/")
@@ -233,6 +248,31 @@ class MCPHandler:
     # Health / Diagnostics
     ########################################
 
+    def _prune_sessions_locked(self, now_ts: float) -> None:
+        """
+        Evict idle sessions so _sessions cannot grow unbounded. MUST be called
+        with _sessions_lock held. Also clears each evicted session's
+        rate-limiter buckets. Applies an idle TTL plus a hard-cap backstop.
+        """
+        stale = [
+            sid for sid, info in self._sessions.items()
+            if (now_ts - info.get("last_seen", 0)) > self._session_idle_ttl
+        ]
+        # Hard cap: if still over the limit, drop the oldest by last_seen.
+        if (len(self._sessions) - len(stale)) > self._session_max:
+            remaining = sorted(
+                (s for s in self._sessions if s not in stale),
+                key=lambda s: self._sessions[s].get("last_seen", 0),
+            )
+            overflow = len(self._sessions) - len(stale) - self._session_max
+            stale.extend(remaining[:overflow])
+        for sid in stale:
+            self._sessions.pop(sid, None)
+            try:
+                self.rate_limiter.reset_session(sid)
+            except Exception:
+                pass
+
     def get_health_data(self, plugin_start_time: float = None) -> Dict[str, Any]:
         """
         Return a snapshot of plugin health for the /health endpoint.
@@ -241,9 +281,16 @@ class MCPHandler:
         """
         now = time.time()
 
+        # Snapshot the telemetry under the lock, then aggregate off-lock.
+        with self._telemetry_lock:
+            call_log = list(self._tool_call_log)
+            error_count = self._tool_error_count
+        with self._sessions_lock:
+            session_count = len(self._sessions)
+
         # Per-tool latency aggregates over the rolling window
         per_tool: Dict[str, Dict[str, Any]] = {}
-        for entry in self._tool_call_log:
+        for entry in call_log:
             agg = per_tool.setdefault(entry["name"], {"calls": 0, "errors": 0, "total_ms": 0, "max_ms": 0})
             agg["calls"]    += 1
             agg["errors"]   += 0 if entry["ok"] else 1
@@ -269,18 +316,18 @@ class MCPHandler:
             "plugin":           "Claude Bridge",
             "protocol_version": self.PROTOCOL_VERSION,
             "uptime_seconds":   round(now - plugin_start_time, 1) if plugin_start_time else None,
-            "sessions":         len(self._sessions),
+            "sessions":         session_count,
             "tools":            len(self._tools),
             "resources":        len(self._resources),
             "tool_calls": {
-                "total_in_window": len(self._tool_call_log),
-                "errors_lifetime": self._tool_error_count,
+                "total_in_window": len(call_log),
+                "errors_lifetime": error_count,
                 "per_tool":        per_tool,
                 "recent": [
                     {"name": e["name"], "duration_ms": e["duration_ms"], "ok": e["ok"],
                      "cache_hit": e.get("cache_hit", False),
                      "ago_seconds": round(now - e["ts"], 1)}
-                    for e in self._tool_call_log[-10:]
+                    for e in call_log[-10:]
                 ],
             },
             "vector_store": vs_status,
@@ -512,14 +559,21 @@ class MCPHandler:
                 self.logger.debug(f"Invalid protocol version: {protocol_version_header}")
                 return self._json_error(msg_id, -32600, f"Unsupported protocol version: {protocol_version_header}")
 
-        # Session validation (skip for initialize and notifications)
+        # Session validation (skip for initialize and notifications).
+        # NOTE: the `and self._sessions` grace clause is deliberately retained —
+        # after a ClaudeBridge restart the proxy still holds the pre-restart
+        # session id and does not re-initialise on a session error, so the
+        # empty-store grace is what lets the client reconnect. Removing it would
+        # lock the client out after every restart.
         session_id = headers.get("mcp-session-id")
         if method != "initialize" and not method.startswith("notifications/") and self._sessions:
-            if not session_id or session_id not in self._sessions:
+            with self._sessions_lock:
+                known = bool(session_id) and session_id in self._sessions
+                if known:
+                    self._sessions[session_id]["last_seen"] = time.time()
+            if not known:
                 self.logger.debug(f"Invalid session ID for {method}")
                 return self._json_error(msg_id, -32600, "Missing or invalid Mcp-Session-Id")
-            # Update last seen
-            self._sessions[session_id]["last_seen"] = time.time()
 
         # Route to appropriate handler
         if method == "initialize":
@@ -577,11 +631,14 @@ class MCPHandler:
         if requested_version == self.PROTOCOL_VERSION:
             # Create new session
             session_id = secrets.token_urlsafe(24)
-            self._sessions[session_id] = {
-                "created": time.time(),
-                "last_seen": time.time(),
-                "client_info": client_info
-            }
+            now_ts = time.time()
+            with self._sessions_lock:
+                self._prune_sessions_locked(now_ts)
+                self._sessions[session_id] = {
+                    "created": now_ts,
+                    "last_seen": now_ts,
+                    "client_info": client_info
+                }
 
             result = {
                 "jsonrpc": "2.0",
@@ -679,9 +736,11 @@ class MCPHandler:
         no_cache   = "no-cache" in (headers.get("cache-control") or "").lower()
 
         # ── Rate limit (admin scope gets 10x by default) ─────────────────
+        # Key on the bearer first (stable per credential) so a session-rotating
+        # client shares one bucket per token rather than escaping the limit.
         scopes = self.scope_manager.scopes_for_token(bearer)
         try:
-            self.rate_limiter.check(session_id or bearer or "anonymous", scopes)
+            self.rate_limiter.check(bearer or session_id or "anonymous", scopes)
         except RateLimitExceeded as rle:
             self.logger.warning(f"⛔ Rate limit hit ({rle.window}) for {tool_name}")
             return self._json_error(
@@ -699,9 +758,22 @@ class MCPHandler:
             )
             return self._json_error(msg_id, -32099, str(sd))
 
+        # ── Argument validation (required keys present) ──────────────────
+        # A lightweight check against the tool's declared inputSchema so a
+        # missing required field returns a clear -32602 naming the field rather
+        # than surfacing as an opaque -32603 from the **kwargs call below.
+        schema   = self._tools[tool_name].get("inputSchema") or {}
+        required = set(schema.get("required") or [])
+        missing  = [k for k in required if k not in tool_args]
+        if missing:
+            return self._json_error(
+                msg_id, -32602,
+                f"Missing required argument(s) for {tool_name}: {', '.join(sorted(missing))}"
+            )
+
         # ── Per-call progress emitter (used by long-running tools) ───────
         emitter = ProgressEmitter(request_id=msg_id, tool_name=tool_name)
-        self._current_emitter = emitter
+        self._emitter_local.emitter = emitter
 
         start = time.time()
         ok = False
@@ -751,23 +823,25 @@ class MCPHandler:
             return response
 
         except Exception as e:
-            self._tool_error_count += 1
+            with self._telemetry_lock:
+                self._tool_error_count += 1
             self.logger.error(f"Tool {tool_name} error: {e}")
             return self._json_error(
                 msg_id, -32603, f"Tool execution failed: {str(e)}"
             )
         finally:
-            self._current_emitter = None
+            self._emitter_local.emitter = None
             duration_ms = int((time.time() - start) * 1000)
-            self._tool_call_log.append({
-                "name":        tool_name,
-                "duration_ms": duration_ms,
-                "ok":          ok,
-                "cache_hit":   cache_hit,
-                "ts":          time.time(),
-            })
-            if len(self._tool_call_log) > self._tool_call_log_max:
-                del self._tool_call_log[: len(self._tool_call_log) - self._tool_call_log_max]
+            # deque(maxlen) self-trims; append is atomic but lock anyway so the
+            # health snapshot never reads a torn list.
+            with self._telemetry_lock:
+                self._tool_call_log.append({
+                    "name":        tool_name,
+                    "duration_ms": duration_ms,
+                    "ok":          ok,
+                    "cache_hit":   cache_hit,
+                    "ts":          time.time(),
+                })
 
     @staticmethod
     def _extract_bearer(headers: Dict[str, str]) -> Optional[str]:
@@ -3286,9 +3360,10 @@ class MCPHandler:
         Safe to call from any tool — does nothing if no emitter is active
         (e.g. when invoked via direct method call rather than tools/call).
         """
-        if self._current_emitter is not None:
+        emitter = getattr(self._emitter_local, "emitter", None)
+        if emitter is not None:
             try:
-                self._current_emitter.emit(message, progress=progress, data=data)
+                emitter.emit(message, progress=progress, data=data)
             except Exception:
                 pass
 

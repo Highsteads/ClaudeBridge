@@ -16,6 +16,7 @@ Tools:
 """
 
 import logging
+import threading
 import time
 from collections import deque
 from datetime import datetime
@@ -32,8 +33,11 @@ class EventsHandler(BaseToolHandler):
     """
     Handler for the Indigo → Claude event subscription queue.
     Thread-safe: queue_event() is called from Indigo's main thread via plugin
-    callbacks; get_events() is called from IWS request handler threads.
-    Uses a deque as a lock-free ring buffer (GIL-protected in CPython).
+    callbacks; get_events()/subscribe()/unsubscribe() are called from IWS
+    request handler threads. All access to the shared queue and subscription
+    state is serialised under self._lock, because the multi-step
+    read-modify-write sequences (queue drain/rebuild, dedup merge, sub-id
+    allocation) are not atomic and the GIL alone does not protect them.
     """
 
     def __init__(
@@ -43,6 +47,7 @@ class EventsHandler(BaseToolHandler):
     ):
         super().__init__(tool_name="events", logger=logger)
         self.data_provider  = data_provider
+        self._lock          = threading.RLock()
         self._queue: Deque[Dict[str, Any]] = deque(maxlen=MAX_QUEUE)
         self._subscriptions: Dict[int, Dict[str, Any]] = {}
         self._next_sub_id   = 1
@@ -60,64 +65,71 @@ class EventsHandler(BaseToolHandler):
         only the first and last value are kept (merged in-place).
         Only queued if at least one matching subscription exists.
         """
-        if not self._subscriptions:
-            return   # no active subscriptions — nothing to queue
+        with self._lock:
+            if not self._subscriptions:
+                return   # no active subscriptions — nothing to queue
 
-        # Normalise: accept both "id" and "entity_id" from callers
-        entity_id = event.get("entity_id") or event.get("id")
-        if entity_id is not None:
-            event["entity_id"] = entity_id
+            # Normalise: accept both "id" and "entity_id" from callers
+            entity_id = event.get("entity_id") or event.get("id")
+            if entity_id is not None:
+                event["entity_id"] = entity_id
 
-        entity_type = event.get("type", "")
+            entity_type = event.get("type", "")
 
-        # Stamp with epoch for since-filtering and human timestamp
-        now_ts = time.time()
-        event.setdefault("timestamp_epoch", now_ts)
-        event.setdefault(
-            "timestamp",
-            datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d %H:%M:%S"),
-        )
+            # Stamp with epoch for since-filtering and human timestamp
+            now_ts = time.time()
+            event.setdefault("timestamp_epoch", now_ts)
+            event.setdefault(
+                "timestamp",
+                datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d %H:%M:%S"),
+            )
 
-        # Deduplication: merge into the most recent event for the same entity
-        # if it arrived within the last second.
-        DEDUP_WINDOW_S = 1.0
-        if entity_id is not None and entity_type in (
-            "device_updated", "variable_updated"
-        ):
-            for existing in reversed(self._queue):
-                if (
-                    existing.get("entity_id") == entity_id
-                    and existing.get("type") == entity_type
-                ):
-                    age = now_ts - existing.get("timestamp_epoch", 0)
-                    if age < DEDUP_WINDOW_S:
-                        # Merge: keep old "old" values, update "new" values
-                        if entity_type == "device_updated":
-                            merged = dict(existing.get("changed_states", {}))
-                            for k, v in event.get("changed_states", {}).items():
-                                merged[k] = {
-                                    "old": merged[k]["old"] if k in merged else v["old"],
-                                    "new": v["new"],
-                                }
-                            existing["changed_states"] = merged
-                        else:  # variable_updated
-                            existing["new_value"] = event.get("new_value")
-                        existing["timestamp_epoch"] = now_ts
-                        existing["timestamp"]       = event["timestamp"]
-                        return  # merged in-place, no new entry needed
-                    break  # found same entity but outside window — fall through
+            # Deduplication: merge into the most recent event for the same entity
+            # if it arrived within the last second.
+            DEDUP_WINDOW_S = 1.0
+            if entity_id is not None and entity_type in (
+                "device_updated", "variable_updated"
+            ):
+                for existing in reversed(self._queue):
+                    if (
+                        existing.get("entity_id") == entity_id
+                        and existing.get("type") == entity_type
+                    ):
+                        age = now_ts - existing.get("timestamp_epoch", 0)
+                        if age < DEDUP_WINDOW_S:
+                            # Merge: keep old "old" values, update "new" values.
+                            # Access defensively in case a changed_states value
+                            # is not the expected {'old','new'} dict shape.
+                            if entity_type == "device_updated":
+                                merged = dict(existing.get("changed_states", {}))
+                                for k, v in event.get("changed_states", {}).items():
+                                    new_val = v.get("new") if isinstance(v, dict) else v
+                                    if k in merged and isinstance(merged[k], dict):
+                                        old_val = merged[k].get("old")
+                                    elif isinstance(v, dict):
+                                        old_val = v.get("old")
+                                    else:
+                                        old_val = None
+                                    merged[k] = {"old": old_val, "new": new_val}
+                                existing["changed_states"] = merged
+                            else:  # variable_updated
+                                existing["new_value"] = event.get("new_value")
+                            existing["timestamp_epoch"] = now_ts
+                            existing["timestamp"]       = event["timestamp"]
+                            return  # merged in-place, no new entry needed
+                        break  # found same entity but outside window — fall through
 
-        for sub in self._subscriptions.values():
-            sub_type = sub.get("entity_type", "all")
-            sub_id   = sub.get("entity_id")   # None = all of that type
+            for sub in self._subscriptions.values():
+                sub_type = sub.get("entity_type", "all")
+                sub_id   = sub.get("entity_id")   # None = all of that type
 
-            type_match = (sub_type == "all" or sub_type == entity_type
-                          or entity_type.startswith(sub_type))
-            id_match   = (sub_id is None or sub_id == entity_id)
+                type_match = (sub_type == "all" or sub_type == entity_type
+                              or entity_type.startswith(sub_type))
+                id_match   = (sub_id is None or sub_id == entity_id)
 
-            if type_match and id_match:
-                self._queue.append(event)
-                break   # queue once even if multiple subscriptions match
+                if type_match and id_match:
+                    self._queue.append(event)
+                    break   # queue once even if multiple subscriptions match
 
     # ────────────────────────────────────────────────────────────────────────
     # subscribe
@@ -137,18 +149,28 @@ class EventsHandler(BaseToolHandler):
         self.log_incoming_request("subscribe",
                                   {"entity_type": entity_type, "entity_id": entity_id})
         try:
-            if len(self._subscriptions) >= MAX_SUBS:
-                return {"success": False,
-                        "error": f"Maximum {MAX_SUBS} subscriptions reached"}
+            # Coerce/guard entity_id (use 'is not None' so id 0 is honoured)
+            watch_id: Optional[int] = None
+            if entity_id is not None:
+                try:
+                    watch_id = int(entity_id)
+                except (TypeError, ValueError):
+                    return {"success": False,
+                            "error": "entity_id must be an integer"}
 
-            sub_id = self._next_sub_id
-            self._next_sub_id += 1
-            self._subscriptions[sub_id] = {
-                "id":          sub_id,
-                "entity_type": entity_type,
-                "entity_id":   int(entity_id) if entity_id else None,
-                "created":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
+            with self._lock:
+                if len(self._subscriptions) >= MAX_SUBS:
+                    return {"success": False,
+                            "error": f"Maximum {MAX_SUBS} subscriptions reached"}
+
+                sub_id = self._next_sub_id
+                self._next_sub_id += 1
+                self._subscriptions[sub_id] = {
+                    "id":          sub_id,
+                    "entity_type": entity_type,
+                    "entity_id":   watch_id,
+                    "created":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
             label = (f"type={entity_type}"
                      + (f", id={entity_id}" if entity_id else " (all)"))
             result = {
@@ -172,14 +194,19 @@ class EventsHandler(BaseToolHandler):
         self.log_incoming_request("unsubscribe",
                                   {"subscription_id": subscription_id})
         try:
-            sid = int(subscription_id)
-            if sid in self._subscriptions:
-                del self._subscriptions[sid]
-                result = {"success": True,
-                          "message": f"Subscription {sid} removed"}
-            else:
-                result = {"success": False,
-                          "error": f"Subscription {sid} not found"}
+            try:
+                sid = int(subscription_id)
+            except (TypeError, ValueError):
+                return {"success": False,
+                        "error": "subscription_id must be an integer"}
+            with self._lock:
+                if sid in self._subscriptions:
+                    del self._subscriptions[sid]
+                    result = {"success": True,
+                              "message": f"Subscription {sid} removed"}
+                else:
+                    result = {"success": False,
+                              "error": f"Subscription {sid} not found"}
             self.log_tool_outcome("unsubscribe", result["success"],
                                   result.get("message", ""))
             return result
@@ -208,26 +235,28 @@ class EventsHandler(BaseToolHandler):
             events: List[Dict[str, Any]] = []
             remaining: Deque[Dict[str, Any]] = deque(maxlen=MAX_QUEUE)
 
-            while self._queue:
-                evt = self._queue.popleft()
-                ts  = evt.get("timestamp_epoch", 0)
-                if since is None or ts > since:
-                    if len(events) < limit:
-                        events.append(evt)
+            with self._lock:
+                while self._queue:
+                    evt = self._queue.popleft()
+                    ts  = evt.get("timestamp_epoch", 0)
+                    if (since is None or ts > since) and len(events) < limit:
+                        events.append(evt)          # returned to this caller
                     else:
-                        remaining.append(evt)   # keep overflow
-                # else: discard old events
+                        # Either it failed this caller's `since` filter or the
+                        # limit is reached — keep it queued for other readers /
+                        # the next poll rather than destroying it.
+                        remaining.append(evt)
 
-            # Put overflow back
-            self._queue.extendleft(reversed(remaining))
+                # Put everything we did not return back, preserving order
+                self._queue.extendleft(reversed(remaining))
 
-            result = {
-                "success":            True,
-                "count":              len(events),
-                "queue_remaining":    len(self._queue),
-                "active_subscriptions": len(self._subscriptions),
-                "events":             events,
-            }
+                result = {
+                    "success":            True,
+                    "count":              len(events),
+                    "queue_remaining":    len(self._queue),
+                    "active_subscriptions": len(self._subscriptions),
+                    "events":             events,
+                }
             if events:
                 result["latest_timestamp"] = events[-1].get("timestamp_epoch")
             self.log_tool_outcome("get_events", True,
@@ -244,14 +273,15 @@ class EventsHandler(BaseToolHandler):
         """Return all active subscriptions and queue depth."""
         self.log_incoming_request("list_subscriptions", {})
         try:
-            result = {
-                "success":       True,
-                "count":         len(self._subscriptions),
-                "queue_depth":   len(self._queue),
-                "subscriptions": list(self._subscriptions.values()),
-            }
+            with self._lock:
+                result = {
+                    "success":       True,
+                    "count":         len(self._subscriptions),
+                    "queue_depth":   len(self._queue),
+                    "subscriptions": list(self._subscriptions.values()),
+                }
             self.log_tool_outcome("list_subscriptions", True,
-                                  f"{len(self._subscriptions)} subscriptions")
+                                  f"{result['count']} subscriptions")
             return result
         except Exception as exc:
             return self.handle_exception(exc, "list_subscriptions")
@@ -264,8 +294,9 @@ class EventsHandler(BaseToolHandler):
         """Flush all queued events without returning them."""
         self.log_incoming_request("clear_events", {})
         try:
-            count = len(self._queue)
-            self._queue.clear()
+            with self._lock:
+                count = len(self._queue)
+                self._queue.clear()
             result = {
                 "success": True,
                 "cleared": count,

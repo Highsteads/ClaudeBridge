@@ -39,6 +39,10 @@ class VariableControlHandler(BaseToolHandler):
             Dictionary with operation results
         """
         try:
+            # Coerce a digit-string id to int (the schema advertises anyOf
+            # number|string, and MCP clients often send numeric IDs as strings)
+            if isinstance(variable_id, str) and variable_id.strip().lstrip("-").isdigit():
+                variable_id = int(variable_id.strip())
             # Validate variable_id
             if not isinstance(variable_id, int):
                 self.info_log("❌ Invalid variable_id type")
@@ -86,6 +90,10 @@ class VariableControlHandler(BaseToolHandler):
                 self.info_log("❌ Invalid or missing name")
                 return {"error": "name is required and must be a string", "success": False}
 
+            # Coerce a digit-string folder_id to int (schema declares number,
+            # but clients may send it as a string)
+            if isinstance(folder_id, str) and folder_id.strip().lstrip("-").isdigit():
+                folder_id = int(folder_id.strip())
             # Validate folder_id
             if not isinstance(folder_id, int):
                 self.info_log("❌ Invalid folder_id type")

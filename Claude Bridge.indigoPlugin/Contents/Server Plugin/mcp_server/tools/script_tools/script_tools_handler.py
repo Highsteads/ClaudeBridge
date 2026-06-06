@@ -14,7 +14,7 @@ Tools:
   - read_script(name)               : return full content of a script
   - write_script(name, content)     : overwrite a script (auto-backup created)
   - create_script(name, content)    : create a new script (fails if exists)
-  - delete_script(name)             : move a script to the _archive subfolder
+  - delete_script(name)             : move a script to the _backups/_archived subfolder
   - list_script_backups(name)       : list auto-backups for a script
   - run_script(name)                : execute a script in the Indigo Python context
   - log_message(message, level)     : write a message to the Indigo on-screen log
@@ -72,17 +72,37 @@ def _backup_dir() -> str:
 def _resolve(name: str) -> str:
     """
     Return full path for a script name (adds .py if missing).
-    Searches Python Scripts first, then Scripts.  Falls back to Python Scripts
-    for new file paths (create/write operations).
+
+    The client-supplied name is forced to a flat basename so it can never
+    traverse out of the script folders ('../../etc/foo', an absolute path, or a
+    nested subdir all collapse to the leaf name), and the resolved real path is
+    asserted to live inside one of the allowed folders as belt-and-braces
+    (catches a symlink pointing outside). Searches Python Scripts first, then
+    Scripts; falls back to the primary folder for new file paths.
     """
+    # Strip directory components — defends against path traversal and
+    # absolute-path injection from the MCP client.
+    name = os.path.basename((name or "").strip())
+    if not name or name in (".", ".."):
+        raise ValueError("Invalid script name")
     if not name.endswith(".py"):
         name = name + ".py"
+
+    allowed = [os.path.realpath(d) for d in (_all_scripts_dirs() + [_scripts_dir()])]
+
+    def _contained(path: str) -> bool:
+        full = os.path.realpath(path)
+        return any(full == a or full.startswith(a + os.sep) for a in allowed)
+
     for folder in _all_scripts_dirs():
         candidate = os.path.join(folder, name)
-        if os.path.isfile(candidate):
+        if os.path.isfile(candidate) and _contained(candidate):
             return candidate
     # Not found in any folder — return path in primary folder for creation
-    return os.path.join(_scripts_dir(), name)
+    target = os.path.join(_scripts_dir(), name)
+    if not _contained(target):
+        raise ValueError("Resolved script path escapes the scripts folder")
+    return target
 
 
 def _make_backup(script_path: str) -> Optional[str]:
@@ -301,6 +321,20 @@ class ScriptToolsHandler(BaseToolHandler):
                                    "device_ids": device_ids,
                                    "variable_ids": variable_ids})
         try:
+            # Validate ids up front — a non-numeric client value must never be
+            # interpolated verbatim into generated source. Invalid ids are
+            # dropped (the scaffold is advisory; a bad id is not worth failing).
+            def _valid_ids(raw):
+                out = []
+                for x in (raw or []):
+                    try:
+                        out.append(int(x))
+                    except (TypeError, ValueError):
+                        continue
+                return out
+            device_ids   = _valid_ids(device_ids)
+            variable_ids = _valid_ids(variable_ids)
+
             path = _resolve(script_name)
             if os.path.isfile(path):
                 return {
@@ -367,7 +401,7 @@ class ScriptToolsHandler(BaseToolHandler):
 # -*- coding: utf-8 -*-
 # Filename:    {os.path.basename(path)}
 # Description: {desc}
-# Author:      CliveS & Claude Sonnet 4.6
+# Author:      CliveS & Claude
 # Date:        {now.strftime("%d-%m-%Y")}
 # Version:     1.0
 
@@ -379,7 +413,7 @@ import indigo  # noqa
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def log(message, level="INFO"):
-    indigo.server.log(f"[{{datetime.now().strftime('%H:%M:%S')}}] {{message}}",
+    indigo.server.log(f"[{{datetime.now().strftime('%H:%M:%S.%f')[:-3]}}] {{message}}",
                       level=level)
 
 

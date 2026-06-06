@@ -20,7 +20,26 @@ class InfluxDBQueryBuilder:
         """
         self.logger = logger or logging.getLogger("Plugin")
         self.time_formatter = TimeFormatter()
-    
+
+    @staticmethod
+    def _escape_literal(value: str) -> str:
+        """
+        Escape a value for use inside a single-quoted InfluxQL string literal.
+
+        Escapes backslashes first, then single quotes, so a name legitimately
+        containing an apostrophe (e.g. "Clive's Lamp") cannot break out of the
+        literal. Defence-in-depth against InfluxQL injection.
+        """
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+    @staticmethod
+    def _escape_identifier(value: str) -> str:
+        """
+        Escape a value for use inside a double-quoted InfluxQL identifier
+        (measurement / field / tag name). Escapes backslashes then double quotes.
+        """
+        return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
     def build_device_history_query(
         self,
         device_name: str,
@@ -46,17 +65,20 @@ class InfluxDBQueryBuilder:
         start_time_ms = int(start_time.timestamp() * 1000)
         
         # Build query with proper escaping
+        device_property_esc = self._escape_identifier(device_property)
+        measurement_esc     = self._escape_identifier(measurement)
+        device_name_esc     = self._escape_literal(device_name)
         query = (
-            f'SELECT "{device_property}" FROM "{measurement}" '
-            f"WHERE \"name\" = '{device_name}' "
+            f'SELECT "{device_property_esc}" FROM "{measurement_esc}" '
+            f"WHERE \"name\" = '{device_name_esc}' "
             f"AND time >= {start_time_ms}ms "
             f'GROUP BY "name" '
             f"ORDER BY time ASC"
         )
-        
+
         self.logger.debug(f"Built device history query: {query}")
         return query
-    
+
     def build_device_latest_query(
         self,
         device_name: str,
@@ -74,12 +96,15 @@ class InfluxDBQueryBuilder:
         Returns:
             InfluxQL query string
         """
+        device_property_esc = self._escape_identifier(device_property)
+        measurement_esc     = self._escape_identifier(measurement)
+        device_name_esc     = self._escape_literal(device_name)
         query = (
-            f'SELECT LAST("{device_property}") FROM "{measurement}" '
-            f"WHERE \"name\" = '{device_name}' "
+            f'SELECT LAST("{device_property_esc}") FROM "{measurement_esc}" '
+            f"WHERE \"name\" = '{device_name_esc}' "
             f'GROUP BY "name"'
         )
-        
+
         self.logger.debug(f"Built latest device query: {query}")
         return query
     
@@ -106,10 +131,13 @@ class InfluxDBQueryBuilder:
         start_time_ms = int(start_time.timestamp() * 1000)
         
         # Build device name filter
-        device_filter = " OR ".join([f"\"name\" = '{name}'" for name in device_names])
-        
+        measurement_esc = self._escape_identifier(measurement)
+        device_filter = " OR ".join(
+            [f"\"name\" = '{self._escape_literal(name)}'" for name in device_names]
+        )
+
         query = (
-            f'SELECT * FROM "{measurement}" '
+            f'SELECT * FROM "{measurement_esc}" '
             f"WHERE ({device_filter}) "
             f"AND time >= {start_time_ms}ms "
             f'GROUP BY "name" '
@@ -147,14 +175,17 @@ class InfluxDBQueryBuilder:
         start_time = now - timedelta(days=time_range_days)
         start_time_ms = int(start_time.timestamp() * 1000)
         
+        device_property_esc = self._escape_identifier(device_property)
+        measurement_esc     = self._escape_identifier(measurement)
+        device_name_esc     = self._escape_literal(device_name)
         query = (
-            f'SELECT {aggregation}("{device_property}") FROM "{measurement}" '
-            f"WHERE \"name\" = '{device_name}' "
+            f'SELECT {aggregation}("{device_property_esc}") FROM "{measurement_esc}" '
+            f"WHERE \"name\" = '{device_name_esc}' "
             f"AND time >= {start_time_ms}ms "
             f"GROUP BY time({group_by_time}), \"name\" "
             f"ORDER BY time ASC"
         )
-        
+
         self.logger.debug(f"Built aggregation query: {query}")
         return query
     
@@ -185,14 +216,18 @@ class InfluxDBQueryBuilder:
         start_time_ms = int(start_time.timestamp() * 1000)
         
         # Handle string vs numeric values
+        device_property_esc = self._escape_identifier(device_property)
+        measurement_esc     = self._escape_identifier(measurement)
+        device_name_esc     = self._escape_literal(device_name)
         if isinstance(pattern_value, str):
-            value_condition = f'"{device_property}" = \'{pattern_value}\''
+            pattern_value_esc = self._escape_literal(pattern_value)
+            value_condition = f'"{device_property_esc}" = \'{pattern_value_esc}\''
         else:
-            value_condition = f'"{device_property}" = {pattern_value}'
-        
+            value_condition = f'"{device_property_esc}" = {pattern_value}'
+
         query = (
-            f'SELECT * FROM "{measurement}" '
-            f"WHERE \"name\" = '{device_name}' "
+            f'SELECT * FROM "{measurement_esc}" '
+            f"WHERE \"name\" = '{device_name_esc}' "
             f"AND {value_condition} "
             f"AND time >= {start_time_ms}ms "
             f'GROUP BY "name" '
@@ -226,15 +261,18 @@ class InfluxDBQueryBuilder:
         start_time_ms = int(start_time.timestamp() * 1000)
         end_time_ms = int(end_time.timestamp() * 1000)
         
+        device_property_esc = self._escape_identifier(device_property)
+        measurement_esc     = self._escape_identifier(measurement)
+        device_name_esc     = self._escape_literal(device_name)
         query = (
-            f'SELECT "{device_property}" FROM "{measurement}" '
-            f"WHERE \"name\" = '{device_name}' "
+            f'SELECT "{device_property_esc}" FROM "{measurement_esc}" '
+            f"WHERE \"name\" = '{device_name_esc}' "
             f"AND time >= {start_time_ms}ms "
             f"AND time <= {end_time_ms}ms "
             f'GROUP BY "name" '
             f"ORDER BY time ASC"
         )
-        
+
         self.logger.debug(f"Built time range query: {query}")
         return query
     
@@ -253,11 +291,13 @@ class InfluxDBQueryBuilder:
         Returns:
             InfluxQL query string
         """
+        measurement_esc = self._escape_identifier(measurement)
+        device_name_esc = self._escape_literal(device_name)
         query = (
-            f'SHOW FIELD KEYS FROM "{measurement}" '
-            f"WHERE \"name\" = '{device_name}'"
+            f'SHOW FIELD KEYS FROM "{measurement_esc}" '
+            f"WHERE \"name\" = '{device_name_esc}'"
         )
-        
+
         self.logger.debug(f"Built properties discovery query: {query}")
         return query
     
@@ -284,14 +324,16 @@ class InfluxDBQueryBuilder:
         start_time_ms = int(start_time.timestamp() * 1000)
         
         # Build query for variable changes (uses 'value' field and 'varname' tag)
+        measurement_esc   = self._escape_identifier(measurement)
+        variable_name_esc = self._escape_literal(variable_name)
         query = (
-            f'SELECT "value" FROM "{measurement}" '
-            f"WHERE \"varname\" = '{variable_name}' "
+            f'SELECT "value" FROM "{measurement_esc}" '
+            f"WHERE \"varname\" = '{variable_name_esc}' "
             f"AND time >= {start_time_ms}ms "
             f'GROUP BY "varname" '
             f"ORDER BY time ASC"
         )
-        
+
         self.logger.debug(f"Built variable history query: {query}")
         return query
     
@@ -310,11 +352,13 @@ class InfluxDBQueryBuilder:
         Returns:
             InfluxQL query string
         """
+        measurement_esc   = self._escape_identifier(measurement)
+        variable_name_esc = self._escape_literal(variable_name)
         query = (
-            f'SELECT LAST("value") FROM "{measurement}" '
-            f"WHERE \"varname\" = '{variable_name}' "
+            f'SELECT LAST("value") FROM "{measurement_esc}" '
+            f"WHERE \"varname\" = '{variable_name_esc}' "
             f'GROUP BY "varname"'
         )
-        
+
         self.logger.debug(f"Built latest variable query: {query}")
         return query

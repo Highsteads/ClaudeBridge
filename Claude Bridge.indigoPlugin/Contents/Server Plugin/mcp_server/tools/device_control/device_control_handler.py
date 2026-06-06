@@ -26,7 +26,23 @@ class DeviceControlHandler(BaseToolHandler):
         """
         super().__init__(tool_name="device_control", logger=logger)
         self.data_provider = data_provider
-    
+
+    @staticmethod
+    def _coerce_device_id(device_id: Any) -> Any:
+        """
+        Coerce a numeric-string device_id to int (the schema advertises
+        anyOf number|string, and MCP clients often send IDs as strings).
+        Uses a guarded int() so signs and surrounding whitespace are handled
+        uniformly; a non-numeric value is returned unchanged so the caller's
+        isinstance(int) check still rejects it cleanly.
+        """
+        if isinstance(device_id, str):
+            try:
+                return int(device_id.strip())
+            except (TypeError, ValueError):
+                return device_id
+        return device_id
+
     def turn_on(self, device_id: int) -> Dict[str, Any]:
         """
         Turn on a device.
@@ -38,8 +54,7 @@ class DeviceControlHandler(BaseToolHandler):
             Dictionary with operation results
         """
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             # Validate device_id
             if not isinstance(device_id, int):
                 self.info_log("❌ Invalid device_id type")
@@ -73,8 +88,7 @@ class DeviceControlHandler(BaseToolHandler):
             Dictionary with operation results
         """
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             # Validate device_id
             if not isinstance(device_id, int):
                 self.info_log("❌ Invalid device_id type")
@@ -109,8 +123,7 @@ class DeviceControlHandler(BaseToolHandler):
             Dictionary with operation results
         """
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             # Validate device_id
             if not isinstance(device_id, int):
                 self.info_log("❌ Invalid device_id type")
@@ -141,8 +154,7 @@ class DeviceControlHandler(BaseToolHandler):
     def set_heat_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
         """Set heat setpoint on a thermostat device."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.set_heat_setpoint(device_id, setpoint)
@@ -157,8 +169,7 @@ class DeviceControlHandler(BaseToolHandler):
     def set_cool_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
         """Set cool setpoint on a thermostat device."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.set_cool_setpoint(device_id, setpoint)
@@ -173,8 +184,7 @@ class DeviceControlHandler(BaseToolHandler):
     def set_hvac_mode(self, device_id: int, mode: str) -> Dict[str, Any]:
         """Set HVAC mode on a thermostat device."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.set_hvac_mode(device_id, mode)
@@ -189,8 +199,7 @@ class DeviceControlHandler(BaseToolHandler):
     def lock_device(self, device_id: int) -> Dict[str, Any]:
         """Lock a lock device."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.lock_device(device_id)
@@ -205,8 +214,7 @@ class DeviceControlHandler(BaseToolHandler):
     def unlock_device(self, device_id: int, code: str = None) -> Dict[str, Any]:
         """Unlock a lock device."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.unlock_device(device_id, code=code)
@@ -222,8 +230,7 @@ class DeviceControlHandler(BaseToolHandler):
                   white: int = None, white_temperature: int = None) -> Dict[str, Any]:
         """Set colour levels on an RGB/RGBW dimmer."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.set_color(device_id, red, green, blue,
@@ -240,8 +247,7 @@ class DeviceControlHandler(BaseToolHandler):
     def set_fan_speed(self, device_id: int, speed: int) -> Dict[str, Any]:
         """Set speed on a speed-control device."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.set_fan_speed(device_id, speed)
@@ -256,8 +262,7 @@ class DeviceControlHandler(BaseToolHandler):
     def request_status_update(self, device_id: int) -> Dict[str, Any]:
         """Request a status update from a device."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.request_status_update(device_id)
@@ -272,8 +277,7 @@ class DeviceControlHandler(BaseToolHandler):
     def increase_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
         """Increase the heat setpoint by delta degrees Celsius."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.increase_heat_setpoint(device_id, delta)
@@ -291,8 +295,7 @@ class DeviceControlHandler(BaseToolHandler):
     def decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
         """Decrease the heat setpoint by delta degrees Celsius."""
         try:
-            if isinstance(device_id, str) and device_id.isdigit():
-                device_id = int(device_id)
+            device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
             result = self.data_provider.decrease_heat_setpoint(device_id, delta)

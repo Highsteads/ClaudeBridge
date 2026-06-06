@@ -64,14 +64,14 @@ and leave this field blank.</Label>
     </Field>
     <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_url"
            defaultValue="">
-        <Label>InfluxDB URL:</Label>
-        <Description>InfluxDB host (e.g. 192.168.x.x). Protocol prefix is stripped.</Description>
+        <Label>InfluxDB Host:</Label>
+        <Description>InfluxDB host (e.g. 192.168.x.x) — the IndigoSecrets.py key for this is INFLUXDB_HOST. Protocol prefix is stripped.</Description>
     </Field>
 
     <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_port"
            defaultValue="8086">
         <Label>InfluxDB Port:</Label>
-        <Description>InfluxDB server port (default: 8086)</Description>
+        <Description>InfluxDB server port (default: 8086) — the IndigoSecrets.py key for this is INFLUXDB_PORT.</Description>
     </Field>
 
     <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_login"

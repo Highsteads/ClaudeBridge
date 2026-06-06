@@ -14,6 +14,8 @@ Tools:
 import json
 import logging
 import os
+import tempfile
+import threading
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -26,7 +28,8 @@ except ImportError:
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 
-MAX_MEMORIES = 100   # oldest auto-expire beyond this limit
+MAX_MEMORIES = 100      # oldest auto-expire beyond this limit
+MAX_NOTE_LEN = 4000     # cap a single note's length to avoid store bloat
 
 
 def _memory_path() -> str:
@@ -49,8 +52,26 @@ def _load(path: str) -> List[Dict[str, Any]]:
 
 
 def _save(path: str, memories: List[Dict[str, Any]]) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(memories, fh, indent=2, ensure_ascii=False)
+    """
+    Atomically write the memory list. Serialise to a temp file in the same
+    directory, then os.replace() it onto the target — a rename on the same
+    filesystem is atomic, so an interrupted write can never leave a truncated
+    memory.json (which _load would silently discard as corrupt).
+    """
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix=".memory-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(memories, fh, indent=2, ensure_ascii=False)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 class MemoryHandler(BaseToolHandler):
@@ -63,6 +84,9 @@ class MemoryHandler(BaseToolHandler):
     ):
         super().__init__(tool_name="memory", logger=logger)
         self.data_provider = data_provider
+        # Serialises the load-modify-save sequence so concurrent remember/forget
+        # calls on the IWS threads cannot clobber each other (last-writer-wins).
+        self._lock = threading.Lock()
 
     # ────────────────────────────────────────────────────────────────────────
     # remember
@@ -72,35 +96,48 @@ class MemoryHandler(BaseToolHandler):
         """Store a note under a topic. Returns the assigned memory ID."""
         self.log_incoming_request("remember", {"topic": topic})
         try:
-            path      = _memory_path()
-            memories  = _load(path)
-            memory_id = int(time.time() * 1000)  # ms epoch as unique ID
+            # Coerce/validate up front — a hand-crafted request can send a
+            # non-string (the MCP schema is not enforced server-side), so
+            # guard against AttributeError on .strip() and require both fields.
+            topic = str(topic or "").strip()
+            note  = str(note or "").strip()
+            if not topic or not note:
+                return {"success": False, "error": "topic and note are required"}
+            if len(note) > MAX_NOTE_LEN:
+                note = note[:MAX_NOTE_LEN]
 
-            memories.append({
-                "id":        memory_id,
-                "topic":     topic.strip(),
-                "note":      note.strip(),
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            })
+            with self._lock:
+                path      = _memory_path()
+                memories  = _load(path)
+                memory_id = int(time.time() * 1000)  # ms epoch as unique ID
 
-            # Auto-expire: prefer removing oldest of same topic first,
-            # preserving cross-topic diversity. Fall back to overall oldest.
-            if len(memories) > MAX_MEMORIES:
-                same_topic_indices = [
-                    i for i, m in enumerate(memories[:-1])   # exclude just-appended
-                    if m.get("topic", "").lower() == topic.strip().lower()
-                ]
-                if same_topic_indices:
-                    del memories[same_topic_indices[0]]   # oldest same-topic
-                else:
-                    del memories[0]                       # overall oldest
+                memories.append({
+                    "id":        memory_id,
+                    "topic":     topic,
+                    "note":      note,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                })
 
-            _save(path, memories)
+                # Auto-expire: prefer removing oldest of same topic first,
+                # preserving cross-topic diversity. Fall back to overall oldest.
+                if len(memories) > MAX_MEMORIES:
+                    topic_lower = topic.lower()
+                    same_topic_indices = [
+                        i for i, m in enumerate(memories[:-1])   # exclude just-appended
+                        if m.get("topic", "").lower() == topic_lower
+                    ]
+                    if same_topic_indices:
+                        del memories[same_topic_indices[0]]   # oldest same-topic
+                    else:
+                        del memories[0]                       # overall oldest
+
+                _save(path, memories)
+
             result = {
                 "success":   True,
                 "memory_id": memory_id,
-                "topic":     topic.strip(),
-                "message":   f"Remembered under topic '{topic.strip()}'",
+                "topic":     topic,
+                "message":   f"Remembered under topic '{topic}'",
             }
             self.log_tool_outcome("remember", True, result["message"])
             return result
@@ -147,12 +184,17 @@ class MemoryHandler(BaseToolHandler):
         """Delete a memory entry by its ID."""
         self.log_incoming_request("forget", {"memory_id": memory_id})
         try:
-            path     = _memory_path()
-            memories = _load(path)
-            before   = len(memories)
-            memories = [m for m in memories if m.get("id") != int(memory_id)]
-            removed  = before - len(memories)
-            _save(path, memories)
+            try:
+                target_id = int(memory_id)
+            except (TypeError, ValueError):
+                return {"success": False, "error": "memory_id must be an integer"}
+            with self._lock:
+                path     = _memory_path()
+                memories = _load(path)
+                before   = len(memories)
+                memories = [m for m in memories if m.get("id") != target_id]
+                removed  = before - len(memories)
+                _save(path, memories)
 
             result = {
                 "success": removed > 0,

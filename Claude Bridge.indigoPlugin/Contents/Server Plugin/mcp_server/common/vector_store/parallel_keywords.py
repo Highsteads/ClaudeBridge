@@ -1,5 +1,12 @@
 """
 Parallel keyword generation utilities for improved performance.
+
+DORMANT / UNWIRED: leftover from the retired OpenAI-embedding / LanceDB vector
+store. Forms a closed import loop with semantic_keywords.py and has no external
+importer — nothing in the shipped embedding-free difflib store reaches this
+module. Retained only for a possible future re-enable. The empty-input guards
+below are pre-emptive hardening for that scenario (the progress maths divides
+by len(entities)).
 """
 
 import logging
@@ -31,6 +38,10 @@ def generate_keywords_parallel(
     Returns:
         Dictionary mapping entity IDs to lists of semantic keywords
     """
+    if not entities:
+        # Nothing to do — also avoids any divide-by-len(entities) progress maths.
+        return {}
+
     if collection_name != "devices":
         # Only parallelize device keyword generation for now
         # Use sequential processing for non-devices
@@ -166,8 +177,12 @@ def _generate_keywords_sequential_batch(
     
     This is essentially the optimized batch processing from the original implementation.
     """
+    if not entities:
+        # Nothing to do — also avoids the divide-by-len(entities) progress maths.
+        return {}
+
     from .semantic_keywords import _generate_llm_keywords_batch_with_fallback
-    
+
     all_llm_keywords = {}
     total_batches = (len(entities) + batch_size - 1) // batch_size
     

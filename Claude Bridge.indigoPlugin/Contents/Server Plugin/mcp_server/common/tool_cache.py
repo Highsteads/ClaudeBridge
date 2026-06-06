@@ -74,26 +74,84 @@ _SCRIPT_TOOLS = {"list_python_scripts", "list_script_backups", "read_script",
                  "find_orphaned_scripts"}
 _MEMORY_TOOLS = {"recall", "recall_topics"}
 
+# Arbitrary-mutation tools whose effect on cached state can't be scoped to a
+# single entity bucket — invalidate EVERYTHING for these.
+_CLEAR_ALL_TOOLS: Set[str] = {
+    "execute_indigo_python",
+    "run_script",
+}
+
 # Map mutating tool → buckets to invalidate
 _INVALIDATION_MAP: Dict[str, Set[str]] = {
+    # ── Device on/off/brightness/colour ─────────────────────────────────
     "device_turn_on":           _DEVICE_TOOLS,
     "device_turn_off":          _DEVICE_TOOLS,
     "device_set_brightness":    _DEVICE_TOOLS,
     "device_control":           _DEVICE_TOOLS,
+    "device_toggle":            _DEVICE_TOOLS,
+    "dimmer_brighten_by":       _DEVICE_TOOLS,
+    "dimmer_dim_by":            _DEVICE_TOOLS,
+    "set_color":                _DEVICE_TOOLS,
+    "lock_device":              _DEVICE_TOOLS,
+    "unlock_device":            _DEVICE_TOOLS,
+    "request_status_update":    _DEVICE_TOOLS,
+    # ── Thermostat / fan / speed ────────────────────────────────────────
+    "set_heat_setpoint":        _DEVICE_TOOLS,
+    "increase_heat_setpoint":   _DEVICE_TOOLS,
+    "decrease_heat_setpoint":   _DEVICE_TOOLS,
+    "set_cool_setpoint":        _DEVICE_TOOLS,
+    "set_hvac_mode":            _DEVICE_TOOLS,
+    "set_fan_mode":             _DEVICE_TOOLS,
+    "set_fan_speed":            _DEVICE_TOOLS,
+    "speedcontrol_set_index":   _DEVICE_TOOLS,
+    "speedcontrol_increase":    _DEVICE_TOOLS,
+    "speedcontrol_decrease":    _DEVICE_TOOLS,
+    # ── Sprinkler ───────────────────────────────────────────────────────
+    "sprinkler_run":            _DEVICE_TOOLS,
+    "sprinkler_stop":           _DEVICE_TOOLS,
+    "sprinkler_pause":          _DEVICE_TOOLS,
+    "sprinkler_resume":         _DEVICE_TOOLS,
+    "sprinkler_set_zone":       _DEVICE_TOOLS,
+    "sprinkler_next_zone":      _DEVICE_TOOLS,
+    "sprinkler_previous_zone":  _DEVICE_TOOLS,
+    # ── Device lifecycle / metadata ─────────────────────────────────────
+    "enable_device":            _DEVICE_TOOLS,
+    "rename_device":            _DEVICE_TOOLS,
+    "move_device_to_folder":    _DEVICE_TOOLS,
+    "duplicate_device":         _DEVICE_TOOLS,
+    "delete_device":            _DEVICE_TOOLS,
+    # ── Variables ───────────────────────────────────────────────────────
     "variable_create":          _VARIABLE_TOOLS,
     "variable_update":          _VARIABLE_TOOLS,
+    "variable_delete":          _VARIABLE_TOOLS,
+    "variable_move_to_folder":  _VARIABLE_TOOLS,
+    # ── Action groups ───────────────────────────────────────────────────
     "action_execute_group":     _ACTION_TOOLS | _DEVICE_TOOLS,
+    "enable_action_group":      _ACTION_TOOLS,
+    "disable_action_group":     _ACTION_TOOLS,
+    "duplicate_action_group":   _ACTION_TOOLS,
+    "delete_action_group":      _ACTION_TOOLS,
+    # ── Schedules ───────────────────────────────────────────────────────
     "enable_schedule":          _SCHEDULE_TOOLS,
     "disable_schedule":         _SCHEDULE_TOOLS,
+    "duplicate_schedule":       _SCHEDULE_TOOLS,
+    "delete_schedule":          _SCHEDULE_TOOLS,
+    # ── Triggers ────────────────────────────────────────────────────────
     "enable_trigger":           _TRIGGER_TOOLS,
     "disable_trigger":          _TRIGGER_TOOLS,
-    "plugin_control":           _PLUGIN_TOOLS,
+    "move_trigger_to_folder":   _TRIGGER_TOOLS,
+    "delete_trigger":           _TRIGGER_TOOLS,
+    "fire_trigger":             _DEVICE_TOOLS | _VARIABLE_TOOLS,  # may cause side-effects
+    # ── Plugins ─────────────────────────────────────────────────────────
     "restart_plugin":           _PLUGIN_TOOLS,
+    # ── Scripts ─────────────────────────────────────────────────────────
     "write_script":             _SCRIPT_TOOLS,
     "create_script":            _SCRIPT_TOOLS,
     "delete_script":            _SCRIPT_TOOLS,
+    # ── Memory ──────────────────────────────────────────────────────────
     "remember":                 _MEMORY_TOOLS,
     "forget":                   _MEMORY_TOOLS,
+    # ── Events ──────────────────────────────────────────────────────────
     "fire_indigo_event":        _DEVICE_TOOLS | _VARIABLE_TOOLS,  # may cause side-effects
 }
 
@@ -117,6 +175,13 @@ class ToolCache:
         # key = (tool_name, args_json) → (expires_at, result_str)
         self._store: Dict[Tuple[str, str], Tuple[float, Any]] = {}
         self._lock  = threading.Lock()
+
+        # Per-key in-flight state so concurrent identical misses share one
+        # compute() (avoids the thundering-herd duplicate the cache exists to
+        # prevent). Each entry is [lock, waiter_count]; the entry is removed
+        # once the last waiter has finished, so it never leaks. Guarded by
+        # _lock for creation/cleanup.
+        self._inflight: Dict[Tuple[str, str], list] = {}
 
         # Lifetime stats — surfaced via /health
         self.hits   = 0
@@ -154,30 +219,74 @@ class ToolCache:
             return compute(), False
 
         key = self.make_key(tool_name, args)
-        now = time.monotonic()
 
         # Fast path — read under lock
         with self._lock:
             entry = self._store.get(key)
+            now = time.monotonic()
             if entry and entry[0] > now:
                 self.hits += 1
                 return entry[1], True
             elif entry:
                 # expired
                 self._store.pop(key, None)
+            # Reserve (or join) the per-key in-flight slot for this miss so
+            # concurrent identical misses don't all run compute(). slot is
+            # [lock, waiter_count]; waiter_count tracks how many callers still
+            # hold a reference, so the slot can be removed only by the last one.
+            slot = self._inflight.get(key)
+            if slot is None:
+                slot = [threading.Lock(), 0]
+                self._inflight[key] = slot
+            slot[1] += 1
+            inflight = slot[0]
 
-        # Miss — compute outside the lock to avoid serialising callers
-        result = compute()
-        with self._lock:
-            self._store[key] = (now + self.default_ttl, result)
-            self.misses += 1
-        return result, False
+        # Miss — serialise only callers for the SAME key (other keys still run
+        # concurrently). The first to acquire computes; the rest then find the
+        # freshly cached value.
+        try:
+            with inflight:
+                with self._lock:
+                    entry = self._store.get(key)
+                    now = time.monotonic()
+                    if entry and entry[0] > now:
+                        self.hits += 1
+                        # We waited on another caller that already computed this.
+                        return entry[1], True
+
+                # Compute outside the store lock to avoid serialising callers
+                # for other keys.
+                result = compute()
+                with self._lock:
+                    # Stamp expiry from AFTER compute() so a slow compute does
+                    # not shorten the effective TTL.
+                    self._store[key] = (time.monotonic() + self.default_ttl, result)
+                    self.misses += 1
+                return result, False
+        finally:
+            # Drop our reference; remove the slot once the last waiter is done.
+            with self._lock:
+                slot = self._inflight.get(key)
+                if slot is not None:
+                    slot[1] -= 1
+                    if slot[1] <= 0:
+                        self._inflight.pop(key, None)
 
     def invalidate_for_tool(self, mutating_tool: str) -> int:
         """
         Drop every cached entry sourced from a tool in the bucket(s) mapped
         from *mutating_tool*. Returns the count of dropped entries.
+
+        Arbitrary-mutation tools (execute_indigo_python, run_script) can change
+        any entity, so they clear the whole cache rather than a single bucket.
         """
+        if mutating_tool in _CLEAR_ALL_TOOLS:
+            n = self.clear()
+            if n:
+                with self._lock:
+                    self.invalidations += n
+            return n
+
         buckets = _INVALIDATION_MAP.get(mutating_tool)
         if not buckets:
             return 0

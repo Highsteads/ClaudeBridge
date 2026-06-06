@@ -69,6 +69,25 @@ def get(key, default=None):
     return default
 
 
+def get_int(key, default=0):
+    """Read a config value coerced to int, guarded against bad input.
+
+    Indigo re-serialises PluginConfig fields as STRINGS after a Configure
+    dialog save (and as '' when blank), so a value that defaults to an int
+    here can arrive as '8086' or '' or arbitrary text. Coerce inside
+    try/except and fall back to a real int — never raise and never return a
+    string.
+    """
+    value = get(key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(default)
+        except (TypeError, ValueError):
+            return 0
+
+
 def is_influx_enabled():
     """Convenience wrapper used in two hot paths."""
     return bool(get("influxdb_enabled"))

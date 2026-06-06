@@ -39,16 +39,27 @@ class ActionControlHandler(BaseToolHandler):
             Dictionary with operation results
         """
         try:
+            # Coerce a digit-string id to int (the schema advertises anyOf
+            # number|string, and MCP clients often send numeric IDs as strings)
+            if isinstance(action_group_id, str) and action_group_id.strip().lstrip("-").isdigit():
+                action_group_id = int(action_group_id.strip())
             # Validate action_group_id
             if not isinstance(action_group_id, int):
                 self.info_log("❌ Invalid action_group_id type")
                 return {"error": "action_group_id must be an integer", "success": False}
 
-            # Validate delay if provided
+            # Validate delay if provided. Schema declares delay as 'number', so
+            # accept ints, floats and digit strings; coerce to a whole number of
+            # seconds before the bound check.
             if delay is not None:
-                if not isinstance(delay, int) or delay < 0:
+                try:
+                    delay = int(round(float(delay)))
+                except (TypeError, ValueError):
                     self.info_log("❌ Invalid delay value")
-                    return {"error": "delay must be a non-negative integer", "success": False}
+                    return {"error": "delay must be a non-negative number", "success": False}
+                if delay < 0:
+                    self.info_log("❌ Invalid delay value")
+                    return {"error": "delay must be a non-negative number", "success": False}
 
             # Get action group name
             action_group = self.data_provider.get_action_group(action_group_id)

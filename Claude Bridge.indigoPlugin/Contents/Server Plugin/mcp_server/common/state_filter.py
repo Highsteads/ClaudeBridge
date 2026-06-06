@@ -100,14 +100,25 @@ class StateFilter:
             
         # Handle different operators
         for operator, expected in condition.items():
-            if operator == "gt" and not (value > expected):
-                return False
-            elif operator == "gte" and not (value >= expected):
-                return False
-            elif operator == "lt" and not (value < expected):
-                return False
-            elif operator == "lte" and not (value <= expected):
-                return False
+            if operator in ("gt", "gte", "lt", "lte"):
+                # Ordering operators: coerce both operands to float. Indigo
+                # serialises many states as strings (e.g. '72.5') and some are
+                # None — a raw str/None compared to a number raises TypeError in
+                # Python 3.13. Treat a non-numeric operand as 'does not match'
+                # (return False) rather than aborting the whole filter.
+                try:
+                    v = float(value)
+                    e = float(expected)
+                except (TypeError, ValueError):
+                    return False
+                if operator == "gt" and not (v > e):
+                    return False
+                elif operator == "gte" and not (v >= e):
+                    return False
+                elif operator == "lt" and not (v < e):
+                    return False
+                elif operator == "lte" and not (v <= e):
+                    return False
             elif operator == "ne" and not (value != expected):
                 return False
             elif operator == "eq" and not (value == expected):
@@ -115,7 +126,13 @@ class StateFilter:
             elif operator == "contains" and expected not in str(value):
                 return False
             elif operator == "regex":
-                if not re.match(expected, str(value)):
+                # Client-supplied pattern — a malformed pattern raises re.error.
+                # Guard it so a bad pattern skips the device (return False)
+                # rather than aborting the whole filter.
+                try:
+                    if not re.search(str(expected), str(value)):
+                        return False
+                except re.error:
                     return False
                     
         return True

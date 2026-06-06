@@ -3,6 +3,7 @@ Main handler for historical data analysis.
 """
 
 import logging
+import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from zoneinfo import ZoneInfo
 from ...adapters.data_provider import DataProvider
 from ..base_handler import BaseToolHandler
 from ...common.influxdb import InfluxDBClient, InfluxDBQueryBuilder
-from ...common.openai_client.main import _get_client
+from ...common.openai_client.main import perform_completion
 
 
 # Alternative fields to try for device properties
@@ -83,7 +84,13 @@ class HistoricalAnalysisHandler(BaseToolHandler):
                     ValueError("No entity names provided"),
                     "validating input parameters"
                 )
-            
+
+            # Coerce defensively — a lax client may send time_range_days as a string
+            try:
+                time_range_days = int(time_range_days)
+            except (ValueError, TypeError):
+                time_range_days = 30
+
             if time_range_days <= 0 or time_range_days > 365:
                 return self.handle_exception(
                     ValueError("Time range must be between 1 and 365 days"),
@@ -114,7 +121,7 @@ class HistoricalAnalysisHandler(BaseToolHandler):
                     "tool": self.tool_name,
                     "report": "Historical analysis requires InfluxDB to be enabled and configured.",
                     "summary_stats": {},
-                    "devices_analyzed": []
+                    "entities_analyzed": []
                 }
             
             # Determine entity types and separate them
@@ -230,7 +237,7 @@ class HistoricalAnalysisHandler(BaseToolHandler):
                     "tool": self.tool_name,
                     "report": "No historical data was found for any of the specified devices in the given time range.",
                     "summary_stats": summary_stats,
-                    "devices_analyzed": [],
+                    "entities_analyzed": [],
                     "analysis_duration_seconds": analysis_duration
                 }
             
@@ -434,16 +441,19 @@ class HistoricalAnalysisHandler(BaseToolHandler):
             Local timezone-aware datetime object
         """
         try:
-            # Handle both 'Z' suffix and without
+            # Handle a 'Z' UTC suffix offset-aware (replace the suffix only — do
+            # NOT rstrip, and do NOT force UTC over an explicit numeric offset)
             if datetime_str.endswith('Z'):
-                datetime_str = datetime_str.rstrip('Z')
-            
-            # Parse the datetime and set UTC timezone
-            utc_datetime = datetime.fromisoformat(datetime_str).replace(tzinfo=ZoneInfo("UTC"))
-            
+                datetime_str = datetime_str[:-1] + '+00:00'
+
+            # Parse the datetime; only tag UTC if it carries no offset of its own
+            parsed = datetime.fromisoformat(datetime_str)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=ZoneInfo("UTC"))
+
             # Convert to local timezone
-            local_datetime = utc_datetime.astimezone()
-            
+            local_datetime = parsed.astimezone()
+
             return local_datetime
         except Exception as e:
             self.error_log(f"Failed to parse datetime '{datetime_str}': {e}")
@@ -470,6 +480,9 @@ class HistoricalAnalysisHandler(BaseToolHandler):
         
         # Numeric values with context-aware formatting
         if isinstance(value, (int, float)):
+            # Guard NaN/inf — int(nan) raises ValueError, int(inf) OverflowError
+            if not math.isfinite(value):
+                return str(value)
             # Power values (check before on/off states to avoid conflict)
             if property_name and any(term in property_name.lower() for term in ['realpower', 'power']) and 'onstate' not in property_name.lower():
                 if value >= 1000:
@@ -694,26 +707,25 @@ User query: "{user_query}"
 
 Recommend 1-3 most relevant properties:"""
 
-            # Get OpenAI client
+            # Make LLM call via the project's Anthropic wrapper
             try:
-                client = _get_client()
+                from mcp_server import runtime_config
+                recommendations = perform_completion(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_prompt},
+                    ],
+                    model=runtime_config.get("small_model"),
+                )
             except Exception as e:
-                self.debug_log(f"OpenAI client not available: {e}, using fallback properties")
+                self.debug_log(f"LLM client not available: {e}, using fallback properties")
                 return _ALTERNATIVE_FIELDS[:3]
-            
-            # Make LLM call
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.1,
-                max_tokens=50
-            )
-            
-            # Parse response
-            recommendations = response.choices[0].message.content.strip()
+
+            # Parse response (perform_completion returns a plain string)
+            if not recommendations:
+                self.debug_log("LLM returned no recommendations, using fallback")
+                return _ALTERNATIVE_FIELDS[:3]
+            recommendations = str(recommendations).strip()
             recommended_properties = [prop.strip() for prop in recommendations.split(",")]
             
             # Validate recommendations are in available properties
@@ -817,12 +829,17 @@ Recommend 1-3 most relevant properties:"""
                 
         except Exception as e:
             self.error_log(f"Error validating device names: {e}")
+            # Fail CLOSED: if enumeration/validation errors we must NOT let the
+            # raw client-supplied names through — they feed the InfluxQL query
+            # builder downstream. Treat them all as invalid so the caller gets a
+            # clear error instead of unvalidated names reaching a query.
             return {
-                "all_valid": True,  # Allow processing to continue on validation errors
-                "valid_devices": device_names,
-                "invalid_devices": [],
+                "all_valid": False,
+                "valid_devices": [],
+                "invalid_devices": list(device_names),
                 "suggestions": [],
-                "error_message": "",
+                "error_message": (f"Could not validate device names ({e}); refusing to "
+                                  f"proceed with unvalidated names."),
                 "detailed_report": ""
             }
     
@@ -1139,6 +1156,9 @@ Recommend 1-3 most relevant properties:"""
         
         # Handle numeric values
         if isinstance(value, (int, float)):
+            # Guard NaN/inf — int(nan) raises ValueError, int(inf) OverflowError
+            if not math.isfinite(value):
+                return str(value)
             if isinstance(value, float) and value == int(value):
                 return str(int(value))
             elif isinstance(value, float):
