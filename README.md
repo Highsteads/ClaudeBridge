@@ -421,7 +421,7 @@ a shared master credentials file at:
 | `IndigoSecrets_example.py` | Template only — empty placeholders. Shipped in the plugin bundle. | NO | YES |
 
 If you do not have `IndigoSecrets.py`, copy `IndigoSecrets_example.py` from
-the plugin bundle to that location and fill in your values. Or skip
+the plugin bundle to `/Library/Application Support/Perceptive Automation/` and rename it to `IndigoSecrets.py`, then fill in your values. Or skip
 `IndigoSecrets.py` entirely and enter values via the plugin's configuration
 dialog — `IndigoSecrets.py` wins over the dialog when both are set.
 
