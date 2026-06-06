@@ -38,8 +38,10 @@
 # credentials. Our IndigoSecrets.py is a separate, purpose-built solution.
 #
 # FIRST-TIME SETUP
-# Copy this file to:
-#     /Library/Application Support/Perceptive Automation/IndigoSecrets.py
+# Copy this file into the folder:
+#     /Library/Application Support/Perceptive Automation/
+# then RENAME the copy from  IndigoSecrets_example.py  to  IndigoSecrets.py
+# (the plugins import from IndigoSecrets, not from IndigoSecrets_example).
 # Fill in the values for the plugins you use. You only need the sections for
 # plugins you have installed.
 #

@@ -1,9 +1,9 @@
 # ClaudeBridge — Full Capability Summary
-*For anyone evaluating whether to download and install ClaudeBridge v2.4.0*
+*For anyone evaluating whether to download and install ClaudeBridge v2.7.0*
 
 ClaudeBridge connects **Claude Code** (Anthropic's AI coding agent) directly to your running **Indigo home automation server** via the Model Context Protocol (MCP). Instead of asking Claude to write scripts blindly, Claude can read your actual devices, check live states, query history, write and test scripts, and reason about your real home — all from a single conversation.
 
-**Current tool count: 86 tools across 16 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost.
+**Current tool count: 136 tools across 16 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost.
 
 ---
 
@@ -450,7 +450,9 @@ Script reads, writes, and backups are entirely local — no Anthropic round-trip
 | Reporting & analysis | 2 | `home_status_report` + `analyze_historical_data` |
 | Folders & server info | 3 | Idempotent folder creation + Reflector URL |
 | Scripting shell (ADMIN scope) | 2 | `execute_indigo_python` + `execute_plugin_menu_item` |
-| **Total** | **86** | |
+| Extended IOM wrappers (v2.5) | 43 | Thin wrappers over additional Indigo Object Model APIs (delete/duplicate/rename/move, fan/speed/sprinkler control, dependency lookups, etc.) |
+| Plugin-dev helpers (v2.6) | 7 | `plugin_lint` / `plugin_validate_xml` / `plugin_node_check_html` / `plugin_diff_source_vs_installed` / `plugin_show_packages_versions` / `plugin_refresh_deps` / `device_history` |
+| **Total** | **136** | |
 
 **Requirements:** Indigo 2023.2+ (Python 3.11+), macOS, Claude Code (requires Claude.ai Pro/Max or Anthropic API key). Developed and tested on Indigo 2025.2 / Python 3.13.
 
