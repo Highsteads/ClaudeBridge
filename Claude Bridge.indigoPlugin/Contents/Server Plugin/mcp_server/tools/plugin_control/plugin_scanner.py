@@ -134,7 +134,13 @@ class PluginScanner:
         plugin_name = plist_data.get("CFBundleDisplayName") or plist_data.get(
             "CFBundleName"
         )
-        plugin_version = plist_data.get("CFBundleVersion", "Unknown")
+        # Indigo displays PluginVersion, not CFBundleVersion (which is the
+        # bundle layout version and stays at 1.0.0). Prefer PluginVersion,
+        # fall back to CFBundleVersion for older/non-standard bundles.
+        plugin_version = (
+            plist_data.get("PluginVersion")
+            or plist_data.get("CFBundleVersion", "Unknown")
+        )
 
         # Check actual enabled status via Indigo API (if available)
         actual_enabled = enabled
@@ -178,7 +184,8 @@ class PluginScanner:
                 "id": plist_data.get("CFBundleIdentifier"),
                 "name": plist_data.get("CFBundleDisplayName")
                 or plist_data.get("CFBundleName"),
-                "version": plist_data.get("CFBundleVersion"),
+                "version": plist_data.get("PluginVersion")
+                or plist_data.get("CFBundleVersion"),
             }
         except Exception as e:
             self.logger.warning(f"Failed to parse Info.plist at {plist_path}: {e}")

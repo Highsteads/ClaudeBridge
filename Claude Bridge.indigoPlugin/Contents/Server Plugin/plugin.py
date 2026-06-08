@@ -4,9 +4,13 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
-# Date:        06-06-2026
-# Version:     2.7.0
+# Date:        08-06-2026
+# Version:     2.7.1
 #
+# v2.7.1 (08-06-2026): plugin_scanner now reports PluginVersion (what Indigo
+# displays) instead of CFBundleVersion, which is the bundle layout version and
+# stays at 1.0.0 — get_plugin_status / list_plugins previously showed 1.0.0 for
+# every plugin. Falls back to CFBundleVersion if PluginVersion is absent.
 # v2.6.6 (29-05-2026): Fixed check_plugin_updates (getPluginList returns PluginInfo objects).
 # v2.6.5 (29-05-2026): Fixed VectorStoreManager.stop() race — it early-returned
 # `if not self._running`, but _running is only set True AFTER the async warmup
