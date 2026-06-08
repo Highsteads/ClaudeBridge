@@ -22,6 +22,7 @@ from .handlers.list_handlers import ListHandlers
 from .security import RateLimiter, RateLimitExceeded, ScopeManager, ScopeDenied, required_scope_for
 from .tools.action_control import ActionControlHandler
 from .tools.device_control import DeviceControlHandler
+from .tools.device_control.color_names import parse_color
 from .tools.get_devices_by_type import GetDevicesByTypeHandler
 from .tools.historical_analysis import HistoricalAnalysisHandler
 from .tools.log_query import LogQueryHandler
@@ -1145,7 +1146,7 @@ class MCPHandler:
         }
 
         self._tools["set_color"] = {
-            "description": "Set the colour of an RGB or RGBW light dimmer. Values 0-255 per channel.",
+            "description": "Set the colour of an RGB or RGBW light dimmer. Provide EITHER a 'color' string (a hex code like '#FF8000' or '#F80', or a CSS/X11 colour name like 'dodgerblue' — 148 names, British 'grey' spellings accepted) OR explicit red/green/blue channels (0-255 each). 'color' takes precedence if both are given.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1153,16 +1154,20 @@ class MCPHandler:
                         "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "The dimmer device ID"
                     },
-                    "red":   {"type": "number", "description": "Red channel 0-255"},
-                    "green": {"type": "number", "description": "Green channel 0-255"},
-                    "blue":  {"type": "number", "description": "Blue channel 0-255"},
+                    "color": {
+                        "type": "string",
+                        "description": "Hex code (#RRGGBB, #RGB, with or without #) or a CSS colour name (e.g. 'dodgerblue', 'tomato', 'rebeccapurple'). Resolves to red/green/blue; takes precedence over the individual channels."
+                    },
+                    "red":   {"type": "number", "description": "Red channel 0-255 (ignored if 'color' is given)"},
+                    "green": {"type": "number", "description": "Green channel 0-255 (ignored if 'color' is given)"},
+                    "blue":  {"type": "number", "description": "Blue channel 0-255 (ignored if 'color' is given)"},
                     "white": {"type": "number", "description": "White channel 0-255 (RGBW only)"},
                     "white_temperature": {
                         "type": "number",
                         "description": "Colour temperature in Kelvin (e.g. 2700-6500)"
                     }
                 },
-                "required": ["device_id", "red", "green", "blue"]
+                "required": ["device_id"]
             },
             "function": self._tool_set_color
         }
@@ -3797,10 +3802,24 @@ class MCPHandler:
             self.logger.error(f"Unlock device error: {e}")
             return safe_json_dumps({"error": str(e), "success": False})
 
-    def _tool_set_color(self, device_id: int, red: int, green: int, blue: int,
+    def _tool_set_color(self, device_id: int, red: int = None, green: int = None,
+                        blue: int = None, color: str = None,
                         white: int = None, white_temperature: int = None) -> str:
-        """Set colour tool implementation."""
+        """Set colour tool implementation. Accepts either a `color` string (hex
+        like #FF8000 or a CSS name like 'dodgerblue') or explicit red/green/blue
+        channels (0-255). `color` takes precedence when supplied."""
         try:
+            if color is not None:
+                try:
+                    red, green, blue = parse_color(color)
+                except ValueError as ce:
+                    return safe_json_dumps({"error": str(ce), "success": False})
+            if red is None or green is None or blue is None:
+                return safe_json_dumps({
+                    "error": "Provide either a 'color' string (hex or CSS name) "
+                             "or all three of red/green/blue (0-255).",
+                    "success": False
+                })
             result = self.device_control_handler.set_color(
                 device_id, red, green, blue,
                 white=white, white_temperature=white_temperature

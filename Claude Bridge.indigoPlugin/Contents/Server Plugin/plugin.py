@@ -5,8 +5,15 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        08-06-2026
-# Version:     2.7.1
+# Version:     2.7.2
 #
+# v2.7.2 (08-06-2026): set_color now accepts a 'color' string — a hex code
+# (#RRGGBB / #RGB) or a CSS/X11 colour name (148 names, British 'grey' spellings)
+# — as an alternative to explicit red/green/blue channels (new color_names.py,
+# no runtime matplotlib dependency). Added scripts/generate_tool_doc.py: the
+# README's 136-tool table is now auto-generated from the tool registry +
+# scope_manager classification (grouped by read/write/admin), with a --check
+# mode that fails if the table is stale or any tool is unclassified.
 # v2.7.1 (08-06-2026): plugin_scanner now reports PluginVersion (what Indigo
 # displays) instead of CFBundleVersion, which is the bundle layout version and
 # stays at 1.0.0 — get_plugin_status / list_plugins previously showed 1.0.0 for
