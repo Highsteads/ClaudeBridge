@@ -277,8 +277,14 @@ example prompts.
 ### Architecture & security
 - **Claude-powered** — uses Anthropic's Claude API directly; no OpenAI,
   Voyage AI, or other third-party embedding services.
-- **Local text search** — fast substring/fuzzy matching; no vector database
-  required.
+- **Local text search** — fast substring/fuzzy matching with a keyword-to-type
+  bridge (so "light" finds your dimmers, "plug" your sockets); no vector
+  database and no API key required.
+- **Single transport (IWS)** — everything runs over Indigo's own web server on
+  its existing port, so there's no extra port to open and the Reflector gives
+  you secure remote access for free. Progress from long-running tools (a big
+  audit, a history query) is delivered as buffered server-sent events over that
+  same connection.
 - **Session management** — persistent MCP sessions with per-session access
   control.
 - **Secure** — Bearer token authentication on every IWS request;
