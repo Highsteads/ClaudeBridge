@@ -179,10 +179,37 @@ the whole 4m37s clock. I spent a fair while last night accidentally extending my
 own dead zone by impatiently retrying, and the lesson was to probe only the
 plain web root while waiting and never the message endpoint.
 
-If this is a known characteristic of heavier plugins, or if there is something
-obvious I'm doing in shutdown or startup that would block IWS like this, I'd be
-very grateful for a pointer. And if it's worth raising as a proper bug with a
-minimal reproducer, just say the word and I'll put one together.
+I then went one step further to rule out my own plugin. I found and fixed the
+two obvious candidates on my side — a thread-cleanup race in my shutdown path,
+and an unbounded network call on my startup path — shipped them, and measured
+again. Both the ~21 second shutdown and the ~4m37s dead zone came back
+identical, near enough to the second. So whatever this is, it does not appear
+to be my plugin's Python at all. The 21 seconds looks like the host's own quit
+grace period before it force-terminates the plugin process, and the 4m37s is
+unchanged even with my plugin's slow bits removed.
+
+I then ran it down to the actual cause with a few controlled restarts, and it
+turned out to be largely my own foot on the trigger. Restarting the plugin from
+the Plugins menu — even with a live MCP client connected and a session held open
+— restarts cleanly in about three seconds, no hang, no dead zone. The dead zone
+only appears when I restart the plugin through its OWN HTTP endpoint, i.e. when
+an MCP "restart this plugin" call comes in and the plugin restarts itself while
+that very request is still in flight. The request can never complete (the plugin
+has gone), and from that moment the whole web server stops serving anything for
+~4m37s, and the plugin's own process won't exit until it's force-killed at the
+~20 second grace mark. I can reproduce it on demand that way, and equally make it
+vanish by restarting from the menu instead.
+
+So in practical terms it's avoidable and I've stopped doing it. But it does look
+like there's an underlying robustness issue worth a glance at your end: a single
+in-flight request to a plugin that disappears mid-response shouldn't be able to
+wedge the entire web server (every endpoint, not just that plugin's) for four and
+a half minutes. My guess is a worker stuck waiting on the gone plugin with a long
+fixed timeout, but that's the part I can't see from out here.
+
+If it's worth a proper look, the reproducer is tiny — any plugin with an HTTP
+endpoint that restarts itself while handling a request — and I'm happy to package
+one up. No urgency at all given the menu-restart sidesteps it completely.
 
 ---
 
