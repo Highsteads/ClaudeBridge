@@ -755,6 +755,16 @@ README.md
 
 ## Changelog
 
+### 2.7.3 (2026-06-08)
+A small but genuinely handy search improvement. Asking Claude to "find all the lights" now turns up your dimmers and bulbs even when they're named "Lamp" rather than "Light", "find the plugs" turns up your Shelly and Tasmota sockets, "motion" finds the occupancy sensors, and "radiator" or "trv" finds the heating zones — the search now understands the *kind* of device, not just the words in its name. It's a curated set of synonyms matched to the device types you actually have here, and it only ever *adds* matches, so a proper name match always still comes top. Worth a note for anyone reading the code — the folder is called `vector_store` but there are no embeddings and no OpenAI key involved, it has been plain in-memory keyword search for a while now, and this just makes it a bit cleverer.
+
+### 2.7.2 (2026-06-08)
+- **Colours by name.** `set_color` now takes a colour as a hex code (`#FF8000`) or a plain name (`dodgerblue`, `tomato`, and 146 others, British "grey" spellings included), so you no longer have to work out three 0–255 numbers. The individual red/green/blue channels still work exactly as before.
+- **The tool list documents itself.** The table of all 136 tools further up this README is now generated straight from the plugin's own code and grouped by what each tool is allowed to do (read, write or admin), so it can't drift out of date.
+
+### 2.7.1 (2026-06-08)
+- **Plugin versions report correctly.** `get_plugin_status` and `list_plugins` were showing `1.0.0` for every plugin (they were reading the wrong field). They now show the real version.
+
 ### 2.7.0 (2026-06-06)
 A thorough security and robustness pass off the back of a full multi-agent review. The headline is that the optional per-token scope layer now does what it says on the tin.
 

@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...adapters.vector_store_interface import VectorStoreInterface
+from .type_aliases import aliases_for
 
 
 class VectorStore(VectorStoreInterface):
@@ -75,9 +76,20 @@ class VectorStore(VectorStoreInterface):
         if q in desc or q in model:
             return 0.75
 
-        # Partial word matches across name + description
+        # Type-alias category bridge: e.g. "light" -> a dimmer's aliases,
+        # "plug" -> a relay's, "motion" -> an occupancy sensor's. Aliases are
+        # computed here (not stored), never appear in results, and rank below
+        # name/description matches so a real name hit always wins.
+        aliases = aliases_for(entity)
+        if aliases:
+            if q in aliases:
+                return 0.7
+            if words and all(w in aliases for w in words):
+                return 0.7
+
+        # Partial word matches across name + description + aliases
         if words:
-            matched = sum(1 for w in words if w in name or w in desc)
+            matched = sum(1 for w in words if w in name or w in desc or w in aliases)
             if matched:
                 return 0.5 * (matched / len(words))
 

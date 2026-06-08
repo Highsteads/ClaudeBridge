@@ -5,8 +5,16 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        08-06-2026
-# Version:     2.7.2
+# Version:     2.7.3
 #
+# v2.7.3 (08-06-2026): search_entities now bridges category keywords to device
+# types — "light" finds a z2mLight named "Lounge Lamp", "plug" a shellyRelay,
+# "motion" an occupancy sensor — via a new curated type_aliases.py folded into
+# the existing in-memory text store's scoring as an additive tier (never lowers
+# an existing name/description score; aliases are computed at scoring time, never
+# stored, never leak into results). Curated against this estate's 53 deviceTypeIds
+# with a device-class fallback for unknown types. NB CB search has always been
+# keyless difflib text search (no OpenAI/embeddings) — this just improves recall.
 # v2.7.2 (08-06-2026): set_color now accepts a 'color' string — a hex code
 # (#RRGGBB / #RGB) or a CSS/X11 colour name (148 names, British 'grey' spellings)
 # — as an alternative to explicit red/green/blue channels (new color_names.py,
