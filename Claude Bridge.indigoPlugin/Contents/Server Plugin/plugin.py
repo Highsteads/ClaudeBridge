@@ -5,7 +5,17 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        09-06-2026
-# Version:     2.8.2
+# Version:     2.8.3
+#
+# v2.8.3 (09-06-2026): MCP transport reliability — the stdio proxy
+# (indigo_mcp_proxy.py v1.3) now retries a tools/call after a stale keep-alive
+# drop when the failure happened before the request was sent (so it never
+# executed and is safe to replay). Fixes the intermittent "Connection error
+# (not retried) — Broken pipe / Connection reset" on the first MCP call after a
+# long idle gap or a plugin reload. Root cause: the proxy reuses a persistent
+# keep-alive connection; IWS closes it when idle (and a reload kills it), and a
+# tools/call on the dead socket was never retried. Proxy-only — plugin runtime
+# unchanged; the fix is live on the next proxy relaunch.
 #
 # v2.8.2 (09-06-2026): correctness + hardening release from an 18-lens multi-agent
 # deep review (Opus 4.8). Audit tools now scan BOTH Indigo script folders and

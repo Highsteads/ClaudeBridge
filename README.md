@@ -9,7 +9,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 *Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.8.2
+**Version:** 2.8.3
 
 ---
 
@@ -775,6 +775,9 @@ README.md
 ---
 
 ## Changelog
+
+### 2.8.3 (2026-06-09)
+A reliability fix for the bridge connection itself. Every so often the very first request after a long quiet spell — or the first one straight after the plugin had been reloaded — would come back with a "Connection error … broken pipe" rather than doing the job, and you'd have to ask again. The cause was in the little stdio proxy that carries requests to Indigo: it keeps one connection open and reuses it, which is the right thing to do for speed, but Indigo's web server is entitled to quietly close that connection once it has been sitting idle for a while (and a plugin reload closes it outright). When that had happened, the next request hit a dead line. The proxy already knew to reconnect and try again for harmless read-only calls, but it deliberately would not replay an action that might change something, in case it had already half-happened. The fix is to tell the two situations apart: if the request never actually made it onto the wire — which is exactly the case when the connection has gone stale — then nothing happened at the other end, so it is completely safe to reconnect and send it again, whatever the request was. Only a failure *after* the request had already been sent is now left un-retried. The upshot is that those occasional first-call hiccups simply heal themselves. It rides along inside the plugin but it's really a proxy change, so it takes effect the next time the connection is started up.
 
 ### 2.8.2 (2026-06-09)
 A deep multi-agent review, run fresh against the new Claude release, going right through the plugin one lens at a time and then having a second set of agents try to knock down every finding before anything was acted on. The reassuring headline first — the security-critical core was gone over hard and held up. The SSRF firewall on the new webhooks, the connection pinning, the per-token scope layer and the secret-handling all stood up to a determined look, which is exactly what you want to hear about a plugin that can be reached from the internet.

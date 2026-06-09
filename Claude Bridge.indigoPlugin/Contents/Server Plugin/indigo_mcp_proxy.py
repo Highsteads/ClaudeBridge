@@ -3,8 +3,14 @@
 # Filename:    indigo_mcp_proxy.py
 # Description: stdio-to-HTTP proxy for Indigo MCP Server plugin (no OAuth)
 # Author:      CliveS & Claude Opus 4.8
-# Date:        06-06-2026
-# Version:     1.2
+# Date:        09-06-2026
+# Version:     1.3
+#
+# v1.3 (09-06-2026): retry a tools/call after a stale keep-alive drop when the
+# failure happened BEFORE the request was sent (request never reached the server,
+# so it didn't execute — safe to retry on a fresh connection). Fixes the
+# intermittent "Connection error (not retried) [Errno 32] Broken pipe / [Errno 54]
+# reset" seen on the first MCP call after a long idle gap or a plugin reload.
 
 import sys
 import json
@@ -152,26 +158,37 @@ def post_message(data: dict):
     if session_id:
         headers["Mcp-Session-Id"] = session_id
 
+    # Distinguish a SEND failure from a RECEIVE failure so a tools/call can be
+    # retried safely after a stale keep-alive drop. `sent` flips True only once
+    # conn.request() has written the request to the socket. A failure raised
+    # BEFORE that (sent is False) means the request never reached the server —
+    # the common case: IWS closed the idle keep-alive, or the plugin was reloaded,
+    # and our write hit a dead socket — so the call did NOT execute and is safe to
+    # retry for ANY method (a fresh connection is made on the retry). A failure
+    # AFTER the send may mean a non-idempotent call already ran, so keep the
+    # conservative no-retry there.
+    sent = False
     try:
         conn = _get_connection()
         conn.request("POST", INDIGO_MCP_PATH, body=body, headers=headers)
+        sent = True
         _handle_response(conn.getresponse(), is_notification)
+        return
     except (http.client.HTTPException, OSError) as e:
-        # The persistent connection went stale. Only retry IDEMPOTENT methods —
-        # replaying a tools/call could double a side effect.
         _connection = None
-        if is_notification or method in _IDEMPOTENT_METHODS:
+        if (not sent) or is_notification or method in _IDEMPOTENT_METHODS:
             try:
                 conn = _get_connection()
                 conn.request("POST", INDIGO_MCP_PATH, body=body, headers=headers)
                 _handle_response(conn.getresponse(), is_notification)
             except Exception as e2:
                 if not is_notification:
-                    _write_error(data.get("id"), f"Connection error: {e2}")
+                    _write_error(data.get("id"), f"Connection error after retry: {e2}")
         elif not is_notification:
             _write_error(
                 data.get("id"),
-                f"Connection error (not retried — '{method}' may have side effects): {e}",
+                f"Connection error after the request was sent (not retried — "
+                f"'{method}' may have already executed): {e}",
             )
     except Exception as e:
         if not is_notification:
