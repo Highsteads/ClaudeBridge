@@ -152,13 +152,9 @@ class WebhookDispatcher:
     def _deliver(self, sub: Any, event: Any) -> None:
         if not sub.enabled:
             return
-        # Pre-send drop paths (rate cap, egress deny, body cap) record the failure
-        # in memory but do NOT persist — under a storm they would each rewrite the
-        # whole store, and the in-memory quarantine still kicks in after 5 fails.
-        if not self._rate_ok():
-            sub.record_failure("global webhook rate cap reached; delivery dropped")
-            self._logger.warning(f"webhook {sub.subscription_id}: rate cap hit, dropped")
-            return
+        # Pre-send drop paths record the failure in memory but do NOT persist —
+        # under a storm they would each rewrite the whole store, and the in-memory
+        # quarantine still kicks in after 5 attributable fails.
 
         # 1. SEND-TIME firewall re-check (rebinding defence). Drop on any denial.
         try:
@@ -175,7 +171,19 @@ class WebhookDispatcher:
             sub.record_failure(f"payload {len(body)}B exceeds cap {sub.max_body_bytes}B")
             return
 
-        # 3. sign
+        # 3. GLOBAL rate cap — checked LAST of the pre-send gates so a token is
+        # only spent on a request actually about to go on the wire (a request
+        # dropped for egress/body never charges the shared budget). The cap is
+        # SHARED across subscriptions, so a drop here is NOT attributable to this
+        # subscription's target — record it via record_dropped (no quarantine)
+        # rather than record_failure, or one busy subscription could disable
+        # otherwise-healthy ones by exhausting the global budget.
+        if not self._rate_ok():
+            sub.record_dropped("global webhook rate cap reached; delivery dropped")
+            self._logger.warning(f"webhook {sub.subscription_id}: rate cap hit, dropped")
+            return
+
+        # 4. sign
         ts = str(int(time.time()))
         sig = hmac.new(sub.signing_key.encode("utf-8"), (ts + ".").encode("utf-8") + body, hashlib.sha256).hexdigest()
         headers = {
@@ -190,7 +198,7 @@ class WebhookDispatcher:
         if sub.auth_token:
             headers["Authorization"] = "Bearer " + sub.auth_token
 
-        # 4. deliver to the PINNED ip, with retry on 5xx / network error
+        # 5. deliver to the PINNED ip, with retry on 5xx / network error
         pinned = str(vetted[0])
         for attempt in range(self._max_retries + 1):
             try:

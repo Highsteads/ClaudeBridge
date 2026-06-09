@@ -26,23 +26,54 @@ from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 
 
-def _scripts_dir() -> str:
+def _scripts_dirs() -> List[str]:
     """
-    Return the active Indigo scripts folder (one level above the version dir).
+    Return EVERY existing Indigo scripts folder (one level above the version dir).
 
-    Resolution order:
-      1. <PA base>/Scripts        — standard Indigo location, present on all installations
-      2. <PA base>/Python Scripts — legacy / custom fallback
-      3. <PA base>/Scripts        — default if neither exists
+    An Indigo installation has two sibling script folders and BOTH can hold
+    automation that references device/variable IDs:
+      - <PA base>/Scripts        — scripts called directly by schedules/triggers
+      - <PA base>/Python Scripts — the main automation-logic folder (the bulk)
+
+    A previous version returned only the FIRST existing folder, so any ID used
+    solely in 'Python Scripts' was invisible to every audit — the documented
+    audit_variables over-reporting (it returned the whole estate as
+    'unreferenced'). Always scan both folders that exist.
     """
-    pa_base        = os.path.dirname(indigo.server.getInstallFolderPath())
-    scripts        = os.path.join(pa_base, "Scripts")
-    python_scripts = os.path.join(pa_base, "Python Scripts")
-    if os.path.isdir(scripts):
-        return scripts
-    if os.path.isdir(python_scripts):
-        return python_scripts
-    return scripts
+    pa_base = os.path.dirname(indigo.server.getInstallFolderPath())
+    candidates = [
+        os.path.join(pa_base, "Scripts"),
+        os.path.join(pa_base, "Python Scripts"),
+    ]
+    return [d for d in candidates if os.path.isdir(d)]
+
+
+def _iter_script_files(script_dirs):
+    """
+    Yield (display_name, content) for every .py file across all given dirs.
+
+    The display name is prefixed with the folder name when the same filename
+    exists in both folders, so a caller can tell them apart. open() forces
+    UTF-8 (Indigo's embedded Python defaults to ASCII) and tolerates the odd
+    bad byte with errors='replace'.
+    """
+    if isinstance(script_dirs, str):
+        script_dirs = [script_dirs]
+    multi = len([d for d in script_dirs if os.path.isdir(d)]) > 1
+    for d in script_dirs:
+        if not os.path.isdir(d):
+            continue
+        folder = os.path.basename(d)
+        for entry in os.scandir(d):
+            if not entry.name.endswith(".py") or not entry.is_file():
+                continue
+            try:
+                with open(entry.path, "r", encoding="utf-8", errors="replace") as fh:
+                    content = fh.read()
+            except OSError:
+                continue
+            name = f"{folder}/{entry.name}" if multi else entry.name
+            yield name, content
 
 
 def _days_since(ts) -> Optional[float]:
@@ -60,28 +91,20 @@ def _days_since(ts) -> Optional[float]:
     return None
 
 
-def _scan_scripts_for_ids(script_dir: str) -> Dict[int, List[str]]:
+def _scan_scripts_for_ids(script_dirs) -> Dict[int, List[str]]:
     """
-    Scan all .py files in script_dir.
+    Scan all .py files across script_dirs (accepts a list of folders, or a
+    single folder string for backward compatibility).
     Returns {numeric_id: [script_name, ...]} for every 8-12 digit ID found.
     """
     id_pattern = re.compile(r"\b(\d{8,12})\b")
     id_map: Dict[int, List[str]] = {}
-    if not os.path.isdir(script_dir):
-        return id_map
-    for entry in os.scandir(script_dir):
-        if not entry.name.endswith(".py") or not entry.is_file():
-            continue
-        try:
-            with open(entry.path, "r", encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
-        except OSError:
-            continue
+    for name, content in _iter_script_files(script_dirs):
         for m in id_pattern.findall(content):
             iid = int(m)
             id_map.setdefault(iid, [])
-            if entry.name not in id_map[iid]:
-                id_map[iid].append(entry.name)
+            if name not in id_map[iid]:
+                id_map[iid].append(name)
     return id_map
 
 
@@ -134,14 +157,8 @@ class AuditHandler(BaseToolHandler):
                 if not s.enabled:
                     disabled_schedules.append({"id": s.id, "name": s.name})
 
-            # Script count
-            scripts_dir = _scripts_dir()
-            script_count = 0
-            if os.path.isdir(scripts_dir):
-                script_count = sum(
-                    1 for e in os.scandir(scripts_dir)
-                    if e.name.endswith(".py") and e.is_file()
-                )
+            # Script count (across both Indigo script folders)
+            script_count = sum(1 for _name, _content in _iter_script_files(_scripts_dirs()))
 
             result = {
                 "success": True,
@@ -314,15 +331,32 @@ class AuditHandler(BaseToolHandler):
 
     def audit_variables(self) -> Dict[str, Any]:
         """
-        Report variables that appear unused: not referenced in any Python script.
-        Also flags variables whose value is empty, None, or the literal string 'null'.
+        Report variables for which NO reference can be found anywhere ClaudeBridge
+        can see, and separately flag variables whose value is empty/None/'null'.
+
+        A variable is only listed as 'unreferenced' when ALL of these hold:
+          1. its numeric ID is not found in either Indigo script folder
+             (Scripts + Python Scripts), AND
+          2. its NAME is not found (word-boundary) in any script — variables are
+             often used by name, not ID, AND
+          3. indigo.variable.getDependencies() returns no triggers / schedules /
+             action groups / control pages / devices / variables referencing it.
+
+        This is deliberately a CANDIDATE list, not a safe-to-delete list: a plugin
+        that hard-codes the ID in its own source is invisible to all three checks,
+        so the caller must still re-check (getDependencies immediately before any
+        delete) before acting. Name matching errs toward 'referenced' on purpose —
+        a false 'referenced' is safe, a false 'unreferenced' could cost a live
+        variable.
         """
         self.log_incoming_request("audit_variables", {})
         try:
-            scripts_dir = _scripts_dir()
-            id_map      = _scan_scripts_for_ids(scripts_dir)
+            script_dirs = _scripts_dirs()
+            id_map      = _scan_scripts_for_ids(script_dirs)
+            # One corpus for name-based detection (read each file once).
+            corpus = "\n".join(content for _name, content in _iter_script_files(script_dirs))
 
-            unused   = []
+            unused      = []
             problematic = []
 
             for vid in indigo.variables:
@@ -330,8 +364,20 @@ class AuditHandler(BaseToolHandler):
                 val = str(v.value).strip().lower()
 
                 in_scripts = id_map.get(v.id, [])
+                name_ref = bool(v.name) and re.search(
+                    r"\b" + re.escape(v.name) + r"\b", corpus
+                ) is not None
 
-                if not in_scripts:
+                # Authoritative reverse-dependency check (the data behind Indigo's
+                # own "used by…" delete warning).
+                dep_categories: List[str] = []
+                try:
+                    deps = self._deps_to_dict(indigo.variable.getDependencies(v.id))
+                    dep_categories = [c for c, items in deps.items() if items]
+                except Exception:
+                    dep_categories = []
+
+                if not in_scripts and not name_ref and not dep_categories:
                     unused.append({
                         "id":    v.id,
                         "name":  v.name,
@@ -349,17 +395,20 @@ class AuditHandler(BaseToolHandler):
             result = {
                 "success":              True,
                 "total_variables":      len(list(indigo.variables)),
-                "unreferenced_in_scripts": len(unused),
+                "unreferenced_count":   len(unused),
                 "problematic_count":    len(problematic),
                 "note": (
-                    "unreferenced means not found in Python Scripts folder. "
-                    "Variables may still be used by triggers/action groups."
+                    "'unreferenced' = no reference found by ID OR name in either "
+                    "script folder (Scripts + Python Scripts) AND no getDependencies "
+                    "link. This is a CANDIDATE list, NOT 'safe to delete' — a plugin "
+                    "that hard-codes the ID in its own source cannot be detected here. "
+                    "Always re-check (e.g. dependency_map) immediately before deleting."
                 ),
                 "unreferenced": unused,
                 "problematic":  problematic,
             }
             self.log_tool_outcome("audit_variables", True,
-                                  f"{len(unused)} unreferenced, {len(problematic)} problematic")
+                                  f"{len(unused)} candidate-unreferenced, {len(problematic)} problematic")
             return result
         except Exception as exc:
             return self.handle_exception(exc, "audit_variables")
@@ -429,8 +478,8 @@ class AuditHandler(BaseToolHandler):
                 for trigs in trig_name_map.values() if len(trigs) > 1
             ]
 
-            # ── Script analysis ────────────────────────────────────────────
-            scripts_dir = _scripts_dir()
+            # ── Script analysis (across BOTH Indigo script folders) ────────
+            script_dirs = _scripts_dirs()
 
             # Orphaned-ref detection deliberately uses a NARROW, context-aware
             # scan rather than the broad 8-12 digit scan used elsewhere: an
@@ -445,21 +494,12 @@ class AuditHandler(BaseToolHandler):
                 r"(?:\s*\[\s*|\s*\(\s*|_by_id\s*\(\s*)(\d{6,12})\b"
             )
             ctx_id_map: Dict[int, List[str]] = {}
-            if os.path.isdir(scripts_dir):
-                for entry in os.scandir(scripts_dir):
-                    if not (entry.name.endswith(".py") and entry.is_file()):
-                        continue
-                    try:
-                        with open(entry.path, "r", encoding="utf-8",
-                                  errors="replace") as fh:
-                            content = fh.read()
-                    except OSError:
-                        continue
-                    for m in ref_pat.findall(content):
-                        iid = int(m)
-                        ctx_id_map.setdefault(iid, [])
-                        if entry.name not in ctx_id_map[iid]:
-                            ctx_id_map[iid].append(entry.name)
+            for name, content in _iter_script_files(script_dirs):
+                for m in ref_pat.findall(content):
+                    iid = int(m)
+                    ctx_id_map.setdefault(iid, [])
+                    if name not in ctx_id_map[iid]:
+                        ctx_id_map[iid].append(name)
 
             # Orphaned: context-qualified IDs in scripts that aren't any device
             # or variable.
@@ -474,22 +514,13 @@ class AuditHandler(BaseToolHandler):
             # Write conflicts: multiple scripts calling updateValue(SAME_VAR_ID)
             write_map: Dict[int, List[str]] = {}
             write_pat = re.compile(r"updateValue\s*\(\s*(\d{8,12})\s*[,)]")
-            if os.path.isdir(scripts_dir):
-                for entry in os.scandir(scripts_dir):
-                    if not (entry.name.endswith(".py") and entry.is_file()):
-                        continue
-                    try:
-                        with open(entry.path, "r", encoding="utf-8",
-                                  errors="replace") as fh:
-                            content = fh.read()
-                        for m in write_pat.findall(content):
-                            iid = int(m)
-                            if iid in all_var_ids:
-                                write_map.setdefault(iid, [])
-                                if entry.name not in write_map[iid]:
-                                    write_map[iid].append(entry.name)
-                    except OSError:
-                        pass
+            for name, content in _iter_script_files(script_dirs):
+                for m in write_pat.findall(content):
+                    iid = int(m)
+                    if iid in all_var_ids:
+                        write_map.setdefault(iid, [])
+                        if name not in write_map[iid]:
+                            write_map[iid].append(name)
 
             write_conflicts = []
             for var_id, scripts in write_map.items():
@@ -609,8 +640,7 @@ class AuditHandler(BaseToolHandler):
                         "error": f"No device or variable found matching '{entity_id}'"}
 
             # Scan scripts (getDependencies does not cover script bodies)
-            scripts_dir  = _scripts_dir()
-            id_map       = _scan_scripts_for_ids(scripts_dir)
+            id_map       = _scan_scripts_for_ids(_scripts_dirs())
             scripts_refs = id_map.get(eid, [])
 
             # Authoritative reverse-dependency set via getDependencies

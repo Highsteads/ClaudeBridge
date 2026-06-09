@@ -62,6 +62,13 @@ class PluginScanner:
                     f"Found {len(disabled_plugins)} disabled plugins in {disabled_path}"
                 )
 
+        # A plugin can sit in the enabled Plugins/ directory yet be disabled via
+        # the Indigo API (the user turned it off without moving the bundle).
+        # _parse_plugin_bundle resolves that authoritative state into 'enabled',
+        # so honour include_disabled=False by dropping anything actually disabled.
+        if not include_disabled:
+            plugins = [p for p in plugins if p.get("enabled")]
+
         self.logger.debug(f"Total plugins scanned: {len(plugins)}")
         return plugins
 

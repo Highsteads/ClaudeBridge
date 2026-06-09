@@ -23,6 +23,7 @@ Tools:
 import logging
 import os
 import shutil
+import tempfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -116,7 +117,9 @@ def _make_backup(script_path: str) -> Optional[str]:
 
     base = os.path.basename(script_path)          # e.g. MyScript.py
     stem = base[:-3]                               # e.g. MyScript
-    ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Microsecond precision so two writes in the same second cannot collide and
+    # silently overwrite the earlier backup.
+    ts   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     dest = os.path.join(backup_dir, f"{stem}.{ts}.py")
 
     try:
@@ -202,9 +205,38 @@ class ScriptToolsHandler(BaseToolHandler):
                         "error": (f"Script '{name}' does not exist. "
                                   f"Use create_script to create a new script.")}
 
+            # Refuse to overwrite a live script if the pre-write backup failed —
+            # the whole point of the auto-backup is to make this reversible. A
+            # silent backup failure followed by a successful overwrite is
+            # unrecoverable data loss.
             backup = _make_backup(path)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(content)
+            if backup is None:
+                msg = (f"Refusing to overwrite '{name}' — the pre-write backup "
+                       f"failed (disk full or permissions?). No changes made.")
+                self.log_tool_outcome("write_script", False, msg)
+                return {"success": False, "error": msg}
+
+            # Atomic write: stage to a temp file in the SAME directory, then
+            # os.replace() so an interrupted write can never leave the live
+            # script truncated. The confirmed backup is kept on any failure.
+            tmp_path = None
+            try:
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=os.path.dirname(path), prefix=".cb_write_", suffix=".tmp"
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                os.replace(tmp_path, path)
+            except OSError as e:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                msg = (f"Write failed for '{name}': {e}. The original is intact; "
+                       f"a backup was saved at {backup}.")
+                self.log_tool_outcome("write_script", False, msg)
+                return {"success": False, "error": msg}
 
             lines = content.count("\n") + 1
             result = {

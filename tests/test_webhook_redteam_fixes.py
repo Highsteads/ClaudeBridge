@@ -21,7 +21,10 @@ from mcp_server.tools.webhooks.webhook_handler import WebhookHandler
 def _handler():
     mgr = SubscriptionManager()
     allow = Allowlist.from_entries(["8.8.8.8"])
-    return WebhookHandler(mgr, allowlist_provider=lambda: allow), mgr
+    # Gate explicitly enabled — these tests exercise validation logic, not the
+    # dark-ship default (covered in test_webhook_v282_fixes).
+    return WebhookHandler(mgr, allowlist_provider=lambda: allow,
+                          enabled_provider=lambda: True), mgr
 
 
 # 1. any_change cannot be combined with a state condition (silent-override bug)

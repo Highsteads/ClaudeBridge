@@ -86,17 +86,14 @@ def filter_json(json_obj: Union[Dict, List], keys_to_keep: List[str]) -> Union[D
         raise ValueError("Keys to keep must be provided as a list.")
 
     if isinstance(json_obj, dict):
-        # Filter current dictionary and recurse for nested dictionaries
-        result = {
-            key: (
-                filter_json(value, keys_to_keep)
-                if isinstance(value, (dict, list))
-                else value
-            )
-            for key, value in json_obj.items()
-            if key in keys_to_keep
-        }
-        return result
+        # Keep whitelisted top-level keys and copy their values VERBATIM.
+        # Do NOT recurse into a kept sub-object with the same keep-list: a
+        # device's `states` dict (temperature, humidity, …) has keys that are
+        # legitimately absent from the top-level keep-list, so recursing would
+        # silently strip every reading and hand the model a stateless device.
+        # This matches the list branch below, which already copies dict items
+        # verbatim.
+        return {key: json_obj[key] for key in keys_to_keep if key in json_obj}
     elif isinstance(json_obj, list):
         # Recursively process each element in the list
         result = []

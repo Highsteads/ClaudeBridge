@@ -5,7 +5,21 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        09-06-2026
-# Version:     2.8.1
+# Version:     2.8.2
+#
+# v2.8.2 (09-06-2026): correctness + hardening release from an 18-lens multi-agent
+# deep review (Opus 4.8). Audit tools now scan BOTH Indigo script folders and
+# check IDs, names AND getDependencies (audit_variables no longer reports live
+# variables as unreferenced); write_script refuses to overwrite when its backup
+# fails and writes atomically; energy self-sufficiency ignores partial days and
+# is clamped; minimal-field device search no longer strips state readings;
+# type-filtered search over-fetches before truncating; secret-bearing tool errors
+# are scrubbed from client responses; the MCP-Protocol-Version check is enforced
+# independently of the session-reconnect window; webhook global-cap drops no
+# longer quarantine healthy subscriptions; a corrupt scoped webhook id fails
+# closed; the webhook feature gate defaults closed; enable_influxdb is coerced on
+# config save. (Deferred: dwell re-check at fire time, no-bearer scope tightening
+# — both documented.)
 #
 # v2.8.1 (09-06-2026): robustness fixes from a multi-agent adversarial review of
 # the webhook subsystem (the SSRF firewall itself held — no egress bypass found
@@ -1320,7 +1334,7 @@ class Plugin(indigo.PluginBase):
             # Apply dialog values, falling back to IndigoSecrets.py for empty fields
             # (matches the resolution order used everywhere else in the plugin).
             self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
-            self.enable_influxdb   = values_dict.get("enable_influxdb", False)
+            self.enable_influxdb   = self._as_bool(values_dict.get("enable_influxdb", False))
             _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
             self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
             self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))
@@ -1391,7 +1405,7 @@ class Plugin(indigo.PluginBase):
                 errors_dict[fld] = "Must be a whole number"
 
         # Validate InfluxDB configuration if enabled
-        if values_dict.get("enable_influxdb", False):
+        if self._as_bool(values_dict.get("enable_influxdb", False)):
             influx_url = values_dict.get("influx_url", "").strip()
             influx_port = values_dict.get("influx_port", "").strip()
             influx_database = values_dict.get("influx_database", "").strip()
@@ -1722,8 +1736,12 @@ class Plugin(indigo.PluginBase):
             # Security configuration
             self.access_mode       = values_dict.get("access_mode", "local_only")
 
-            # InfluxDB configuration — IndigoSecrets.py first, dialog fallback
-            self.enable_influxdb   = values_dict.get("enable_influxdb", False)
+            # InfluxDB configuration — IndigoSecrets.py first, dialog fallback.
+            # Coerce the checkbox via _as_bool: a saved dialog re-serialises it as
+            # the string 'false', and bool('false') is True — so a user with
+            # InfluxDB off who merely opens+saves Configure would otherwise turn
+            # it ON until the next restart.
+            self.enable_influxdb   = self._as_bool(values_dict.get("enable_influxdb", False))
             _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
             self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
             self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))

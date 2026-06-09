@@ -102,13 +102,20 @@ class Subscription:
     def from_dict(cls, d: Dict[str, Any]) -> "Subscription":
         """Rehydrate from a persisted record (include_secrets=True form). Missing
         keys fall back to defaults so older/partial records still load."""
-        # Coerce entity_id defensively — a hand-edited store with a string id
-        # ("123") would otherwise never match (int != str). Bad value -> None.
+        # Coerce entity_id defensively. Distinguish an explicitly absent id
+        # (None / "" -> wildcard, intended) from a PRESENT-but-corrupt id. A
+        # corrupt scoped id must NOT silently widen to a wildcard firehose that
+        # delivers every entity of the type — fail closed by disabling the sub.
         raw_eid = d.get("entity_id")
-        try:
-            entity_id = int(raw_eid) if raw_eid not in (None, "") else None
-        except (TypeError, ValueError):
+        eid_corrupt = False
+        if raw_eid in (None, ""):
             entity_id = None
+        else:
+            try:
+                entity_id = int(raw_eid)
+            except (TypeError, ValueError):
+                entity_id = None
+                eid_corrupt = True
         sub = cls(
             webhook_url=d.get("webhook_url", ""),
             entity_type=d.get("entity_type", ""),
@@ -120,7 +127,8 @@ class Subscription:
             max_fires=d.get("max_fires"),
             max_body_bytes=int(d.get("max_body_bytes", DEFAULT_MAX_BODY_BYTES)),
             description=d.get("description", ""),
-            enabled=bool(d.get("enabled", True)),
+            # A corrupt scoped id fails closed regardless of the stored flag.
+            enabled=bool(d.get("enabled", True)) and not eid_corrupt,
         )
         if d.get("subscription_id"):
             sub.subscription_id = d["subscription_id"]
@@ -159,3 +167,12 @@ class Subscription:
         # receiver can't churn the delivery worker indefinitely.
         if self.stats["consecutive_failures"] >= QUARANTINE_AFTER:
             self.enabled = False
+
+    def record_dropped(self, reason: str) -> None:
+        """Record a pre-send DROP that is NOT attributable to this subscription's
+        own target — e.g. the GLOBAL webhook rate cap. Updates diagnostics only
+        and deliberately does NOT touch consecutive_failures, so one busy
+        subscription saturating the shared cap can never auto-quarantine an
+        otherwise-healthy subscription (that would be a self-inflicted outage)."""
+        self.stats["last_failure_at"] = _now_iso()
+        self.stats["last_error"] = reason

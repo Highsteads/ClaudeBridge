@@ -17,7 +17,11 @@ from mcp_server.tools.webhooks.webhook_handler import WebhookHandler
 def _handler(allow_entries=None):
     mgr = SubscriptionManager()
     allow = Allowlist.from_entries(allow_entries or [])
-    return WebhookHandler(mgr, allowlist_provider=lambda: allow), mgr
+    # Feature gate explicitly enabled — these tests exercise the create/allowlist/
+    # list/delete logic, not the dark-ship gate (the gate's fail-closed default is
+    # covered by test_webhook_v282_fixes.test_webhook_handler_defaults_gate_closed).
+    return WebhookHandler(mgr, allowlist_provider=lambda: allow,
+                          enabled_provider=lambda: True), mgr
 
 
 def test_create_denied_when_allowlist_empty():

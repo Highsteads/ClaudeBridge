@@ -194,23 +194,33 @@ class EnergyToolsHandler(BaseToolHandler):
 
                 if day_data.get("pv_kwh") is not None or soc_readings > 0:
                     daily.append(day_data)
+                    # Sum only keys actually present — never fabricate a 0 for a
+                    # missing key (a partial [Daily] line would otherwise skew totals).
                     for k in ("pv_kwh", "import_kwh", "export_kwh", "home_kwh"):
-                        totals[k] = round(totals[k] + day_data.get(k, 0.0), 2)
+                        if day_data.get(k) is not None:
+                            totals[k] = round(totals[k] + day_data[k], 2)
 
             daily.sort(key=lambda x: x["date"])
 
-            # Self-sufficiency across the period
-            total_home   = totals["home_kwh"]
-            total_import = totals["import_kwh"]
-            self_suff    = (
-                round((1 - total_import / total_home) * 100, 1)
-                if total_home > 0 else None
+            # Self-sufficiency: compute ONLY from days where BOTH home and import
+            # were parsed, so a partial day (PV present, home/import missing) can't
+            # fabricate a 0 and inflate the headline. Clamp to [0, 100] — an odd or
+            # partial day must never surface a negative percentage.
+            ss_days = [d for d in daily
+                       if d.get("home_kwh") is not None and d.get("import_kwh") is not None]
+            ss_home   = sum(d["home_kwh"] for d in ss_days)
+            ss_import = sum(d["import_kwh"] for d in ss_days)
+            self_suff = (
+                round(max(0.0, min(100.0, (1 - ss_import / ss_home) * 100)), 1)
+                if ss_home > 0 else None
             )
 
             result = {
                 "success":         True,
                 "days_requested":  days,
                 "days_found":      len(daily),
+                "days_used_for_self_sufficiency": len(ss_days),
+                "incomplete_days": len(daily) - len(ss_days),
                 "period_totals":   {**totals,
                                     "self_sufficiency_pct": self_suff},
                 "daily":           daily,
@@ -269,6 +279,9 @@ class EnergyToolsHandler(BaseToolHandler):
                 totals = {"pv_kwh": 0.0, "import_kwh": 0.0,
                           "export_kwh": 0.0, "home_kwh": 0.0}
                 dates  = []
+                ss_home = 0.0
+                ss_import = 0.0
+                complete = 0
                 for i in range(start_offset, start_offset + n_days):
                     date    = today - timedelta(days=i)
                     logpath = _log_file_for_date(log_dir, date)
@@ -288,16 +301,23 @@ class EnergyToolsHandler(BaseToolHandler):
                                     day_data.update(parsed)
                     except OSError:
                         pass
+                    # Sum only keys actually present — don't fabricate 0 for a
+                    # missing key.
                     for k in totals:
-                        totals[k] = round(
-                            totals[k] + day_data.get(k, 0.0), 2)
-                home   = totals["home_kwh"]
-                imp    = totals["import_kwh"]
-                sself  = (round((1 - imp / home) * 100, 1)
-                          if home > 0 else None)
+                        if day_data.get(k) is not None:
+                            totals[k] = round(totals[k] + day_data[k], 2)
+                    # Self-sufficiency only from days with BOTH home and import.
+                    if (day_data.get("home_kwh") is not None
+                            and day_data.get("import_kwh") is not None):
+                        ss_home   += day_data["home_kwh"]
+                        ss_import += day_data["import_kwh"]
+                        complete  += 1
+                sself  = (round(max(0.0, min(100.0, (1 - ss_import / ss_home) * 100)), 1)
+                          if ss_home > 0 else None)
                 return {**totals,
                         "self_sufficiency_pct": sself,
                         "days_found": len(dates),
+                        "complete_days": complete,
                         "dates": dates}
 
             a = _sum_period(0, period_a_days)

@@ -47,7 +47,16 @@ class MCPHandler:
     
     # MCP Protocol version we support
     PROTOCOL_VERSION = "2025-06-18"
-    
+
+    # Tools whose exception text can embed secrets/credentials/internal paths or
+    # executed code. Their raw error is scrubbed from the client response (which
+    # can travel over the reflector); full detail stays in the server event log.
+    _SENSITIVE_ERROR_TOOLS = frozenset({
+        "send_email", "send_notification", "execute_indigo_python",
+        "run_script", "scaffold_automation_script", "write_script", "create_script",
+        "webhook_create", "webhook_list", "webhook_delete",
+    })
+
     def __init__(
         self,
         data_provider: DataProvider,
@@ -553,9 +562,14 @@ class MCPHandler:
 
         self.logger.info(f"📨 {log_method} | session: {session_short}")
         
-        # MCP 2025-06-18 requires MCP-Protocol-Version header for HTTP transport
+        # MCP 2025-06-18 requires MCP-Protocol-Version header for HTTP transport.
+        # A PRESENT-but-mismatched version is always wrong, so enforce this
+        # independently of the session-store state below. (Previously this was
+        # also gated on `and self._sessions`, so the empty-_sessions reconnect
+        # window after a restart silently accepted a mismatched protocol version.)
+        # A missing header is still tolerated — only a wrong one is rejected.
         protocol_version_header = headers.get("mcp-protocol-version")
-        if method != "initialize" and not method.startswith("notifications/") and self._sessions:
+        if method != "initialize" and not method.startswith("notifications/"):
             if protocol_version_header and protocol_version_header != self.PROTOCOL_VERSION:
                 self.logger.debug(f"Invalid protocol version: {protocol_version_header}")
                 return self._json_error(msg_id, -32600, f"Unsupported protocol version: {protocol_version_header}")
@@ -827,8 +841,15 @@ class MCPHandler:
             with self._telemetry_lock:
                 self._tool_error_count += 1
             self.logger.error(f"Tool {tool_name} error: {e}")
+            # Don't echo a secret-bearing tool's raw exception back to the client
+            # (the response can travel over the reflector). Full detail is logged
+            # above; the client gets a generic pointer to the log.
+            if tool_name in self._SENSITIVE_ERROR_TOOLS:
+                detail = "see the Claude Bridge event log for details"
+            else:
+                detail = str(e)
             return self._json_error(
-                msg_id, -32603, f"Tool execution failed: {str(e)}"
+                msg_id, -32603, f"Tool '{tool_name}' execution failed: {detail}"
             )
         finally:
             self._emitter_local.emitter = None

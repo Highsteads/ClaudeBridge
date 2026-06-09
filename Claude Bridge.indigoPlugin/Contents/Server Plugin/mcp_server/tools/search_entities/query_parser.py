@@ -74,6 +74,15 @@ class QueryParser:
             params["state_detected"] = True
         else:
             params["state_detected"] = False
+
+        # A device_types filter is applied AFTER the store truncates to top_k
+        # (SearchEntities.search -> _filter_devices_by_type). Over-fetch so the
+        # type filter sees a full candidate set — otherwise a query that also
+        # fuzzy-matches many other-type entities can truncate the matching-type
+        # devices away and the filtered result comes back short or empty. Mirrors
+        # the state-filter over-fetch above.
+        if device_types is not None and len(device_types) > 0:
+            params["top_k"] = max(params["top_k"], 50)
         
         # Adjust threshold for specific queries
         params["threshold"] = self._extract_similarity_threshold(query_lower)

@@ -9,7 +9,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 *Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.8.1
+**Version:** 2.8.2
 
 ---
 
@@ -775,6 +775,19 @@ README.md
 ---
 
 ## Changelog
+
+### 2.8.2 (2026-06-09)
+A deep multi-agent review, run fresh against the new Claude release, going right through the plugin one lens at a time and then having a second set of agents try to knock down every finding before anything was acted on. The reassuring headline first — the security-critical core was gone over hard and held up. The SSRF firewall on the new webhooks, the connection pinning, the per-token scope layer and the secret-handling all stood up to a determined look, which is exactly what you want to hear about a plugin that can be reached from the internet.
+
+What the review did turn up was a genuine correctness bug in the housekeeping tools, plus a cluster of smaller fixes worth having. The honest improvements this release:
+
+- **The audit tools now tell the truth.** `audit_variables` used to flag very nearly every variable as "unreferenced", which made it worse than useless — act on it and you could delete a variable that was quietly running half the house. The cause was twofold: it only ever looked in one of the two Indigo script folders (so everything in your main "Python Scripts" folder was invisible to it), and it only matched variables used by their numeric ID, never by name. It now reads both folders, matches by name as well as ID, and cross-checks Indigo's own dependency list, so a variable used by a trigger, a schedule or by name in a script is no longer wrongly called unused. It is also now clearly labelled a *candidate* list and not a "safe to delete" list — a plugin that hard-codes an ID in its own source still can't be seen, so it tells you to double-check before deleting. The same both-folders fix flows through `find_conflicts` and `dependency_map`.
+- **`write_script` won't lose your work.** If it can't write the safety backup first — a full disk, a permissions snag — it now refuses to overwrite the existing script and tells you, rather than ploughing on and leaving you with nothing. The write itself is now atomic too, so an interrupted save can't leave a half-written file.
+- **The self-sufficiency figure is honest about gaps.** The energy summary used to treat a missing reading on a partial day as a zero, which could quietly inflate the self-sufficiency percentage, and it had no floor so an odd day could even show a negative. It now works the figure out only from days where it actually has both numbers, tells you how many days it used, and is clamped to a sensible range.
+- **Searches return what you asked for.** A "minimal" device search was accidentally stripping out the device's own sensor readings, so a temperature sensor could come back with no temperature. And filtering a search by device type could come up short because the filter ran after the results had already been trimmed. Both fixed.
+- **A few tidies on the new webhooks and config.** A busy webhook target can no longer cause a healthy one to be switched off, a corrupt saved entry can't turn a single-device watch into a firehose, the feature now defaults to off in every code path, and the InfluxDB toggle behaves itself when you open and save the config.
+
+Two findings were deliberately left for a later release rather than rushed — a re-check on duration-gated webhooks at the moment they fire, and a tightening of the no-token case — both written up so they're not forgotten. 165 tests now.
 
 ### 2.8.1 (2026-06-09)
 Hardening pass on the new Event Webhooks, off the back of a multi-agent adversarial review that tried hard to break it. The good news first — the egress firewall itself held: no way was found to make it POST to the LAN, loopback, the cloud-metadata address or the Indigo box itself, across sixteen different attack angles, and the signing and secret-handling stood up too. What the review did turn up was a handful of robustness foot-guns, all now fixed: `any_change` can no longer be quietly combined with a state condition (it would have ignored the condition); `max_fires` now counts only successful deliveries, so a flapping receiver can't make a subscription delete itself; the delivery queue is bounded so a storm of changes against a slow receiver can't grow memory without limit; the store is no longer rewritten on every dropped event; shutting down or disabling the feature now cleans up its timers properly (no orphaned worker on reload, no stale event after a disable/re-enable); and turning off TLS verification now logs a clear warning about the risk. None of these were security holes — the feature ships off by default and the tools are admin-only — but they're worth having right before anyone leans on it. 63 tests now, including the adversarial battery.

@@ -42,7 +42,9 @@ class WebhookHandler(BaseToolHandler):
         self._manager = manager
         self._allowlist = allowlist_provider
         # Feature ships dark — create is refused until the operator enables it.
-        self._enabled = enabled_provider or (lambda: True)
+        # Default the gate CLOSED: a missing enabled_provider must refuse create,
+        # never silently re-open the outbound-egress channel.
+        self._enabled = enabled_provider or (lambda: False)
 
     # ------------------------------------------------------------------
     # create
