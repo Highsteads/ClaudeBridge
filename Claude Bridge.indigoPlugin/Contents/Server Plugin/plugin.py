@@ -5,7 +5,21 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        09-06-2026
-# Version:     2.8.4
+# Version:     2.8.5
+#
+# v2.8.5 (09-06-2026): MCP transport reliability, round 2 — the stdio proxy
+# (indigo_mcp_proxy.py v1.4) now self-heals the two drop modes that survived
+# v1.3. (1) A stale keep-alive that surfaces at getresponse() as
+# http.client.RemoteDisconnected — zero bytes back, so the server never
+# processed the request — is retried on a fresh connection even for a
+# tools/call; plus a proactive idle-reconnect (drop a keep-alive idle longer
+# than 10s before writing) removes the common "first call after an idle gap"
+# race. (2) The "-32600 Missing or invalid Mcp-Session-Id" reply after an IWS
+# reload — returned as a 200 JSON body, so no retry path ever saw it — now
+# triggers a transparent re-handshake: replay the cached initialize for a fresh
+# session id, then replay the original call once. Ambiguous post-send failures
+# on a fresh connection are still NOT retried, so no side effect ever runs
+# twice. Proxy-only — plugin runtime unchanged; live on the next proxy relaunch.
 #
 # v2.8.4 (09-06-2026): deep-review cleanup batch. Removed ~1,700 lines of dead
 # code (the unwired vector_store semantic_keywords/parallel_keywords/validation

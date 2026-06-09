@@ -9,7 +9,7 @@ Once installed, Claude can query device states, turn devices on and off, read an
 
 *Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.8.4
+**Version:** 2.8.5
 
 ---
 
@@ -784,6 +784,15 @@ README.md
 ---
 
 ## Changelog
+
+### 2.8.5 (2026-06-09)
+The follow-on to the reliability fix in 2.8.3, closing the last two ways the bridge connection could drop out from under you. The first was a near-cousin of the one already dealt with. A connection that has gone stale while sitting idle does not always fail the moment a request is sent, it sometimes fails a fraction later when the reply is read back, and the earlier fix only caught the first of those. Now both are handled. When Indigo's web server has clearly closed an idle connection and sent nothing back at all, the request plainly never ran, so it is safe to reconnect and send it again whatever it was. On top of that the proxy now does the sensible thing pre-emptively and opens a fresh connection if the old one has been sitting unused for more than ten seconds, so most of these never get the chance to happen in the first place.
+
+The second was a different beast. After Indigo's web server reloads, the bridge's session can be quietly invalidated, and every request after that would come back with a "missing or invalid session" error until the connection was restarted by hand. The proxy now spots that particular error, quietly re-introduces itself to get a fresh session, and replays your original request, so instead of a wall of session errors you simply get your answer.
+
+As before, none of this ever blindly repeats an action that might already have gone through — a failure that happens *after* a request was genuinely sent is still left well alone, so a light is never toggled twice or an event fired twice. It rides along inside the plugin but it is really a change to the little stdio proxy, so it takes effect the next time the bridge connection is started up, not on a plugin reload.
+
+176 tests now.
 
 ### 2.8.4 (2026-06-09)
 A tidy-up release off the back of the deep review — the lower-priority findings that were worth doing, none of them urgent. The biggest single change is a clear-out: about 1,700 lines of dead code have gone, including three "vector store" modules that hadn't been wired into anything for a good while (the search has been plain keyword matching for ages), a token-validation helper that was created at startup and then never actually used, and a phantom "access mode" setting that was read from a config field that doesn't exist, so it could never be anything other than its default. None of it was doing anything, and carrying dormant code around just makes the place harder to read — it's all recoverable from git history if it's ever wanted again.
