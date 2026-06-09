@@ -53,6 +53,7 @@ class WebhookDispatcher:
         retry_base_delay: float = 1.0,
         per_minute: int = 60,
         per_day: int = 5000,
+        max_queue: int = 10000,
     ):
         self._allowlist_provider = allowlist_provider
         self._logger = logger or logging.getLogger(__name__)
@@ -65,7 +66,10 @@ class WebhookDispatcher:
         self._per_minute = per_minute
         self._per_day = per_day
 
-        self._queue: "queue.Queue" = queue.Queue()
+        # Bounded queue so a state-change storm with a slow receiver can't grow
+        # memory without limit; dispatch() drops (and counts) when full.
+        self._queue: "queue.Queue" = queue.Queue(maxsize=max_queue)
+        self._dropped = 0
         self._worker: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._sem = threading.Semaphore(max_concurrency)
@@ -87,17 +91,31 @@ class WebhookDispatcher:
 
     def stop(self) -> None:
         self._stop.set()
-        self._queue.put(None)            # unblock the worker
+        try:
+            self._queue.put_nowait(None)   # best-effort wake; the worker also polls _stop
+        except queue.Full:
+            pass
         if self._worker and self._worker.is_alive():
-            self._worker.join(timeout=8)
+            # Join budget must exceed the worst-case single in-flight delivery
+            # (connect + total socket timeout) or the worker can be left orphaned
+            # mid-delivery on a plugin reload (the IndigoPluginHost3 orphan gotcha).
+            self._worker.join(timeout=self._connect_timeout + self._total_timeout + 2)
             if self._worker.is_alive():
-                self._logger.warning("webhook-dispatcher did not stop within 8s")
+                self._logger.warning("webhook-dispatcher worker still alive after join budget")
 
     def dispatch(self, sub: Any, event: Any) -> None:
-        """Non-blocking enqueue. Safe to call from the Indigo callback thread."""
+        """Non-blocking enqueue. Safe to call from the Indigo callback thread.
+        Drops (and counts) the event if the bounded queue is full rather than
+        ever blocking the Indigo callback thread."""
         if self._stop.is_set():
             return
-        self._queue.put((sub, event))
+        try:
+            self._queue.put_nowait((sub, event))
+        except queue.Full:
+            self._dropped += 1
+            self._logger.warning(
+                f"webhook delivery queue full ({self._queue.maxsize}); event dropped "
+                f"(total dropped this run: {self._dropped})")
 
     def get_stats(self) -> Dict[str, Any]:
         return {"queue_depth": self._queue.qsize(), "running": bool(self._worker and self._worker.is_alive())}
@@ -134,9 +152,11 @@ class WebhookDispatcher:
     def _deliver(self, sub: Any, event: Any) -> None:
         if not sub.enabled:
             return
+        # Pre-send drop paths (rate cap, egress deny, body cap) record the failure
+        # in memory but do NOT persist — under a storm they would each rewrite the
+        # whole store, and the in-memory quarantine still kicks in after 5 fails.
         if not self._rate_ok():
             sub.record_failure("global webhook rate cap reached; delivery dropped")
-            self._save()
             self._logger.warning(f"webhook {sub.subscription_id}: rate cap hit, dropped")
             return
 
@@ -146,7 +166,6 @@ class WebhookDispatcher:
             vetted = vet_url(sub.webhook_url, allowlist, resolve=True)
         except EgressDenied as e:
             sub.record_failure(f"send-time egress check failed: {e}")
-            self._save()
             self._logger.warning(f"webhook {sub.subscription_id} dropped: {e}")
             return
 
@@ -154,7 +173,6 @@ class WebhookDispatcher:
         body = json.dumps(event.to_dict(), default=str).encode("utf-8")
         if len(body) > sub.max_body_bytes:
             sub.record_failure(f"payload {len(body)}B exceeds cap {sub.max_body_bytes}B")
-            self._save()
             return
 
         # 3. sign
@@ -210,7 +228,9 @@ class WebhookDispatcher:
         return self._stop.wait(self._retry_base * (2 ** attempt))
 
     def _maybe_expire(self, sub: Any) -> None:
-        if sub.max_fires is not None and sub.stats["fires"] >= sub.max_fires and self._on_expired:
+        # Only SUCCESSFUL deliveries count toward max_fires — a flapping/failing
+        # receiver must not self-delete the subscription via its failures.
+        if sub.max_fires is not None and sub.stats["successful_fires"] >= sub.max_fires and self._on_expired:
             self._logger.info(f"webhook {sub.subscription_id} auto-expired after {sub.stats['fires']} fires")
             try:
                 self._on_expired(sub)

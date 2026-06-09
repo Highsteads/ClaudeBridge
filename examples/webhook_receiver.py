@@ -36,6 +36,8 @@ MAX_SKEW_SECONDS = 300
 
 
 def make_handler(signing_key: bytes):
+    seen_event_ids = set()   # delivery is at-least-once — dedupe on event_id
+
     class WebhookReceiver(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass  # quiet the default access log
@@ -59,6 +61,18 @@ def make_handler(signing_key: bytes):
                 event = json.loads(body)
             except ValueError:
                 event = {"_raw": body.decode("utf-8", "replace")}
+
+            # Dedupe: a retried delivery resends the same event_id. Ack it but
+            # don't act on it twice. (Crude unbounded-guard for the example.)
+            eid = event.get("event_id")
+            if eid and eid in seen_event_ids:
+                print(f"[DUP] event_id={eid} already seen — skipping")
+                self.send_response(200); self.end_headers(); self.wfile.write(b"ok (dup)")
+                return
+            if eid:
+                if len(seen_event_ids) > 10000:
+                    seen_event_ids.clear()
+                seen_event_ids.add(eid)
 
             human = event.get("human", {})
             print(f"[OK] {event.get('event_type', '?')} | "

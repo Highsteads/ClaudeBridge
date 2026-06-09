@@ -72,6 +72,12 @@ class WebhookHandler(BaseToolHandler):
             if not isinstance(conditions, dict) or not conditions:
                 return {"success": False, "error": "conditions must be a non-empty object "
                         "(e.g. {\"onState\": true}, {\"battery\": {\"lt\": 20}}, or {\"any_change\": true})"}
+            # any_change fires on every change and short-circuits the transition
+            # check, so combining it with a state condition would silently ignore
+            # that condition. Refuse the ambiguous combination at create time.
+            if conditions.get("any_change") and len(conditions) > 1:
+                return {"success": False,
+                        "error": "any_change cannot be combined with other conditions"}
 
             # numeric coercions, each guarded (CB config-coercion convention)
             eid = self._opt_int(entity_id, "entity_id")
@@ -122,6 +128,11 @@ class WebhookHandler(BaseToolHandler):
             )
             self._manager.add(sub)
             self.info_log(f"created {sub.subscription_id} -> {webhook_url}")
+            if not bool(verify_ssl):
+                self.warning_log(
+                    f"subscription {sub.subscription_id} created with verify_ssl=False — "
+                    f"the receiver's TLS cert/hostname will NOT be validated; a network "
+                    f"MITM between here and the target could read the payload and any bearer token")
 
             return {
                 "success": True,

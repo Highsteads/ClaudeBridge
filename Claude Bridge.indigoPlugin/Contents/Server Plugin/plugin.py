@@ -5,8 +5,19 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        09-06-2026
-# Version:     2.8.0
+# Version:     2.8.1
 #
+# v2.8.1 (09-06-2026): robustness fixes from a multi-agent adversarial review of
+# the webhook subsystem (the SSRF firewall itself held — no egress bypass found
+# across 16 attack classes). Fixed: any_change can no longer be silently combined
+# with a state condition; max_fires now counts only successful deliveries (a
+# flapping receiver no longer self-deletes); the delivery queue is bounded
+# (drop+count when full) and pre-send drops no longer rewrite the store on every
+# event; stop() join budget now exceeds the socket timeout (no orphan worker on
+# reload); disabling the feature cancels pending dwell timers; deleting a wildcard
+# subscription cancels its dwell timers; from_dict coerces entity_id; verify_ssl
+# =False now logs a clear MITM warning. 63 webhook tests incl. an adversarial
+# egress battery.
 # v2.8.0 (09-06-2026): NEW — outbound Event Webhooks (the "home calls Claude/you"
 # feature). The plugin can POST a signed JSON event to an APPROVED external URL
 # when a device/variable condition transitions into match. 3 ADMIN tools
@@ -869,6 +880,9 @@ class Plugin(indigo.PluginBase):
             self.webhook_dispatcher.start()
             self.logger.info("\t✅ Event Webhooks enabled")
         elif was_enabled and not self.webhooks_enabled:
+            # Cancel pending dwell timers too, or a disable->re-enable within the
+            # dwell window could fire a stale event whose condition no longer holds.
+            self.webhook_manager.shutdown()
             self.webhook_dispatcher.stop()
             self.logger.info("\tEvent Webhooks disabled")
 
@@ -922,8 +936,8 @@ class Plugin(indigo.PluginBase):
         self.logger.info("Stopping plugin...")
 
         # Stop the webhook subsystem first: cancel dwell timers, flush stats to
-        # disk, then drain + join the delivery worker (so in-flight events still
-        # deliver before the join).
+        # disk, then stop the delivery worker. The in-progress delivery finishes
+        # (bounded by the socket timeouts); any still-queued events are dropped.
         if self.webhook_manager:
             try:
                 self.webhook_manager.shutdown()

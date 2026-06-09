@@ -71,6 +71,20 @@ class DwellTimerQueue:
             timer.cancel()
             self._logger.debug(f"Dwell timer cancelled: {key}")
 
+    def cancel_subscription(self, subscription_id: str) -> None:
+        """Cancel every pending timer belonging to a subscription. Needed for
+        wildcard subs (entity_id=None) whose timers are keyed by the actual
+        per-event entity id, so a single (sub_id, entity_id) cancel can't reach
+        them — without this they'd orphan and could fire after delete()."""
+        prefix = f"{subscription_id}:"
+        with self._lock:
+            keys = [k for k in self._timers if k.startswith(prefix)]
+            timers = [self._timers.pop(k) for k in keys]
+        for timer in timers:
+            timer.cancel()
+        if timers:
+            self._logger.debug(f"Cancelled {len(timers)} dwell timer(s) for {subscription_id}")
+
     def cancel_all(self) -> None:
         """Cancel every pending timer (called on shutdown)."""
         with self._lock:

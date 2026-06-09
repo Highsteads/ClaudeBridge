@@ -69,8 +69,10 @@ class SubscriptionManager:
             sub = self._subs.pop(subscription_id, None)
         if sub is None:
             return False
-        if self._dwell and sub.entity_id is not None:
-            self._dwell.cancel(subscription_id, sub.entity_id)
+        # Cancel ALL of this subscription's dwell timers (covers wildcard subs
+        # whose timers are keyed by the per-event entity id, not sub.entity_id).
+        if self._dwell:
+            self._dwell.cancel_subscription(subscription_id)
         self._save()
         self._logger.info(f"Webhook subscription deleted: {subscription_id}")
         return True

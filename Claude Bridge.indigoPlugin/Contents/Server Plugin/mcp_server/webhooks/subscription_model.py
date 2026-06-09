@@ -36,6 +36,7 @@ def _now_iso() -> str:
 def _fresh_stats() -> Dict[str, Any]:
     return {
         "fires": 0,
+        "successful_fires": 0,   # only successes count toward max_fires
         "last_fired_at": None,
         "last_success_at": None,
         "last_failure_at": None,
@@ -101,11 +102,18 @@ class Subscription:
     def from_dict(cls, d: Dict[str, Any]) -> "Subscription":
         """Rehydrate from a persisted record (include_secrets=True form). Missing
         keys fall back to defaults so older/partial records still load."""
+        # Coerce entity_id defensively — a hand-edited store with a string id
+        # ("123") would otherwise never match (int != str). Bad value -> None.
+        raw_eid = d.get("entity_id")
+        try:
+            entity_id = int(raw_eid) if raw_eid not in (None, "") else None
+        except (TypeError, ValueError):
+            entity_id = None
         sub = cls(
             webhook_url=d.get("webhook_url", ""),
             entity_type=d.get("entity_type", ""),
             conditions=d.get("conditions") or {},
-            entity_id=d.get("entity_id"),
+            entity_id=entity_id,
             auth_token=d.get("auth_token", ""),
             verify_ssl=bool(d.get("verify_ssl", True)),
             duration_seconds=d.get("duration_seconds"),
@@ -131,6 +139,7 @@ class Subscription:
     def record_success(self, http_status: int) -> None:
         now = _now_iso()
         self.stats["fires"] += 1
+        self.stats["successful_fires"] += 1   # only successes count toward max_fires
         self.stats["last_fired_at"] = now
         self.stats["last_success_at"] = now
         self.stats["last_http_status"] = http_status
