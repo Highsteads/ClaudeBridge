@@ -116,13 +116,18 @@ class WebhookHandler(BaseToolHandler):
             except EgressDenied as e:
                 return {"success": False, "error": f"refused: {e}"}
 
+            # Strict tri-state: ONLY an explicit boolean False disables TLS
+            # verification. Any other value — the string "false", "", 0, None —
+            # must NOT silently turn verification off, so it defaults to verify.
+            verify = verify_ssl is not False
+
             sub = Subscription(
                 webhook_url=webhook_url,
                 entity_type=entity_type,
                 conditions=conditions,
                 entity_id=eid,
-                auth_token=auth_token or "",
-                verify_ssl=bool(verify_ssl),
+                auth_token=str(auth_token) if auth_token else "",
+                verify_ssl=verify,
                 duration_seconds=dwell,
                 max_fires=fires,
                 max_body_bytes=body_cap,
@@ -130,7 +135,7 @@ class WebhookHandler(BaseToolHandler):
             )
             self._manager.add(sub)
             self.info_log(f"created {sub.subscription_id} -> {webhook_url}")
-            if not bool(verify_ssl):
+            if not verify:
                 self.warning_log(
                     f"subscription {sub.subscription_id} created with verify_ssl=False — "
                     f"the receiver's TLS cert/hostname will NOT be validated; a network "

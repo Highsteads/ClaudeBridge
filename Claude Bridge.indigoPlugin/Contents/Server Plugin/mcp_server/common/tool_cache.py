@@ -136,6 +136,10 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "disable_schedule":         _SCHEDULE_TOOLS,
     "duplicate_schedule":       _SCHEDULE_TOOLS,
     "delete_schedule":          _SCHEDULE_TOOLS,
+    # Firing a schedule runs its actions, which can move device/variable state.
+    "execute_schedule_now":     _SCHEDULE_TOOLS | _DEVICE_TOOLS | _VARIABLE_TOOLS,
+    "schedule_remove_delayed_actions": _SCHEDULE_TOOLS,
+    "remove_all_delayed_actions":      _SCHEDULE_TOOLS,
     # ── Triggers ────────────────────────────────────────────────────────
     "enable_trigger":           _TRIGGER_TOOLS,
     "disable_trigger":          _TRIGGER_TOOLS,

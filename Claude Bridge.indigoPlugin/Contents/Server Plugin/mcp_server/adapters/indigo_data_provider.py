@@ -409,8 +409,12 @@ class IndigoDataProvider(DataProvider):
             
             previous_value = variable.value
             
-            # Update variable value - convert to string as Indigo variables are strings
-            indigo.variable.updateValue(variable_id, value=str(value))
+            # Update variable value — Indigo variables are strings. Normalise a
+            # bool to Indigo's lowercase convention ("true"/"false"), not Python's
+            # capitalised str(True) == "True", so conditions/triggers comparing the
+            # value behave consistently.
+            new_value = str(value).lower() if isinstance(value, bool) else str(value)
+            indigo.variable.updateValue(variable_id, value=new_value)
 
             # Re-index from the server (consistent with the device methods) rather
             # than refreshing a stale local object. A concurrent delete surfaces a

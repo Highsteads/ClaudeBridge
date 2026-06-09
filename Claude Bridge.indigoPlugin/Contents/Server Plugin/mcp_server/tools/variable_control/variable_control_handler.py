@@ -9,6 +9,14 @@ from ...adapters.data_provider import DataProvider
 from ..base_handler import BaseToolHandler
 
 
+def _preview(value: Any, limit: int = 40) -> str:
+    """Truncate a value for the event log so a secret stored in a variable
+    (tokens, API keys) is not echoed in full into a log that gets shared in
+    support posts. The full value is still returned to the caller as normal."""
+    s = str(value)
+    return s if len(s) <= limit else f"{s[:limit]}…({len(s)} chars)"
+
+
 class VariableControlHandler(BaseToolHandler):
     """Handler for variable control operations."""
     
@@ -60,7 +68,7 @@ class VariableControlHandler(BaseToolHandler):
             else:
                 prev = result.get('previous', '?')
                 curr = result.get('current', value)
-                self.info_log(f"📝 {variable_name}: {prev} → {curr}")
+                self.info_log(f"📝 {variable_name}: {_preview(prev)} → {_preview(curr)}")
 
             return result
 
@@ -106,7 +114,7 @@ class VariableControlHandler(BaseToolHandler):
                 self.info_log(f"❌ {name}: {result['error']}")
             else:
                 var_id = result.get('variable_id', '?')
-                self.info_log(f"✅ Created variable '{name}' (ID: {var_id}) = '{value}'")
+                self.info_log(f"✅ Created variable '{name}' (ID: {var_id}) = '{_preview(value)}'")
 
             return result
 

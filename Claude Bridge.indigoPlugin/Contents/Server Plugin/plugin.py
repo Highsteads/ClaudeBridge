@@ -5,7 +5,18 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        09-06-2026
-# Version:     2.8.3
+# Version:     2.8.4
+#
+# v2.8.4 (09-06-2026): deep-review cleanup batch. Removed ~1,700 lines of dead
+# code (the unwired vector_store semantic_keywords/parallel_keywords/validation
+# modules + the never-used AuthManager + the phantom access_mode config). Strict
+# tri-state verify_ssl (only a real bool False disables TLS); device_id/enable_device
+# stringy-bool coercion; boolean variables stored as Indigo "true"/"false"; the
+# resources/list+read endpoints now require the 'read' scope (were ungated); a few
+# more schedule mutators added to the cache-invalidation map; the entity-search
+# 0.95 exact-match short-circuit no longer reports a phantom truncation; variable
+# values are truncated in the event log (a secret in a variable is no longer dumped
+# in full). Read tools still return full variable values — documented in the README.
 #
 # v2.8.3 (09-06-2026): MCP transport reliability — the stdio proxy
 # (indigo_mcp_proxy.py v1.3) now retries a tools/call after a stale keep-alive
@@ -186,7 +197,6 @@
 # - PluginConfig.xml: help-text labels explaining IndigoSecrets.py policy added to
 #   every credentials section; auto_configure_claude_code checkbox added
 # - fire_claude_event data serialisation fixed (was collapsing 0/False to "")
-# - vector_store/validation.py: bare except: -> except Exception:
 
 try:
     import indigo
@@ -260,7 +270,6 @@ from mcp_server import runtime_config
 from mcp_server.adapters.indigo_data_provider import IndigoDataProvider
 from mcp_server.common.openai_client.langsmith_config import get_langsmith_config
 from mcp_server.mcp_handler import MCPHandler
-from mcp_server.security import AuthManager, AccessMode
 from mcp_server.webhooks import SubscriptionStore, SubscriptionManager, WebhookDispatcher
 from mcp_server.webhooks.allowlist_loader import load_allowlist
 from mcp_server.tools.webhooks import WebhookHandler
@@ -322,9 +331,6 @@ class Plugin(indigo.PluginBase):
         self.influx_password   = INFLUXDB_PASSWORD or plugin_prefs.get("influx_password", "")
         self.influx_database   = INFLUXDB_DATABASE or plugin_prefs.get("influx_database", "indigo")
 
-        # Security configuration
-        self.access_mode = plugin_prefs.get("access_mode", "local_only")
-
         # Phase 2: rate limit / cache (with safe parsing)
         try:
             self.rate_limit_per_minute = max(1, int(plugin_prefs.get("rate_limit_per_minute", 120)))
@@ -342,7 +348,6 @@ class Plugin(indigo.PluginBase):
         # Component instances
         self.data_provider = None
         self.mcp_handler = None
-        self.auth_manager = AuthManager(logger=self.logger)
 
         # Outbound webhook subsystem (built in startup(); ships dark)
         self.webhooks_enabled = False
@@ -1666,12 +1671,6 @@ class Plugin(indigo.PluginBase):
         if changes:
             self.logger.debug(f"MCP Server device '{newDev.name}' updated: {', '.join(changes)}")
 
-        # Access-mode change is important — log at INFO
-        old_access_mode = origDev.pluginProps.get("server_access_mode", "local_only")
-        new_access_mode = newDev.pluginProps.get("server_access_mode", "local_only")
-        if old_access_mode != new_access_mode:
-            self.logger.info(f"Access mode changed from {old_access_mode} to {new_access_mode}")
-
     def validateDeviceConfigUi(
         self, valuesDict: indigo.Dict, typeId: str, devId: int
     ) -> tuple:
@@ -1742,9 +1741,6 @@ class Plugin(indigo.PluginBase):
             self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
             self.large_model       = values_dict.get("large_model", "claude-sonnet-4-6")
             self.small_model       = values_dict.get("small_model", "claude-haiku-4-5-20251001")
-
-            # Security configuration
-            self.access_mode       = values_dict.get("access_mode", "local_only")
 
             # InfluxDB configuration — IndigoSecrets.py first, dialog fallback.
             # Coerce the checkbox via _as_bool: a saved dialog re-serialises it as
@@ -1843,7 +1839,6 @@ class Plugin(indigo.PluginBase):
             extras.append(("Tools:", str(_tool_count)))
             extras.append(("Anthropic Key:", "configured" if self.anthropic_api_key else "MISSING"))
             extras.append(("InfluxDB:", "enabled" if self.enable_influxdb else "disabled"))
-            extras.append(("Access Mode:", str(self.access_mode)))
             extras.append(("Timestamps in Log:", "ON" if self.timestamp_enabled else "OFF"))
             log_startup_banner(self.pluginId, self.pluginDisplayName, self.pluginVersion, extras=extras)
         else:

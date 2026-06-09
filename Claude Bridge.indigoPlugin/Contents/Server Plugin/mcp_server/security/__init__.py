@@ -1,21 +1,17 @@
 """
 Security module for MCP server authentication.
+
+The live security model is the IWS bearer token + per-token ScopeManager +
+RateLimiter + the webhook egress firewall. The former AuthManager (token
+generation/format validation) and AccessMode enum were never wired into the
+request path and were removed in v2.8.4 — recover from git history if a future
+use is ever wanted.
 """
 
-from .auth_manager import AuthManager
 from .rate_limiter  import RateLimiter, RateLimitExceeded
 from .scope_manager import ScopeManager, ScopeDenied, required_scope_for
 
-# AccessMode enum for backward compatibility
-from enum import Enum
-
-class AccessMode(Enum):
-    """Access mode for MCP server."""
-    LOCAL_ONLY = "local_only"
-    REMOTE_ACCESS = "remote_access"
-
 __all__ = [
-    "AuthManager", "AccessMode",
     "RateLimiter", "RateLimitExceeded",
     "ScopeManager", "ScopeDenied", "required_scope_for",
 ]

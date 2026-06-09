@@ -36,6 +36,11 @@ class DeviceControlHandler(BaseToolHandler):
         uniformly; a non-numeric value is returned unchanged so the caller's
         isinstance(int) check still rejects it cleanly.
         """
+        # A Python bool IS an int (isinstance(True, int) is True), so a JSON
+        # `true`/`false` would otherwise slip past the caller's int check and act
+        # on device ID 1/0. Reject it up front by returning a non-int.
+        if isinstance(device_id, bool):
+            return None
         if isinstance(device_id, str):
             try:
                 return int(device_id.strip())

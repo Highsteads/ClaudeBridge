@@ -609,9 +609,9 @@ class MCPHandler:
         
         # Resource methods
         elif method == "resources/list":
-            return self._handle_resources_list(msg_id, params)
+            return self._handle_resources_list(msg_id, params, headers)
         elif method == "resources/read":
-            return self._handle_resources_read(msg_id, params)
+            return self._handle_resources_read(msg_id, params, headers)
         
         # Prompt methods (stubs for now)
         elif method == "prompts/list":
@@ -876,12 +876,31 @@ class MCPHandler:
                     return parts[1].strip()
         return None
     
+    def _resources_scope_denied(self, msg_id, headers):
+        """Resources expose the same read-only data as the READ tools, so they
+        must require the 'read' scope too — they previously bypassed the gate
+        entirely. Returns a JSON-RPC error dict if denied, else None."""
+        bearer = self._extract_bearer(headers or {})
+        scopes = self.scope_manager.scopes_for_token(bearer)
+        if "read" not in scopes:
+            self.logger.warning(
+                f"⛔ Scope denied for resources (token="
+                f"'{self.scope_manager.name_for_token(bearer)}', has={sorted(scopes)})"
+            )
+            return self._json_error(msg_id, -32099,
+                                    "Resource access requires 'read' scope")
+        return None
+
     def _handle_resources_list(
-        self, 
-        msg_id: Any, 
-        params: Dict[str, Any]
+        self,
+        msg_id: Any,
+        params: Dict[str, Any],
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Handle resources/list request."""
+        denied = self._resources_scope_denied(msg_id, headers)
+        if denied:
+            return denied
         resources = []
         for uri, info in self._resources.items():
             resources.append({
@@ -900,13 +919,17 @@ class MCPHandler:
         }
     
     def _handle_resources_read(
-        self, 
-        msg_id: Any, 
-        params: Dict[str, Any]
+        self,
+        msg_id: Any,
+        params: Dict[str, Any],
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Handle resources/read request."""
+        denied = self._resources_scope_denied(msg_id, headers)
+        if denied:
+            return denied
         uri = params.get("uri")
-        
+
         if not uri:
             return self._json_error(msg_id, -32602, "Missing uri parameter")
         

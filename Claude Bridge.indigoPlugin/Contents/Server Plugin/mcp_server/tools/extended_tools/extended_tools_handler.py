@@ -103,10 +103,15 @@ class ExtendedToolsHandler(BaseToolHandler):
         try:
             did = _coerce_id(device_id)
             dev = indigo.devices[did]
-            indigo.device.enable(did, value=bool(value))
-            msg = f"{'Enabled' if value else 'Disabled'} device '{dev.name}'"
+            # Coerce stringy booleans once: a saved/strung 'false'/'0'/'no'/'off'/''
+            # must mean disable, not enable (bool('false') would be True). Base the
+            # enable call AND the message/return on this single value so they agree.
+            enable = value if isinstance(value, bool) else \
+                str(value).strip().lower() not in ("false", "0", "no", "off", "")
+            indigo.device.enable(did, value=enable)
+            msg = f"{'Enabled' if enable else 'Disabled'} device '{dev.name}'"
             self.log_tool_outcome("enable_device", True, msg)
-            return {"success": True, "device_id": did, "enabled": bool(value), "message": msg}
+            return {"success": True, "device_id": did, "enabled": enable, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "enable_device")
 

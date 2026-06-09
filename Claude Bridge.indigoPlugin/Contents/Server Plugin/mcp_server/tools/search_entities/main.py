@@ -74,9 +74,15 @@ class SearchEntitiesHandler(BaseToolHandler):
                 similarity_threshold=search_params["threshold"]
             )
 
-            # Short-circuit: strong exact match — return only the top result
+            # Short-circuit: strong exact match — return only the top result.
+            # Rewrite the metadata to match the final set, otherwise the store's
+            # pre-truncation counts make the summary claim a truncation that did
+            # not happen (and spuriously suggest list_devices for "more").
             if raw_results and raw_results[0].get("_similarity_score", 0) >= 0.95:
                 raw_results = raw_results[:1]
+                if search_metadata:
+                    search_metadata = {**search_metadata,
+                                       "total_found": 1, "total_returned": 1, "truncated": False}
 
             # Apply device type filtering if specified
             if device_types is not None and "devices" in search_params["entity_types"]:
