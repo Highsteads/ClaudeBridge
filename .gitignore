@@ -19,6 +19,12 @@ IndigoSecrets.py
 secrets.json
 *.key
 
+# Webhook runtime files (hold per-subscription signing keys + bearer tokens).
+# These live under Indigo's Preferences dir, not the repo, but ignore them
+# defensively so a stray copy can never be committed.
+webhooks.json
+webhook_allowlist.json
+
 # macOS
 .DS_Store
 .AppleDouble

@@ -117,6 +117,27 @@ and leave this field blank.</Label>
         <Label>Per-token scopes (read / write / admin) are configured in scopes.json under the plugin's Preferences folder. Without scopes.json, every authenticated token gets full access (backward compatible). See Show Plugin Info menu for the path.</Label>
     </Field>
 
+    <Field id="separator_webhooks" type="separator"/>
+
+    <Field id="webhooks_label" type="label" fontSize="small" alignWithControl="false">
+        <Label>Event Webhooks let the home POST a signed event to an external URL when a device/variable condition is met (the "home calls out" feature). OFF by default. SECURITY: targets are default-deny — only hosts on the allow-list below (or in IndigoSecrets.py WEBHOOK_ALLOWLIST, read first) can be registered. Private/LAN ranges need an explicit CIDR (e.g. 192.168.100.50/32). The 3 webhook tools are ADMIN-scope.</Label>
+    </Field>
+
+    <Field id="webhooks_enabled" type="checkbox" defaultValue="false">
+        <Label>Enable Event Webhooks:</Label>
+        <Description>Allow registering outbound webhook subscriptions.</Description>
+    </Field>
+
+    <Field id="webhook_allowlist" type="textfield" defaultValue="">
+        <Label>Egress allow-list:</Label>
+        <Description>Comma/newline-separated hosts, IPs or CIDRs the home may POST to. Forms: hooks.example.com, *.example.com, 203.0.113.5, 192.168.100.50/32. Blank = deny all. Unioned with IndigoSecrets.py WEBHOOK_ALLOWLIST.</Description>
+    </Field>
+
+    <Field id="webhook_http_allowlist" type="textfield" defaultValue="">
+        <Label>Plain-HTTP allow-list:</Label>
+        <Description>Hosts/IPs permitted over plain http (no TLS) — for LAN receivers only. https is the default and is always allowed for allow-listed hosts.</Description>
+    </Field>
+
     <Field id="separator3" type="separator"/>
 
     <!-- Debug Settings -->

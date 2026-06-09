@@ -35,6 +35,18 @@
         <CallbackMethod>clear_cache_menu</CallbackMethod>
     </MenuItem>
 
+    <MenuItem id="sep_webhooks" isSeparator="true"/>
+
+    <MenuItem id="list_webhooks">
+        <Name>Print Event Webhook Subscriptions</Name>
+        <CallbackMethod>list_webhooks_menu</CallbackMethod>
+    </MenuItem>
+
+    <MenuItem id="clear_webhooks">
+        <Name>Clear All Event Webhook Subscriptions</Name>
+        <CallbackMethod>clear_webhooks_menu</CallbackMethod>
+    </MenuItem>
+
     <MenuItem id="sep3" isSeparator="true"/>
 
     <MenuItem id="toggleTimestamps">

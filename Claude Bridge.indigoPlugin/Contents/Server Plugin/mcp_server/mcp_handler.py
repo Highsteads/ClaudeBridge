@@ -3047,6 +3047,54 @@ class MCPHandler:
             "function": self._tool_device_history
         }
 
+        # ── Outbound webhook subscription tools (ADMIN; ship dark) ─────────
+        self._tools["webhook_create"] = {
+            "description": ("Register an OUTBOUND webhook: the home POSTs a signed JSON event to an "
+                            "APPROVED external URL when a device/variable condition is met. ADMIN. The "
+                            "target must be on the egress allow-list (default-deny — private/LAN ranges "
+                            "need an explicit CIDR opt-in). Returns a one-time HMAC signing key — capture "
+                            "it. Requires 'Enable Event Webhooks' in the plugin config."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "webhook_url": {"type": "string", "description": "https URL to POST events to (must be allow-listed)"},
+                    "entity_type": {"type": "string", "enum": ["device", "variable"], "description": "What to watch"},
+                    "conditions": {"type": "object", "description": "Match using bare Indigo state names, e.g. {\"onState\": true}, {\"battery\": {\"lt\": 20}}, or {\"any_change\": true}. Fires on transition INTO match."},
+                    "entity_id": {"anyOf": [{"type": "number"}, {"type": "string"}], "description": "Optional specific device/variable id; omit to watch all of the type"},
+                    "auth_token": {"type": "string", "description": "Optional extra bearer token sent to the receiver"},
+                    "verify_ssl": {"type": "boolean", "description": "Verify the receiver's TLS cert (default true)"},
+                    "duration_seconds": {"type": "number", "description": "Optional dwell: condition must hold this long before firing"},
+                    "max_fires": {"type": "number", "description": "Optional auto-delete after this many deliveries"},
+                    "max_body_bytes": {"type": "number", "description": "Optional per-event body cap (default 65536, max 1048576)"},
+                    "description": {"type": "string", "description": "Optional human label"}
+                },
+                "required": ["webhook_url", "entity_type", "conditions"]
+            },
+            "function": self._tool_webhook_create
+        }
+        self._tools["webhook_list"] = {
+            "description": ("List outbound webhook subscriptions with delivery-health stats. ADMIN. "
+                            "Secrets are redacted (signing key omitted, bearer token shown as ***)."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "subscription_id": {"type": "string", "description": "Optional: return just this one"}
+                }
+            },
+            "function": self._tool_webhook_list
+        }
+        self._tools["webhook_delete"] = {
+            "description": "Delete an outbound webhook subscription by id. ADMIN.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "subscription_id": {"type": "string", "description": "The subscription id to remove"}
+                },
+                "required": ["subscription_id"]
+            },
+            "function": self._tool_webhook_delete
+        }
+
     # ── Plugin Event dispatch ──────────────────────────────────────────────
 
     def _tool_fire_indigo_event(self, name: str, data: dict = None, source: str = "claude") -> str:
@@ -3061,6 +3109,28 @@ class MCPHandler:
         except Exception as e:
             self.logger.error(f"fire_indigo_event error: {e}")
             return safe_json_dumps({"error": str(e)})
+
+    # ── Outbound webhook dispatch (reach the plugin-owned handler lazily) ───
+
+    def _tool_webhook_create(self, **kwargs) -> str:
+        return self._webhook_call("create_subscription", kwargs)
+
+    def _tool_webhook_list(self, subscription_id: str = None) -> str:
+        return self._webhook_call("list_subscriptions", {"subscription_id": subscription_id})
+
+    def _tool_webhook_delete(self, subscription_id: str = "") -> str:
+        return self._webhook_call("delete_subscription", {"subscription_id": subscription_id})
+
+    def _webhook_call(self, method: str, kwargs: dict) -> str:
+        handler = getattr(self.plugin, "webhook_handler", None) if self.plugin else None
+        if handler is None:
+            return safe_json_dumps({"success": False,
+                                    "error": "webhook subsystem not initialised"})
+        try:
+            return safe_json_dumps(getattr(handler, method)(**kwargs))
+        except Exception as e:
+            self.logger.error(f"{method} error: {e}")
+            return safe_json_dumps({"success": False, "error": str(e)})
 
     def _tool_fire_trigger(self, trigger_id) -> str:
         try:

@@ -4,9 +4,20 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
-# Date:        08-06-2026
-# Version:     2.7.3
+# Date:        09-06-2026
+# Version:     2.8.0
 #
+# v2.8.0 (09-06-2026): NEW — outbound Event Webhooks (the "home calls Claude/you"
+# feature). The plugin can POST a signed JSON event to an APPROVED external URL
+# when a device/variable condition transitions into match. 3 ADMIN tools
+# (webhook_create/list/delete), an in-memory engine under mcp_server/webhooks/
+# (transition detection, dwell timers, persistence, non-blocking IP-pinning
+# dispatcher with HMAC-SHA256 signing), and a default-deny SSRF egress firewall
+# (mcp_server/security/egress_guard.py — re-validates at send time, pins the
+# connection to the vetted IP, blocks private/loopback/link-local/metadata unless
+# an explicit CIDR opts the range in). Ships DARK (off by default). Reference
+# receiver at examples/webhook_receiver.py. Implemented independently (concept
+# inspired by mlamoure's indigo-mcp-server, which ships no licence). 60+ tests.
 # v2.7.3 (08-06-2026): search_entities now bridges category keywords to device
 # types — "light" finds a z2mLight named "Lounge Lamp", "plug" a shellyRelay,
 # "motion" an occupancy sensor — via a new curated type_aliases.py folded into
@@ -207,6 +218,7 @@ INFLUXDB_PORT             = _get_secret("INFLUXDB_PORT", 8086)
 INFLUXDB_USERNAME         = _get_secret("INFLUXDB_USERNAME")
 INFLUXDB_PASSWORD         = _get_secret("INFLUXDB_PASSWORD")
 INFLUXDB_DATABASE         = _get_secret("INFLUXDB_DATABASE")
+WEBHOOK_ALLOWLIST         = _get_secret("WEBHOOK_ALLOWLIST", [])
 
 # Import our modules
 from mcp_server import runtime_config
@@ -214,6 +226,9 @@ from mcp_server.adapters.indigo_data_provider import IndigoDataProvider
 from mcp_server.common.openai_client.langsmith_config import get_langsmith_config
 from mcp_server.mcp_handler import MCPHandler
 from mcp_server.security import AuthManager, AccessMode
+from mcp_server.webhooks import SubscriptionStore, SubscriptionManager, WebhookDispatcher
+from mcp_server.webhooks.allowlist_loader import load_allowlist
+from mcp_server.tools.webhooks import WebhookHandler
 
 
 ################################################################################
@@ -293,6 +308,16 @@ class Plugin(indigo.PluginBase):
         self.data_provider = None
         self.mcp_handler = None
         self.auth_manager = AuthManager(logger=self.logger)
+
+        # Outbound webhook subsystem (built in startup(); ships dark)
+        self.webhooks_enabled = False
+        self.webhook_store = None
+        self.webhook_manager = None
+        self.webhook_dispatcher = None
+        self.webhook_handler = None
+        self._webhook_allowlist_path = None
+        self._webhook_static_hosts = []
+        self._webhook_static_http_hosts = []
 
         # Device management
         self.mcp_server_device = None
@@ -638,6 +663,10 @@ class Plugin(indigo.PluginBase):
             else:
                 self.logger.info("Claude Code auto-configure disabled in PluginConfig — skipping ~/.mcp.json and ~/.claude/settings.json updates")
 
+            # Build the outbound webhook subsystem (ships dark — gated on the
+            # 'Enable Event Webhooks' pref) before subscriptions go live.
+            self._init_webhooks()
+
             # Subscribe to device and variable changes for the events system
             try:
                 indigo.devices.subscribeToChanges()
@@ -763,11 +792,149 @@ class Plugin(indigo.PluginBase):
         else:
             self.logger.info("\t✅ Claude Code integration already up to date")
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Outbound webhook subsystem (event subscriptions). Ships dark — gated on the
+    # 'Enable Event Webhooks' pref AND a default-deny egress allow-list.
+    # ────────────────────────────────────────────────────────────────────────
+    def _webhook_prefs_dir(self) -> str:
+        return os.path.join(
+            indigo.server.getInstallFolderPath(),
+            "Preferences/Plugins/com.clives.indigoplugin.claudebridge",
+        )
+
+    def _read_webhook_config(self) -> None:
+        """(Re)read the enabled flag + static allow-list from prefs and
+        IndigoSecrets.WEBHOOK_ALLOWLIST. After a config-dialog save Indigo returns
+        these as STRINGS, so coerce defensively (the standing pref-type gotcha)."""
+        self.webhooks_enabled = bool(self.pluginPrefs.get("webhooks_enabled", False))
+        static = list(WEBHOOK_ALLOWLIST) if isinstance(WEBHOOK_ALLOWLIST, (list, tuple)) else []
+        cfg = self.pluginPrefs.get("webhook_allowlist", "") or ""
+        static += [h.strip() for h in str(cfg).replace("\n", ",").split(",") if h.strip()]
+        http_cfg = self.pluginPrefs.get("webhook_http_allowlist", "") or ""
+        http = [h.strip() for h in str(http_cfg).replace("\n", ",").split(",") if h.strip()]
+        self._webhook_static_hosts = static
+        self._webhook_static_http_hosts = http
+        self._webhook_allowlist_path = os.path.join(self._webhook_prefs_dir(), "webhook_allowlist.json")
+
+    def _webhook_allowlist_provider(self):
+        """Build a fresh Allowlist on every call (re-reads the live JSON file so a
+        target can be added without a plugin restart)."""
+        return load_allowlist(self._webhook_static_hosts,
+                              self._webhook_static_http_hosts,
+                              self._webhook_allowlist_path)
+
+    def _init_webhooks(self) -> None:
+        try:
+            self._read_webhook_config()
+            store_path = os.path.join(self._webhook_prefs_dir(), "webhooks.json")
+            self.webhook_store = SubscriptionStore(store_path, logger=self.logger)
+            # Construct manager first (no dispatch callback yet), then the
+            # dispatcher (which needs the manager for on_expired/persist), then
+            # wire the dwell dispatch callback back — avoids a construction cycle.
+            self.webhook_manager = SubscriptionManager(
+                logger=self.logger, store=self.webhook_store)
+            self.webhook_dispatcher = WebhookDispatcher(
+                allowlist_provider=self._webhook_allowlist_provider,
+                logger=self.logger,
+                on_expired=lambda s: self.webhook_manager.delete(s.subscription_id),
+                persist=self.webhook_manager.save,
+            )
+            self.webhook_manager.set_dispatch_callback(self.webhook_dispatcher.dispatch)
+            self.webhook_handler = WebhookHandler(
+                self.webhook_manager,
+                self._webhook_allowlist_provider,
+                enabled_provider=lambda: self.webhooks_enabled,
+                logger=self.logger,
+            )
+            loaded = self.webhook_manager.load_from_store()
+            if self.webhooks_enabled:
+                self.webhook_dispatcher.start()
+                self.logger.info(
+                    f"\t✅ Event Webhooks ENABLED ({loaded} subscription(s), "
+                    f"{len(self._webhook_static_hosts)} allow-list entr(ies))")
+            else:
+                self.logger.info("\tEvent Webhooks disabled (enable in plugin config to use)")
+        except Exception as e:
+            self.logger.error(f"\t❌ Webhook subsystem init failed: {e}")
+            self.webhook_handler = None
+
+    def _reconfigure_webhooks(self) -> None:
+        """On a config save: re-read enabled + allow-list, start/stop the worker."""
+        if self.webhook_dispatcher is None:
+            self._init_webhooks()
+            return
+        was_enabled = self.webhooks_enabled
+        self._read_webhook_config()
+        if self.webhooks_enabled and not was_enabled:
+            self.webhook_dispatcher.start()
+            self.logger.info("\t✅ Event Webhooks enabled")
+        elif was_enabled and not self.webhooks_enabled:
+            self.webhook_dispatcher.stop()
+            self.logger.info("\tEvent Webhooks disabled")
+
+    def _webhook_on_device_change(self, origDev, newDev) -> None:
+        if not (self.webhooks_enabled and self.webhook_manager and self.webhook_dispatcher):
+            return
+        try:
+            for sub, event in self.webhook_manager.evaluate_device_change(dict(origDev), dict(newDev)):
+                self.webhook_dispatcher.dispatch(sub, event)
+        except Exception:
+            self.logger.exception("webhook device-change eval failed (contained)")
+
+    def _webhook_on_variable_change(self, origVar, newVar) -> None:
+        if not (self.webhooks_enabled and self.webhook_manager and self.webhook_dispatcher):
+            return
+        try:
+            for sub, event in self.webhook_manager.evaluate_variable_change(dict(origVar), dict(newVar)):
+                self.webhook_dispatcher.dispatch(sub, event)
+        except Exception:
+            self.logger.exception("webhook variable-change eval failed (contained)")
+
+    def list_webhooks_menu(self) -> None:
+        """Plugins menu: print the current webhook subscriptions (no secrets)."""
+        if not self.webhook_manager:
+            indigo.server.log("Webhook subsystem not initialised")
+            return
+        subs = self.webhook_manager.list_all()
+        indigo.server.log(f"Event Webhook subscriptions: {len(subs)} (feature enabled={self.webhooks_enabled})")
+        for s in subs:
+            d = s.to_dict(include_secrets=False)
+            tail = "" if d["entity_id"] is None else f":{d['entity_id']}"
+            indigo.server.log(
+                f"  {d['subscription_id']}  {d['entity_type']}{tail} -> {d['webhook_url']}  "
+                f"enabled={d['enabled']} fires={d['stats']['fires']} "
+                f"last={d['stats'].get('last_error') or 'ok'}")
+
+    def clear_webhooks_menu(self) -> None:
+        """Plugins menu: delete ALL webhook subscriptions (idempotent)."""
+        if not self.webhook_manager:
+            indigo.server.log("Webhook subsystem not initialised")
+            return
+        subs = self.webhook_manager.list_all()
+        for s in subs:
+            self.webhook_manager.delete(s.subscription_id)
+        indigo.server.log(f"Cleared {len(subs)} webhook subscription(s)")
+
     def shutdown(self) -> None:
         """
         Called when the plugin is being shut down.
         """
         self.logger.info("Stopping plugin...")
+
+        # Stop the webhook subsystem first: cancel dwell timers, flush stats to
+        # disk, then drain + join the delivery worker (so in-flight events still
+        # deliver before the join).
+        if self.webhook_manager:
+            try:
+                self.webhook_manager.shutdown()
+                self.webhook_manager.save()
+            except Exception as e:
+                self.logger.error(f"\t❌ Error saving webhook subscriptions: {e}")
+        if self.webhook_dispatcher:
+            try:
+                self.webhook_dispatcher.stop()
+            except Exception as e:
+                self.logger.error(f"\t❌ Error stopping webhook dispatcher: {e}")
 
         # Clean up MCP handler
         if self.mcp_handler:
@@ -1378,6 +1545,8 @@ class Plugin(indigo.PluginBase):
                 })
             except Exception:
                 pass
+        # Outbound webhooks (own try/except inside; gated on the enabled flag)
+        self._webhook_on_variable_change(origVar, newVar)
 
     def deviceUpdated(self, origDev: indigo.Device, newDev: indigo.Device) -> None:
         """
@@ -1422,6 +1591,9 @@ class Plugin(indigo.PluginBase):
                     })
             except Exception:
                 pass
+
+        # Outbound webhooks (all non-plugin devices; own try/except; gated)
+        self._webhook_on_device_change(origDev, newDev)
 
         if newDev.deviceTypeId == "mcpServer":
             self._handle_mcp_server_device_update(origDev, newDev)
@@ -1560,6 +1732,12 @@ class Plugin(indigo.PluginBase):
                     )
             except Exception as _e:
                 self.logger.warning(f"\t⚠️  Could not apply Phase 2 settings: {_e}")
+
+            # Apply webhook config live (enable/disable + allow-list) — no restart needed
+            try:
+                self._reconfigure_webhooks()
+            except Exception as _we:
+                self.logger.warning(f"\t⚠️  Could not apply webhook settings: {_we}")
 
 
             # Republish runtime config (same as startup — see runtime_config.py

@@ -122,6 +122,9 @@ ADMIN_TOOLS: Set[str] = {
     "remove_all_delayed_actions",
     # Physical security
     "lock_device", "unlock_device",
+    # Outbound webhooks — registering an egress target POSTs home state to an
+    # external URL, strictly more sensitive than a WRITE (data-leaving-the-house).
+    "webhook_create", "webhook_list", "webhook_delete",
 }
 
 # Order matters: a name should never be in more than one set (audit enforces it),
