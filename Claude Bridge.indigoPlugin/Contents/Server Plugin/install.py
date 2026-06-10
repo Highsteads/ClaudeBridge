@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Filename:    install.py (renamed from setup.py 10-06-2026 — it is a custom
-#              installer, not a setuptools script; `pip install .` was never valid)
+# Filename:    install.py (lives inside the bundle's Server Plugin folder as of
+#              v2.9.0 — run as: python3 "Claude Bridge.indigoPlugin/Contents/Server Plugin/install.py")
 # Description: ClaudeBridge automated installer — sets up the plugin, proxy script,
 #              and Claude Code MCP configuration in one command.
 # Author:      CliveS & Claude Sonnet 4.6
@@ -33,8 +33,21 @@ from pathlib import Path
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 
-REPO_ROOT          = Path(__file__).parent.resolve()
 PLUGIN_BUNDLE_NAME = "Claude Bridge.indigoPlugin"
+
+
+def _find_repo_root() -> Path:
+    """Walk upward from this file until we find the directory that CONTAINS the
+    plugin bundle. Works from the repo root (old location) and from inside the
+    bundle's Server Plugin folder (where this script lives as of v2.9.0)."""
+    here = Path(__file__).resolve().parent
+    for candidate in (here, *here.parents):
+        if (candidate / PLUGIN_BUNDLE_NAME).is_dir():
+            return candidate
+    sys.exit(f"Cannot find '{PLUGIN_BUNDLE_NAME}' in any parent of {here}")
+
+
+REPO_ROOT          = _find_repo_root()
 PROXY_SCRIPT_NAME  = "indigo_mcp_proxy.py"
 # Proxy lives inside the bundle — single source of truth, no separate repo-root copy needed
 PROXY_IN_BUNDLE    = REPO_ROOT / PLUGIN_BUNDLE_NAME / "Contents" / "Server Plugin" / PROXY_SCRIPT_NAME

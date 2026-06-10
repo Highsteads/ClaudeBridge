@@ -159,10 +159,8 @@ minutes; Claude does it in a couple of round-trips.
 
 Claude Bridge exposes **149 MCP tools** across **16 categories** that give Claude
 Code full read/write access to a running Indigo server. The capability surface
-falls into the following groups — full per-tool listing is in
-[Available Tools](#available-tools) further down, and
-[`CAPABILITY_SUMMARY.md`](CAPABILITY_SUMMARY.md) covers each in detail with
-example prompts.
+falls into the following groups — the full per-tool listing is in
+[Available Tools](#available-tools) further down.
 
 ### Devices
 - **List, search, and inspect** every Indigo device — by ID, by name (exact or
@@ -333,7 +331,7 @@ Clone the repo and run the installer — it handles everything except enabling t
 ```bash
 git clone https://github.com/Highsteads/ClaudeBridge.git
 cd ClaudeBridge
-python3 install.py
+python3 "Claude Bridge.indigoPlugin/Contents/Server Plugin/install.py"
 ```
 
 The script:
@@ -385,7 +383,8 @@ Click **Test** to verify the API connection, then **Save**.
 > **Tip:** Leave the API Key field blank and add `ANTHROPIC_API_KEY = "sk-ant-..."` to
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` instead.
 > The plugin checks for this file automatically on startup.
-> A template (`IndigoSecrets_example.py`) is included in the repository.
+> A template (`IndigoSecrets_example.py`) is included in the plugin bundle
+> (inside `Contents/Server Plugin/`).
 
 #### 3. Device auto-creation
 
@@ -395,7 +394,7 @@ No manual "New Device" step is needed. If you need to create it manually:
 
 #### 4. Install the Proxy Script
 
-Save `indigo_mcp_proxy.py` (from this repo) to:
+Save `indigo_mcp_proxy.py` (from the bundle's `Contents/Server Plugin/` folder) to:
 ```
 /Library/Application Support/Perceptive Automation/Scripts/indigo_mcp_proxy.py
 ```
@@ -787,10 +786,9 @@ Claude Bridge.indigoPlugin/
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
 │           └── tools/                      # 18 tool handler modules (149 tools)
+│       ├── indigo_mcp_proxy.py             # Claude Code go-between script
+│       └── install.py                      # one-shot installer
 └── README.md
-
-indigo_mcp_proxy.py                         # Claude Code stdio proxy script
-README.md
 ```
 
 ---
@@ -1034,9 +1032,9 @@ restarts. Defaults to ON.
 
 ## Contributing
 
-Pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to run
-the test suite (no Indigo install needed) and the recipe for adding a new MCP
-tool. Every push runs the tests, lint and a docs-staleness check in CI.
+Pull requests welcome. The test suite in `tests/` runs standalone with plain
+pytest — no Indigo install needed — and `scripts/generate_tool_doc.py --check`
+will tell you if the tool table needs regenerating after a change.
 
 ---
 
