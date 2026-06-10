@@ -48,3 +48,6 @@ webhook_allowlist.json
 
 # Claude Code context file — local only
 CLAUDE.md
+
+# Local-only working notes (forum drafts etc.) — kept on disk, not published
+docs/
