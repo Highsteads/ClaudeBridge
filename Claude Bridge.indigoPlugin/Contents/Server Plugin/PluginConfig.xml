@@ -22,13 +22,15 @@ Keys this plugin reads:
 
     <!-- Anthropic Configuration -->
     <Field id="anthropic_api_key" type="textfield" defaultValue="" secure="true"
-           tooltip="Required for Claude AI capabilities — fallback to ANTHROPIC_API_KEY in IndigoSecrets.py">
-        <Label>Anthropic API Key:</Label>
+           tooltip="OPTIONAL — only needed for AI summaries in the historical-analysis tool. All other tools work without it.">
+        <Label>Anthropic API Key (optional):</Label>
     </Field>
 
     <Field id="api_key_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
-        <Label>Get an API key from https://console.anthropic.com/settings/keys.
-Or set ANTHROPIC_API_KEY in /Library/Application Support/Perceptive Automation/IndigoSecrets.py
+        <Label>Optional — every MCP tool works without a key here (Claude Code uses your own
+Claude account). Only the AI summaries in the historical-analysis tool need one.
+If you want those, get a key from https://console.anthropic.com/settings/keys, or set
+ANTHROPIC_API_KEY in /Library/Application Support/Perceptive Automation/IndigoSecrets.py
 and leave this field blank.</Label>
     </Field>
 

@@ -653,15 +653,17 @@ class Plugin(indigo.PluginBase):
         self.logger.info(f"Claude Bridge v{self.pluginVersion} ready")
 
         # Anthropic API key is already resolved in __init__ via ANTHROPIC_API_KEY
-        # (IndigoSecrets.py) -> pluginPrefs.  If still empty, log an ERROR pointing the
-        # user to either source — but don't crash; the plugin still hosts the MCP
-        # endpoint, just refuses requests until the key is set.
+        # (IndigoSecrets.py) -> pluginPrefs. The key is OPTIONAL: every MCP tool
+        # works without it (Claude Code brings its own account) — it is used only
+        # for the AI summaries in analyze_historical_data and the startup
+        # self-test, so a missing key is a WARNING, not an error.
         if not self.anthropic_api_key:
-            self.logger.error(
-                "[Config] No Anthropic API key configured. Set ANTHROPIC_API_KEY in "
-                "/Library/Application Support/Perceptive Automation/IndigoSecrets.py "
-                "OR fill in 'Anthropic API Key' under Plugins -> Claude Bridge -> "
-                "Configure. Plugin will not be able to call Claude until this is set."
+            self.logger.warning(
+                "[Config] No Anthropic API key set — all MCP tools work as normal; "
+                "only the AI summaries in analyze_historical_data are unavailable. "
+                "To enable them, set ANTHROPIC_API_KEY in /Library/Application "
+                "Support/Perceptive Automation/IndigoSecrets.py or fill in "
+                "'Anthropic API Key' under Plugins -> Claude Bridge -> Configure."
             )
 
         # Test connections (skips Anthropic test if key is empty)
