@@ -49,12 +49,9 @@ webhook_allowlist.json
 # Claude Code context file — local only
 CLAUDE.md
 
-# Published repo = plugin bundle + README + LICENSE + docs + tests/scripts/examples.
-# These root-level duplicates / meta files stay LOCAL-ONLY (the canonical copies
-# live inside the plugin bundle, or are working notes):
+# Local-only files: the canonical proxy/secrets-template copies live inside the
+# plugin bundle (root copies are an unpublished working convenience), and the
+# capability summary is superseded by the README's What-it-does sections.
 /indigo_mcp_proxy.py
 /IndigoSecrets_example.py
 /CAPABILITY_SUMMARY.md
-/CONTRIBUTING.md
-/ruff.toml
-.github/

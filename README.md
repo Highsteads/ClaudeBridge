@@ -1032,9 +1032,10 @@ restarts. Defaults to ON.
 
 ## Contributing
 
-Pull requests welcome. The test suite in `tests/` runs standalone with plain
-pytest — no Indigo install needed — and `scripts/generate_tool_doc.py --check`
-will tell you if the tool table needs regenerating after a change.
+Pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to run
+the test suite (no Indigo install needed) and the recipe for adding a new MCP
+tool. Every push and pull request runs the tests, lint and a docs-staleness
+check automatically.
 
 ---
 
