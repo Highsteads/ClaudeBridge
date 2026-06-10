@@ -743,3 +743,112 @@ class ExtendedToolsHandler(BaseToolHandler):
             }
         except Exception as exc:
             return self.handle_exception(exc, "check_plugin_updates")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # v2.9.0 — device diagnostics, energy reset, delayed actions, broadcasts
+    # ════════════════════════════════════════════════════════════════════════
+
+    def beep_device(self, device_id) -> Dict[str, Any]:
+        """Ask a device to beep (identification). Not all devices support it."""
+        self.log_incoming_request("beep_device", {"device_id": device_id})
+        try:
+            did = _coerce_id(device_id)
+            dev = indigo.devices[did]
+            indigo.device.beep(did)
+            msg = f"Beep sent to '{dev.name}' (unsupported devices ignore it silently)"
+            self.log_tool_outcome("beep_device", True, msg)
+            return {"success": True, "device_id": did, "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "beep_device")
+
+    def ping_device(self, device_id) -> Dict[str, Any]:
+        """Ping a device (Z-Wave reachability check). Returns the round-trip result."""
+        self.log_incoming_request("ping_device", {"device_id": device_id})
+        try:
+            did = _coerce_id(device_id)
+            dev = indigo.devices[did]
+            result = indigo.device.ping(did, suppressLogging=True)
+            # ping returns an indigo.Dict-like kwargs object; normalise it.
+            payload = {}
+            try:
+                payload = {k: result[k] for k in result}
+            except Exception:
+                payload = {"raw": str(result)}
+            ok = bool(payload.get("Success", payload.get("success", False)))
+            msg = (f"Ping '{dev.name}': {'reachable' if ok else 'NO RESPONSE'}"
+                   + (f" ({payload.get('TimeDelta')} ms)" if payload.get("TimeDelta") is not None else ""))
+            self.log_tool_outcome("ping_device", True, msg)
+            return {"success": True, "device_id": did, "reachable": ok,
+                    "detail": payload, "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "ping_device")
+
+    def reset_energy_accumulator(self, device_id) -> Dict[str, Any]:
+        """Reset a device's accumulated energy total (kWh) to zero."""
+        self.log_incoming_request("reset_energy_accumulator", {"device_id": device_id})
+        try:
+            did = _coerce_id(device_id)
+            dev = indigo.devices[did]
+            previous = getattr(dev, "energyAccumTotal", None)
+            indigo.device.resetEnergyAccumTotal(did)
+            msg = f"Energy total reset on '{dev.name}' (was {previous} kWh)"
+            self.log_tool_outcome("reset_energy_accumulator", True, msg)
+            return {"success": True, "device_id": did,
+                    "previous_kwh": previous, "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "reset_energy_accumulator")
+
+    def device_remove_delayed_actions(self, device_id) -> Dict[str, Any]:
+        """Cancel pending delayed/timed actions for ONE device (e.g. a queued
+        duration-off), leaving every other device's delayed actions alone."""
+        self.log_incoming_request("device_remove_delayed_actions", {"device_id": device_id})
+        try:
+            did = _coerce_id(device_id)
+            dev = indigo.devices[did]
+            indigo.device.removeDelayedActions(did)
+            msg = f"Cleared delayed actions for '{dev.name}'"
+            self.log_tool_outcome("device_remove_delayed_actions", True, msg)
+            return {"success": True, "device_id": did, "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "device_remove_delayed_actions")
+
+    # NOTE on the three broadcast commands below: they are NATIVE-protocol
+    # broadcasts (Z-Wave / Insteon / X10 interfaces). Devices owned by plugins
+    # (zigbee2mqtt, Shelly, Tasmota, ...) do NOT receive them — the description
+    # says so, so Claude can warn the user rather than over-promise.
+
+    def all_lights_off(self) -> Dict[str, Any]:
+        """Send the native all-lights-off broadcast (Z-Wave/Insteon/X10 only)."""
+        self.log_incoming_request("all_lights_off", {})
+        try:
+            indigo.dimmer.allLightsOff()
+            msg = "All-lights-OFF broadcast sent to native-protocol interfaces"
+            self.log_tool_outcome("all_lights_off", True, msg)
+            return {"success": True, "message": msg,
+                    "note": "Plugin-owned devices (zigbee2mqtt/Shelly/Tasmota) are not affected"}
+        except Exception as exc:
+            return self.handle_exception(exc, "all_lights_off")
+
+    def all_lights_on(self) -> Dict[str, Any]:
+        """Send the native all-lights-on broadcast (Z-Wave/Insteon/X10 only)."""
+        self.log_incoming_request("all_lights_on", {})
+        try:
+            indigo.dimmer.allLightsOn()
+            msg = "All-lights-ON broadcast sent to native-protocol interfaces"
+            self.log_tool_outcome("all_lights_on", True, msg)
+            return {"success": True, "message": msg,
+                    "note": "Plugin-owned devices (zigbee2mqtt/Shelly/Tasmota) are not affected"}
+        except Exception as exc:
+            return self.handle_exception(exc, "all_lights_on")
+
+    def all_devices_off(self) -> Dict[str, Any]:
+        """Send the native all-off broadcast (Z-Wave/Insteon/X10 only)."""
+        self.log_incoming_request("all_devices_off", {})
+        try:
+            indigo.device.allOff()
+            msg = "All-devices-OFF broadcast sent to native-protocol interfaces"
+            self.log_tool_outcome("all_devices_off", True, msg)
+            return {"success": True, "message": msg,
+                    "note": "Plugin-owned devices (zigbee2mqtt/Shelly/Tasmota) are not affected"}
+        except Exception as exc:
+            return self.handle_exception(exc, "all_devices_off")

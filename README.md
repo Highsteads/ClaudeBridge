@@ -1,39 +1,31 @@
 # Claude Bridge — Indigo Plugin
 
-**Claude Bridge** is an [Indigo](https://www.indigodomo.com) home automation plugin that connects your Indigo system directly to [Claude AI](https://www.anthropic.com/claude) via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io).
+**Claude Bridge** is an [Indigo](https://www.indigodomo.com) home automation plugin that lets [Claude](https://www.anthropic.com/claude) see and control your actual Indigo system — your real devices, your real variables, your real event log — from an ordinary conversation.
 
-Once installed, Claude can query device states, turn devices on and off, read and write variables, execute action groups, search your home's entity database, and query the Indigo event log — all in natural language, with no manual scripting required.
+Once it's installed you can simply ask. "Which lights are on?" "Turn the fan on for ten minutes." "Why didn't the bathroom light go off last night?" Claude looks at your system, does the thing, and checks its own work — no scripting, no copying device IDs about, no screenshots.
 
-**Author:** CliveS & Claude Opus 4.8
-**Platform:** Indigo 2023.2 or later, macOS (Python 3.11+ bundled with Indigo)
-
-*Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
+**Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.8.5
+**Version:** 2.9.0
+
+*Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
 ---
 
-## How it works — Claude Code ↔ Claude Bridge ↔ Indigo
+## How it works
 
-Claude Bridge runs inside Indigo as a small **MCP server** (Model Context
-Protocol — an open standard from Anthropic for letting AI agents call
-external tools). [Claude Code](https://claude.ai/download), Anthropic's
-terminal-based coding agent, connects to that server via a tiny stdio
-proxy and gains access to **139 tools** that read and write your Indigo
-system.
+Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a little go-between script — installed and wired up for you automatically — passes Claude's requests to Indigo's own built-in web server, where the plugin answers them. That gives Claude **149 tools** for reading and controlling your system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
-│  Claude Code        │  stdio  │  indigo_mcp_proxy.py │  HTTPS  │  Indigo IWS  │
-│  (terminal)         │ ───────►│  (local Python)      │ ───────►│  + plugin    │
-│  asks for tool      │         │  adds Bearer token,  │         │  exposes 139 │
-│  Claude reasons     │         │  protocol bridging   │         │  MCP tools   │
+│  Claude Code        │         │  go-between script   │         │  Indigo web  │
+│  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
+│                     │         │  adds your access    │         │  this plugin │
+│                     │         │  key automatically   │         │  (149 tools) │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
-The proxy script is auto-installed by the plugin and auto-registered in
-your Claude Code config. From your point of view it's invisible — you
-just open a Claude Code session and the `indigo-mcp` toolset is there.
+From your point of view all of that is invisible — you open a Claude Code session and the Indigo tools are just there. Everything stays on your own machine and goes through Indigo's existing web server, protected by the same access key Indigo already uses.
 
 ### Why this matters
 
@@ -165,7 +157,7 @@ minutes; Claude does it in a couple of round-trips.
 
 ## What it does
 
-Claude Bridge exposes **139 MCP tools** across **16 categories** that give Claude
+Claude Bridge exposes **149 MCP tools** across **16 categories** that give Claude
 Code full read/write access to a running Indigo server. The capability surface
 falls into the following groups — full per-tool listing is in
 [Available Tools](#available-tools) further down, and
@@ -173,17 +165,25 @@ falls into the following groups — full per-tool listing is in
 example prompts.
 
 ### Devices
-- **List, search, and inspect** every Indigo device — by ID, exact / partial /
-  case-insensitive name, type (relay, dimmer, sensor, thermostat, speed
-  control, sprinkler, …), or current state.
-- **Natural-language entity search** across devices, variables, and action
-  groups (`search_entities`) — local substring/fuzzy matching, no vector DB
-  required. Slim results by default; pass `detail="full"` for the complete
-  property tree (Z-Wave config, plugin props, etc.).
-- **Control devices** — on / off / toggle, brightness (0–100), RGB and colour
-  temperature, fan speed, lock / unlock, force a hardware status refresh.
-- **Single-call shortcut** — `device_control` looks up a device by name and
-  performs the action in one round trip (~1 s instead of ~5 s).
+- **List, search, and inspect** every Indigo device — by ID, by name (exact or
+  partial, capitals optional), by type (relay, dimmer, sensor, thermostat,
+  speed control, sprinkler, …), or by current state.
+- **Search in plain English** across devices, variables, and action groups —
+  asking for "light" finds your lamps and dimmers, "plug" finds your sockets.
+  Results are kept brief by default so answers come back quickly, with the
+  full detail available when you ask for it.
+- **Control devices** — on / off / toggle, brightness, colour and colour
+  temperature, fan speed, lock / unlock, or nudge a device to report in.
+- **Timed actions** *(new in 2.9.0)* — "turn the fan on for ten minutes" or
+  "switch that off in half an hour" is a single request. Indigo's own
+  delayed-action engine does the timing, so it keeps working even if Claude
+  has long since gone. There's a matching tool to cancel a pending timed
+  action on one device without disturbing anything else.
+- **Identify and check devices** *(new in 2.9.0)* — ask a device to beep so
+  you can find it on the shelf, or ping it to check it still answers on the
+  network.
+- **One-call name-and-action shortcut** — say what you want done to which
+  device and it happens in a single round trip.
 
 ### Heating / HVAC
 - Per-zone snapshot, absolute setpoints, incremental bumps, and HVAC mode
@@ -193,11 +193,13 @@ example prompts.
 ### Energy intelligence
 - Live solar / battery / grid status, plus day-by-day analysis from
   SigenEnergyManager's log files: list available days, daily summary
-  (imports, exports, PV, SOC trace), or compare days side-by-side.
+  (imports, exports, solar, battery trace), or compare days side-by-side.
+- **Reset an energy total** *(new in 2.9.0)* — zero the lifetime kWh count on
+  an energy-metering plug when you want to start a fresh measurement.
 
 ### Variables & action groups
-- Full CRUD on variables (list, get, update, create) and on folders.
-- List, inspect, and execute action groups.
+- Create, read, update, and organise variables and their folders.
+- List, inspect, and run action groups.
 
 ### Triggers & schedules
 - List, enable, and disable any trigger or schedule.
@@ -223,27 +225,24 @@ example prompts.
   Indigo's GUI action runner) so ad-hoc scripts don't need their own
   `import indigo`.
 
-### Event log & real-time push feed
-- Query the live Indigo event log with keyword, device, plugin, and time
-  filters — reads directly from the on-disk log files, so historical entries
-  beyond what the GUI shows are reachable.
-- **Push-model subscriptions** — register interest in all events / a specific
-  device / a specific variable. Plugin fills a ring buffer from
-  `deviceUpdated` and `variableUpdated` callbacks; Claude polls
-  `get_events` for new entries on demand (events for the same entity within
-  1 s are deduplicated).
+### Event log & live watching
+- Search the Indigo event log by keyword, device, plugin, or time — including
+  older entries beyond what the Indigo window shows, because it reads the log
+  files themselves.
+- **Watch things as they happen** — ask Claude to keep an eye on a device or
+  variable and it can pick up every change as it occurs, so "tell me the next
+  time the back door opens" actually works.
 
-### Event webhooks — the home calls out (opt-in, off by default)
-- `webhook_create` / `webhook_list` / `webhook_delete` (all **admin**-scope) —
-  register a subscription that POSTs a signed JSON event to an **approved**
-  external URL when a device/variable condition transitions into match
-  (`{"onState": true}`, `{"battery": {"lt": 20}}`, `{"any_change": true}`),
-  with optional dwell ("held for N seconds") and auto-expiry.
-- **Default-deny egress firewall** — targets must be on an allow-list; private /
-  loopback / link-local / cloud-metadata addresses are blocked unless a CIDR is
-  explicitly opted in. Re-validated at send time, connection pinned to the vetted
-  IP, no redirects, HMAC-SHA256 signed. Ships disabled — see the Changelog and
-  `examples/webhook_receiver.py`.
+### Event webhooks — the home calls out (optional, off by default)
+- Have Indigo send a message to a web address you run the moment something
+  happens — "the next time a leak sensor trips", "if the battery drops below
+  20%", "when the garage has been open for ten minutes".
+- It is deliberately careful about where it will send: every destination has
+  to be on your approved list, anything pointing back inside your own network
+  is refused, and every message is signed so your receiver can be certain it
+  really came from your system. The whole feature ships switched off until
+  you turn it on. There's a small example receiver in `examples/` to get you
+  going in minutes.
 
 ### Persistent memory
 - `remember` / `recall` / `recall_topics` / `forget` — JSON-on-disk cross-
@@ -251,13 +250,16 @@ example prompts.
   fairness (the oldest entry of the same topic is evicted first).
 
 ### Audit, health, diagnostics
-- Whole-system audit (`audit_home`, `audit_variables`), security snapshot,
-  system-health summary.
-- Finders for devices in error, low battery, stale devices, orphaned plugin
-  data, orphaned scripts, oversized files, and naming/address/reference
-  conflicts.
-- **`dependency_map`** — given a device or variable, returns every entity
-  that references it (action groups, scripts, other plugins).
+- Whole-system audits, a security snapshot, and a system-health summary.
+- Finders for devices in error, low batteries, devices that have gone quiet,
+  leftover data from uninstalled plugins, scripts nothing uses any more,
+  oversized files, and naming or wiring conflicts.
+- **"What would break if I deleted this?"** — for any device or variable,
+  Claude can list everything that refers to it before you touch it.
+- **"Has Indigo gained anything new?"** *(new in 2.9.0)* — after an Indigo
+  upgrade, one tool compares the live system against a snapshot of every
+  capability this plugin knew about at release, and reports anything new
+  worth bridging. The plugin keeps itself honest.
 
 ### Reporting
 - **`home_status_report`** — prose-markdown narrative of the whole home,
@@ -272,8 +274,16 @@ example prompts.
   line straight to the Indigo event log.
 
 ### Folders & server info
-- Idempotent device-folder and variable-folder creation; `get_reflector_url`
-  for the Indigo Reflector remote-access URL.
+- Create device and variable folders (asking twice is harmless — it just finds
+  the existing one), and *(new in 2.9.0)* delete them again. A folder with
+  things still in it is politely refused unless you explicitly say you mean
+  the contents to go too.
+- Whole-house broadcasts *(new in 2.9.0)* — Indigo's native all-lights-on,
+  all-lights-off and all-devices-off commands. Worth knowing: these only
+  reach devices Indigo talks to directly (Z-Wave and the like) — devices
+  that belong to plugins such as zigbee2mqtt or Shelly don't hear
+  broadcasts, and Claude will tell you so rather than pretend.
+- Look up your Reflector remote-access address.
 
 ### Scripting shell — ADMIN scope
 - **`execute_indigo_python`** — runs arbitrary Python in this plugin's
@@ -286,23 +296,21 @@ example prompts.
   known way to fire a third-party plugin's menu callback from outside.
   Requires the Indigo GUI running plus System Events permission.
 
-### Architecture & security
-- **Claude-powered** — uses Anthropic's Claude API directly; no OpenAI,
-  Voyage AI, or other third-party embedding services.
-- **Local text search** — fast substring/fuzzy matching with a keyword-to-type
-  bridge (so "light" finds your dimmers, "plug" your sockets); no vector
-  database and no API key required.
-- **Single transport (IWS)** — everything runs over Indigo's own web server on
-  its existing port, so there's no extra port to open and the Reflector gives
-  you secure remote access for free. Progress from long-running tools (a big
-  audit, a history query) is delivered as buffered server-sent events over that
-  same connection.
-- **Session management** — persistent MCP sessions with per-session access
-  control.
-- **Secure** — Bearer token authentication on every IWS request;
-  configurable access modes (read-only / read-write); ADMIN-scope tools
-  gated separately so restricted tokens can still safely call the read/write
-  surface.
+### How it keeps your house safe
+- **Everything stays local.** Searching and control all happen on your own
+  Mac. The only thing that ever leaves the machine is your conversation with
+  Claude itself.
+- **No extra doors into your network.** Everything travels through Indigo's
+  own web server on its existing port, protected by Indigo's own access key,
+  and the Reflector gives you secure remote access for free.
+- **Permission levels.** Every tool is classed as read, write, or admin. If
+  you hand out a read-only key it really is read-only — and anything
+  destructive (deleting things, running code, unlocking a door, the new
+  folder deletes) needs the admin level. Anything not explicitly classified
+  is locked down, not waved through.
+- **Careful by default.** Dangerous operations refuse ambiguous input rather
+  than guessing, deletes that can cascade make you say so explicitly, and
+  the plugin checks its own permission setup every time it starts.
 
 ---
 
@@ -339,7 +347,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 139 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 149 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first; the
@@ -394,7 +402,7 @@ Save `indigo_mcp_proxy.py` (from this repo) to:
 
 Edit the `BEARER_TOKEN` constant at the top of the script — use the first value from:
 ```
-/Library/Application Support/Perceptive Automation/Indigo 2025.1/Preferences/secrets.json
+/Library/Application Support/Perceptive Automation/Indigo <your version>/Preferences/secrets.json
 ```
 
 #### 5. Register with Claude Code
@@ -420,7 +428,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 139 tools available.
+The `indigo-mcp` tools will appear on next session start. You should see 149 tools available.
 
 </details>
 
@@ -473,7 +481,7 @@ Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridg
 
 ## Available Tools
 
-**139 tools, grouped by security scope.** This table is **auto-generated** from the
+**149 tools, grouped by security scope.** This table is **auto-generated** from the
 plugin's own tool registry (`mcp_server/mcp_handler.py`) cross-referenced with the
 deny-by-default scope classification (`mcp_server/security/scope_manager.py`), so it
 can never drift from the code. Regenerate with `python3 scripts/generate_tool_doc.py
@@ -492,9 +500,9 @@ overview organised by function (devices, heating, energy, …) see
 > shortened in the log line, though they're still returned to the caller as normal.)
 
 <!-- BEGIN TOOL TABLE -->
-<!-- AUTO-GENERATED by scripts/generate_tool_doc.py — 139 tools. Do not edit by hand. -->
+<!-- AUTO-GENERATED by scripts/generate_tool_doc.py — 149 tools. Do not edit by hand. -->
 
-### Read tools (61)
+### Read tools (62)
 
 _Pure queries — no state change. Require the `read` scope._
 
@@ -502,6 +510,7 @@ _Pure queries — no state change. Require the `read` scope._
 |------|-------------|
 | `action_group_get_dependencies` | Get dependents of an action group. Useful before deleting. |
 | `analyze_historical_data` | Analyze historical data patterns and trends for specific devices using AI-powered insights. IMPORTANT: Requires EXACT device names - use 'search_entities' or 'list_devices' first to find correct device names. Only works if InfluxDB historical data logging is enabled. |
+| `audit_api_coverage` | Diff the live indigo.* command namespaces against the frozen baseline captured at build time. Run after an Indigo upgrade to see new API callables Claude Bridge hasn't surfaced as tools yet (and removals that may break existing tools). |
 | `audit_home` | Run a comprehensive Indigo configuration health check. Returns devices in error, low-battery devices, stale devices (no change in 7+ days), empty/null variables, disabled triggers and schedules, and automation counts. Use this for a quick health overview. |
 | `audit_variables` | Report variables not referenced in any Python script (potentially unused), and variables with empty, None, or 'null' values. |
 | `calculate_sunrise` | Sunrise for today (default) or YYYY-MM-DD date_iso. |
@@ -562,22 +571,27 @@ _Pure queries — no state change. Require the `read` scope._
 | `security_status` | Return all contact sensors (open doors/windows), active motion sensors, and active leak/smoke/CO alerts. |
 | `system_health` | Return a snapshot of Mac Mini system health: macOS version, Python version, disk usage (total/used/free/%), RAM summary, and uptime. No parameters required. |
 
-### Write tools (58)
+### Write tools (65)
 
 _Modify Indigo state. Require `write` (or `admin`)._
 
 | Tool | Description |
 |------|-------------|
 | `action_execute_group` | Execute an action group |
+| `all_devices_off` | Send Indigo's native all-devices-OFF broadcast. Native-protocol devices (Z-Wave/Insteon/X10) ONLY — plugin-owned devices are not affected. |
+| `all_lights_off` | Send Indigo's native all-lights-OFF broadcast. Reaches native-protocol devices (Z-Wave/Insteon/X10) ONLY — devices owned by plugins (zigbee2mqtt, Shelly, Tasmota) are NOT affected; turn those off individually or via an action group. |
+| `all_lights_on` | Send Indigo's native all-lights-ON broadcast. Native-protocol devices (Z-Wave/Insteon/X10) ONLY — plugin-owned devices are not affected. |
+| `beep_device` | Ask a device to beep so you can physically identify it. Devices that don't support beeping ignore the command. |
 | `clear_events` | Flush the event queue without returning its contents. |
 | `create_device_folder` | Create a new device folder. Returns the existing folder if one with the same name already exists (idempotent). |
 | `create_variable_folder` | Create a new variable folder. Returns the existing folder if one with the same name already exists (idempotent). |
 | `decrease_heat_setpoint` | Decrease the heat setpoint on a thermostat/TRV by a given delta (default 0.5 degC). Use for small step adjustments. |
 | `device_control` | Find a device by name and control it in one step — faster than search_entities + device_turn_on/off. Use this for all simple on/off/brightness commands. |
+| `device_remove_delayed_actions` | Cancel pending delayed/timed actions for ONE device (e.g. a queued auto-off from device_turn_on duration), leaving other devices' delayed actions untouched. |
 | `device_set_brightness` | Set device brightness level |
 | `device_toggle` | Toggle on/off state. Auto-detects dimmer/relay/speedcontrol. |
-| `device_turn_off` | Turn off a device |
-| `device_turn_on` | Turn on a device |
+| `device_turn_off` | Turn off a device. Optional delay (turn off in N seconds) and duration (auto-ON again after N seconds). |
+| `device_turn_on` | Turn on a device. Optional delay (turn on in N seconds) and duration (auto-off after N seconds) — 'fan on for 10 minutes' is one call with duration=600. |
 | `dimmer_brighten_by` | Increase dimmer brightness by N percent. Clamps at 100. |
 | `dimmer_dim_by` | Decrease dimmer brightness by N percent. Clamps at 0. |
 | `disable_action_group` | Disable an action group (convenience for enable_action_group value=False). |
@@ -598,9 +612,11 @@ _Modify Indigo state. Require `write` (or `admin`)._
 | `log_message` | Write a message to the Indigo on-screen event log (Log Viewer). The message appears immediately. Use for status updates, confirmations, or debug output that the user can see in the Indigo UI. |
 | `move_device_to_folder` | Move a device to a different folder. folder_id=0 means root. |
 | `move_trigger_to_folder` | Move a trigger to a different folder. folder_id=0 means root. |
+| `ping_device` | Ping a device to check it is reachable on its network (Z-Wave and other native protocols). Returns reachability and round-trip time where supported. |
 | `remember` | Store a persistent note under a topic, accessible across future Claude sessions. Examples: remember(topic='devices', note='Back door sensor false-positives in direct sunlight') or remember(topic='energy', note='Bias factor was 1.5 as of April 2026'). |
 | `rename_device` | Rename a device. |
 | `request_status_update` | Request an immediate status update from a device (polls the device for current state). |
+| `reset_energy_accumulator` | Reset a device's accumulated energy total (kWh) to zero — e.g. start a fresh count on an energy-metering smart plug. The previous total is returned but cannot be restored. |
 | `schedule_remove_delayed_actions` | Remove any pending delayed actions for a schedule. |
 | `send_email` | Send an email via Indigo's configured SMTP device. Use for detailed reports, logs, or non-urgent notifications. |
 | `send_notification` | Send a Pushover push notification to the user's device. Use for important alerts, confirmations, or proactive updates. |
@@ -627,7 +643,7 @@ _Modify Indigo state. Require `write` (or `admin`)._
 | `variable_move_to_folder` | Move a variable to a different folder. folder_id=0 means root. |
 | `variable_update` | Update a variable's value |
 
-### Admin tools (20)
+### Admin tools (22)
 
 _Destructive / irreversible / code-execution / lifecycle / physical-security. Require `admin`._
 
@@ -636,9 +652,11 @@ _Destructive / irreversible / code-execution / lifecycle / physical-security. Re
 | `create_script` | Create a new Python script in the Indigo Scripts folder. Fails if the file already exists — use write_script to update. |
 | `delete_action_group` | Permanently delete an action group. |
 | `delete_device` | Permanently delete a device. Destructive — cannot be undone. |
+| `delete_device_folder` | Delete a device folder by ID or name. Refuses a non-empty folder unless delete_children=true (which deletes the devices inside it — irreversible). |
 | `delete_schedule` | Permanently delete a schedule. |
 | `delete_script` | Safely archive a Python script (moves to _backups/_archived/). Does not permanently delete — can be recovered manually. |
 | `delete_trigger` | Permanently delete a trigger. |
+| `delete_variable_folder` | Delete a variable folder by ID or name. Refuses a non-empty folder unless delete_children=true (which deletes the variables inside it — irreversible). |
 | `execute_indigo_python` | Run arbitrary Python in this plugin's Indigo context. Has full access to the `indigo` module (devices, variables, triggers, thermostat.setHeatSetpoint, etc). mode='exec' runs a statement block and returns captured stdout/stderr. mode='eval' evaluates a single expression and returns its repr in 'value'. ADMIN scope — treat as arbitrary code execution on the Indigo server. |
 | `execute_plugin_menu_item` | Click a plugin's menu item under the Indigo client's Plugins menu (e.g. plugin_name='Zigbee2MQTT Bridge', menu_item_name='Refresh Device Capabilities'). Uses AppleScript GUI scripting — requires the Indigo GUI client to be running and System Events permission granted. ADMIN scope. |
 | `lock_device` | Lock a Z-Wave or other lock device. |
@@ -657,15 +675,9 @@ _Destructive / irreversible / code-execution / lifecycle / physical-security. Re
 
 ---
 
-## Why a Proxy Script?
+## Why is there a go-between script?
 
-Indigo's web server uses HTTP Bearer token authentication. Claude Code's MCP client (and `mcp-remote`) attempts OAuth discovery by default, which Indigo does not support. The proxy script:
-
-1. Acts as a stdio MCP server (what Claude Code expects)
-2. Translates the MCP protocol version (`2025-11-25` → `2025-06-18`)
-3. Adds the Bearer token to every request
-4. Maintains a persistent HTTP keep-alive connection to Indigo
-5. Correctly coerces argument types (strings → ints/arrays where needed)
+Claude Code and Indigo's web server don't quite speak the same dialect out of the box, so a small script sits between them and smooths things over. It speaks to Claude Code the way Claude Code expects, attaches your Indigo access key to every request so you never have to think about it, keeps the connection alive and quietly repairs it if Indigo restarts, and tidies up the odd formatting difference between the two sides. It's installed and configured for you — the only time you'd ever look at it is if something in the Troubleshooting section below sends you there.
 
 ---
 
@@ -774,7 +786,7 @@ Claude Bridge.indigoPlugin/
 │           │   └── vector_store/           # Text search store
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
-│           └── tools/                      # 18 tool handler modules (139 tools)
+│           └── tools/                      # 18 tool handler modules (149 tools)
 └── README.md
 
 indigo_mcp_proxy.py                         # Claude Code stdio proxy script
@@ -784,6 +796,15 @@ README.md
 ---
 
 ## Changelog
+
+### 2.9.0 (2026-06-10)
+Ten new tools, all surfacing Indigo capabilities found by walking the live API namespace by namespace — plus the walker itself is now a tool, so the question "has an Indigo upgrade added anything we haven't bridged?" answers itself from now on (`audit_api_coverage` diffs the running server against a frozen baseline of 362 callables).
+
+The one you'll actually use daily: **timed device actions**. `device_turn_on` and `device_turn_off` now take optional `delay` and `duration` arguments, so "fan on for ten minutes" or "turn that off in half an hour" is a single call using Indigo's own delayed-action engine — no scripts, no timers. A companion `device_remove_delayed_actions` cancels a pending timed action on one device without touching anything else's.
+
+The rest: `reset_energy_accumulator` zeroes the lifetime kWh count on an energy-metering plug, `beep_device` and `ping_device` give you physical identification and reachability checks, `all_lights_off` / `all_lights_on` / `all_devices_off` expose Indigo's native broadcast commands (clearly labelled as reaching Z-Wave/Insteon/X10 devices only — plugin-owned devices don't hear broadcasts), and `delete_device_folder` / `delete_variable_folder` complete the folder lifecycle, refusing to delete a non-empty folder unless you explicitly say otherwise.
+
+Under the bonnet, the `/health` endpoint now reports average and maximum **response size per tool** alongside latency — because the real cost of a chatty tool is how much Claude has to read, not how fast the server answers. 283 tests.
 
 ### 2.8.6 (2026-06-10)
 A housekeeping release off the back of a full repo audit — nothing about how the plugin behaves day-to-day changes, but quite a lot about how safely it can be changed in future does.
@@ -1022,3 +1043,11 @@ tool. Every push runs the tests, lint and a docs-staleness check in CI.
 ## Licence
 
 MIT — free to use, modify, and distribute. Attribution appreciated.
+
+---
+
+## Authors
+
+Claude Fable 5 and CliveS.
+
+Built conversationally — CliveS describing what the plugin should do and keeping it honest, Claude writing the code and testing it against the live system. Which, fittingly, is exactly the way of working this plugin exists to give you.

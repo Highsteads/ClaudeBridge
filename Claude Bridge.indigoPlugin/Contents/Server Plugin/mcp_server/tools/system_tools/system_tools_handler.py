@@ -563,3 +563,112 @@ class SystemToolsHandler(BaseToolHandler):
             return result
         except Exception as exc:
             return self.handle_exception(exc, "create_variable_folder")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # v2.9.0 — folder deletion + API coverage audit
+    # ────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_folder(collection, folder):
+        """Resolve a folder by numeric ID or (case-insensitive) name."""
+        try:
+            fid = int(str(folder).strip())
+            for f in collection.folders:
+                if f.id == fid:
+                    return f
+        except (TypeError, ValueError):
+            pass
+        name = str(folder).strip().lower()
+        for f in collection.folders:
+            if f.name.lower() == name:
+                return f
+        return None
+
+    def delete_device_folder(self, folder, delete_children: bool = False) -> Dict[str, Any]:
+        """Delete a device folder by ID or name. Refuses a non-empty folder
+        unless delete_children=True (which deletes the devices inside it!)."""
+        self.log_incoming_request("delete_device_folder",
+                                  {"folder": folder, "delete_children": delete_children})
+        try:
+            f = self._find_folder(indigo.devices, folder)
+            if f is None:
+                return {"success": False, "error": f"Device folder {folder!r} not found"}
+            members = [d.name for d in indigo.devices.iter() if d.folderId == f.id]
+            if members and not delete_children:
+                return {"success": False,
+                        "error": f"Folder '{f.name}' contains {len(members)} device(s) — "
+                                 f"refusing to delete. Move them out first, or pass "
+                                 f"delete_children=true to delete the devices too.",
+                        "members": members[:20]}
+            indigo.devices.folder.delete(f, deleteAllChildren=bool(members))
+            msg = (f"Deleted device folder '{f.name}'"
+                   + (f" and its {len(members)} device(s)" if members else ""))
+            self.log_tool_outcome("delete_device_folder", True, msg)
+            return {"success": True, "message": msg, "deleted_children": len(members)}
+        except Exception as exc:
+            return self.handle_exception(exc, "delete_device_folder")
+
+    def delete_variable_folder(self, folder, delete_children: bool = False) -> Dict[str, Any]:
+        """Delete a variable folder by ID or name. Refuses a non-empty folder
+        unless delete_children=True (which deletes the variables inside it!)."""
+        self.log_incoming_request("delete_variable_folder",
+                                  {"folder": folder, "delete_children": delete_children})
+        try:
+            f = self._find_folder(indigo.variables, folder)
+            if f is None:
+                return {"success": False, "error": f"Variable folder {folder!r} not found"}
+            members = [v.name for v in indigo.variables.iter() if v.folderId == f.id]
+            if members and not delete_children:
+                return {"success": False,
+                        "error": f"Folder '{f.name}' contains {len(members)} variable(s) — "
+                                 f"refusing to delete. Move them out first, or pass "
+                                 f"delete_children=true to delete the variables too.",
+                        "members": members[:20]}
+            indigo.variables.folder.delete(f, deleteAllChildren=bool(members))
+            msg = (f"Deleted variable folder '{f.name}'"
+                   + (f" and its {len(members)} variable(s)" if members else ""))
+            self.log_tool_outcome("delete_variable_folder", True, msg)
+            return {"success": True, "message": msg, "deleted_children": len(members)}
+        except Exception as exc:
+            return self.handle_exception(exc, "delete_variable_folder")
+
+    def audit_api_coverage(self) -> Dict[str, Any]:
+        """Diff the LIVE indigo.* command namespaces against the frozen baseline
+        captured at build time. After an Indigo upgrade this reports any new
+        callables (candidate tools Claude Bridge hasn't surfaced yet) and any
+        removals (tools that may now be broken). Regenerate the baseline by
+        re-running the walker in api_baseline.py's header after an upgrade."""
+        self.log_incoming_request("audit_api_coverage", {})
+        try:
+            from .api_baseline import API_BASELINE
+            namespaces = ["device", "dimmer", "relay", "sensor", "thermostat",
+                          "sprinkler", "speedcontrol", "iodevice", "variable",
+                          "trigger", "schedule", "actionGroup", "controlPage",
+                          "zwave", "insteon", "server"]
+            live = set()
+            for ns in namespaces:
+                obj = getattr(indigo, ns, None)
+                if obj is None:
+                    continue
+                for n in dir(obj):
+                    if not n.startswith("_") and callable(getattr(obj, n, None)):
+                        live.add(f"{ns}.{n}")
+            for ns in ["devices", "variables", "triggers", "schedules",
+                       "actionGroups", "controlPages"]:
+                obj = getattr(indigo, ns, None)
+                fold = getattr(obj, "folder", None) if obj is not None else None
+                if fold is not None:
+                    for n in dir(fold):
+                        if not n.startswith("_") and callable(getattr(fold, n, None)):
+                            live.add(f"{ns}.folder.{n}")
+            added   = sorted(live - API_BASELINE)
+            removed = sorted(API_BASELINE - live)
+            msg = (f"API coverage audit: {len(live)} live callables vs "
+                   f"{len(API_BASELINE)} baseline — {len(added)} new, {len(removed)} removed")
+            self.log_tool_outcome("audit_api_coverage", True, msg)
+            return {"success": True, "indigo_version": str(indigo.server.version),
+                    "live_count": len(live), "baseline_count": len(API_BASELINE),
+                    "new_since_baseline": added, "removed_since_baseline": removed,
+                    "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "audit_api_coverage")

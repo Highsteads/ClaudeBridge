@@ -48,12 +48,14 @@ class DeviceControlHandler(BaseToolHandler):
                 return device_id
         return device_id
 
-    def turn_on(self, device_id: int) -> Dict[str, Any]:
+    def turn_on(self, device_id: int, delay: int = 0, duration: int = 0) -> Dict[str, Any]:
         """
-        Turn on a device.
+        Turn on a device, optionally delayed and/or for a fixed duration.
 
         Args:
             device_id: The device ID to turn on
+            delay:     Seconds before turning on (0 = now)
+            duration:  Seconds to stay on before auto-off (0 = stay on)
 
         Returns:
             Dictionary with operation results
@@ -69,25 +71,31 @@ class DeviceControlHandler(BaseToolHandler):
             device = self.data_provider.get_device(device_id)
             device_name = device.get('name', f'ID {device_id}') if device else f'ID {device_id}'
 
-            result = self.data_provider.turn_on_device(device_id)
+            result = self.data_provider.turn_on_device(device_id, delay=delay,
+                                                       duration=duration)
 
             if "error" in result:
                 self.info_log(f"❌ {device_name}: {result['error']}")
+            elif result.get("scheduled"):
+                self.info_log(f"🕑 {device_name} → on ({result.get('note', 'scheduled')})")
             else:
                 change_str = "changed" if result.get('changed', False) else "no change"
-                self.info_log(f"🟢 {device_name} → on ({change_str})")
+                extra = f", {result['note']}" if result.get('note') else ""
+                self.info_log(f"🟢 {device_name} → on ({change_str}{extra})")
 
             return result
 
         except Exception as e:
             return self.handle_exception(e, f"turning on device ID {device_id}")
-    
-    def turn_off(self, device_id: int) -> Dict[str, Any]:
+
+    def turn_off(self, device_id: int, delay: int = 0, duration: int = 0) -> Dict[str, Any]:
         """
-        Turn off a device.
+        Turn off a device, optionally delayed and/or for a fixed duration.
 
         Args:
             device_id: The device ID to turn off
+            delay:     Seconds before turning off (0 = now)
+            duration:  Seconds to stay off before auto-on (0 = stay off)
 
         Returns:
             Dictionary with operation results
@@ -103,13 +111,17 @@ class DeviceControlHandler(BaseToolHandler):
             device = self.data_provider.get_device(device_id)
             device_name = device.get('name', f'ID {device_id}') if device else f'ID {device_id}'
 
-            result = self.data_provider.turn_off_device(device_id)
+            result = self.data_provider.turn_off_device(device_id, delay=delay,
+                                                        duration=duration)
 
             if "error" in result:
                 self.info_log(f"❌ {device_name}: {result['error']}")
+            elif result.get("scheduled"):
+                self.info_log(f"🕑 {device_name} → off ({result.get('note', 'scheduled')})")
             else:
                 change_str = "changed" if result.get('changed', False) else "no change"
-                self.info_log(f"🔴 {device_name} → off ({change_str})")
+                extra = f", {result['note']}" if result.get('note') else ""
+                self.info_log(f"🔴 {device_name} → off ({change_str}{extra})")
 
             return result
 

@@ -123,7 +123,8 @@ class DataProvider(ABC):
         pass
     
     @abstractmethod
-    def turn_on_device(self, device_id: int) -> Dict[str, Any]:
+    def turn_on_device(self, device_id: int, delay: int = 0,
+                       duration: int = 0) -> Dict[str, Any]:
         """
         Turn on a device.
         
@@ -140,7 +141,8 @@ class DataProvider(ABC):
         pass
     
     @abstractmethod
-    def turn_off_device(self, device_id: int) -> Dict[str, Any]:
+    def turn_off_device(self, device_id: int, delay: int = 0,
+                        duration: int = 0) -> Dict[str, Any]:
         """
         Turn off a device.
         

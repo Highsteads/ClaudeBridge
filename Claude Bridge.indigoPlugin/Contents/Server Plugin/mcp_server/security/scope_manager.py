@@ -79,6 +79,8 @@ READ_TOOLS: Set[str] = {
     "recall_topics", "get_events", "query_event_log", "security_status", "system_health",
     "plugin_diff_source_vs_installed", "plugin_lint", "plugin_node_check_html",
     "plugin_show_packages_versions", "plugin_validate_xml",
+    # v2.9.0 — read-only API drift detector
+    "audit_api_coverage",
 }
 
 # Tools that *modify* Indigo state — require 'write' or 'admin'.
@@ -108,6 +110,12 @@ WRITE_TOOLS: Set[str] = {
     "remember", "forget", "clear_events", "subscribe", "unsubscribe", "log_message",
     # Outbound side effects (send as the user)
     "send_email", "send_notification", "server_speak",
+    # v2.9.0 — diagnostics, energy reset, delayed actions, native broadcasts.
+    # The broadcasts are WRITE not ADMIN: reversible mass on/off, same class of
+    # effect as action_execute_group.
+    "beep_device", "ping_device", "reset_energy_accumulator",
+    "device_remove_delayed_actions",
+    "all_lights_off", "all_lights_on", "all_devices_off",
 }
 
 # Destructive / irreversible / code-execution / lifecycle / physical-security — require 'admin'.
@@ -120,6 +128,7 @@ ADMIN_TOOLS: Set[str] = {
     # Irreversible deletes
     "delete_device", "delete_schedule", "delete_trigger", "delete_action_group", "variable_delete",
     "remove_all_delayed_actions",
+    "delete_device_folder", "delete_variable_folder",   # v2.9.0 — can cascade-delete contents
     # Physical security
     "lock_device", "unlock_device",
     # Outbound webhooks — registering an egress target POSTs home state to an

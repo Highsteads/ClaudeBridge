@@ -120,6 +120,15 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "move_device_to_folder":    _DEVICE_TOOLS,
     "duplicate_device":         _DEVICE_TOOLS,
     "delete_device":            _DEVICE_TOOLS,
+    # ── v2.9.0 additions ────────────────────────────────────────────────
+    "reset_energy_accumulator": _DEVICE_TOOLS,
+    "device_remove_delayed_actions": _DEVICE_TOOLS,
+    "all_lights_off":           _DEVICE_TOOLS,
+    "all_lights_on":            _DEVICE_TOOLS,
+    "all_devices_off":          _DEVICE_TOOLS,
+    "delete_device_folder":     _DEVICE_TOOLS,
+    "delete_variable_folder":   _VARIABLE_TOOLS,
+    # beep_device / ping_device deliberately absent — they change no cached state.
     # ── Variables ───────────────────────────────────────────────────────
     "variable_create":          _VARIABLE_TOOLS,
     "variable_update":          _VARIABLE_TOOLS,

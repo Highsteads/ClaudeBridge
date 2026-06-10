@@ -251,12 +251,30 @@ class IndigoDataProvider(DataProvider):
                 break
         return current
 
-    def turn_on_device(self, device_id: int) -> Dict[str, Any]:
+    @staticmethod
+    def _coerce_seconds(value, field: str) -> int:
+        """Guarded int-coercion for delay/duration seconds (estate rule: never
+        let a stringy or junk value reach arithmetic / the Indigo call)."""
+        if value in (None, ""):
+            return 0
+        try:
+            secs = int(float(value))
+        except (TypeError, ValueError):
+            raise ValueError(f"{field} must be a number of seconds, got {value!r}")
+        if secs < 0:
+            raise ValueError(f"{field} must be >= 0, got {secs}")
+        return secs
+
+    def turn_on_device(self, device_id: int, delay: int = 0,
+                       duration: int = 0) -> Dict[str, Any]:
         """
-        Turn on a device.
+        Turn on a device, optionally after `delay` seconds and/or turning it
+        back off after `duration` seconds (Indigo-native timed action).
 
         Args:
             device_id: The device ID to turn on
+            delay:     Seconds to wait before turning on (0 = immediately)
+            duration:  Seconds to stay on before auto-off (0 = stay on)
 
         Returns:
             Dictionary with operation results
@@ -264,66 +282,97 @@ class IndigoDataProvider(DataProvider):
         try:
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found"}
-            
-            # Get initial device state
+            delay    = self._coerce_seconds(delay, "delay")
+            duration = self._coerce_seconds(duration, "duration")
+
             device_before = indigo.devices[device_id]
             previous_state = device_before.onState
-            
-            # Turn on the device
-            indigo.device.turnOn(device_id)
+
+            indigo.device.turnOn(device_id, delay=delay, duration=duration)
+
+            if delay > 0:
+                # The state won't change until the delay elapses — don't poll.
+                return {
+                    "scheduled": True,
+                    "delay_seconds": delay,
+                    "duration_seconds": duration,
+                    "previous": previous_state,
+                    "device_name": device_before.name,
+                    "note": f"Turn-on scheduled in {delay}s"
+                            + (f", auto-off after {duration}s" if duration else ""),
+                }
 
             # Briefly poll for the state to update (early exit on change) instead
             # of an unconditional 1s sleep that would stall the IWS worker thread.
             current_state = self._poll_for_change(device_id, "onState", previous_state)
-
-            # Get fresh device object from Indigo for the device name
             device_after = indigo.devices[device_id]
 
-            return {
+            result = {
                 "changed": previous_state != current_state,
                 "previous": previous_state,
                 "current": current_state,
                 "device_name": device_after.name
             }
+            if duration > 0:
+                result["duration_seconds"] = duration
+                result["note"] = f"Auto-off scheduled after {duration}s"
+            return result
 
         except Exception as e:
             self.logger.error(f"Error turning on device {device_id}: {e}")
             return {"error": str(e)}
-    
-    def turn_off_device(self, device_id: int) -> Dict[str, Any]:
+
+    def turn_off_device(self, device_id: int, delay: int = 0,
+                        duration: int = 0) -> Dict[str, Any]:
         """
-        Turn off a device.
-        
+        Turn off a device, optionally after `delay` seconds and/or turning it
+        back on after `duration` seconds (Indigo-native timed action).
+
         Args:
             device_id: The device ID to turn off
-            
+            delay:     Seconds to wait before turning off (0 = immediately)
+            duration:  Seconds to stay off before auto-on (0 = stay off)
+
         Returns:
             Dictionary with operation results
         """
         try:
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found"}
-            
-            # Get initial device state
+            delay    = self._coerce_seconds(delay, "delay")
+            duration = self._coerce_seconds(duration, "duration")
+
             device_before = indigo.devices[device_id]
             previous_state = device_before.onState
-            
-            # Turn off the device
-            indigo.device.turnOff(device_id)
+
+            indigo.device.turnOff(device_id, delay=delay, duration=duration)
+
+            if delay > 0:
+                return {
+                    "scheduled": True,
+                    "delay_seconds": delay,
+                    "duration_seconds": duration,
+                    "previous": previous_state,
+                    "device_name": device_before.name,
+                    "note": f"Turn-off scheduled in {delay}s"
+                            + (f", auto-on after {duration}s" if duration else ""),
+                }
 
             # Briefly poll for the state to update (early exit on change) instead
             # of an unconditional 1s sleep that would stall the IWS worker thread.
             current_state = self._poll_for_change(device_id, "onState", previous_state)
-
-            # Get fresh device object from Indigo for the device name
             device_after = indigo.devices[device_id]
 
-            return {
+            result = {
                 "changed": previous_state != current_state,
                 "previous": previous_state,
                 "current": current_state,
                 "device_name": device_after.name
             }
+            if duration > 0:
+                result["duration_seconds"] = duration
+                result["note"] = f"Auto-on scheduled after {duration}s"
+            return result
 
         except Exception as e:
             self.logger.error(f"Error turning off device {device_id}: {e}")

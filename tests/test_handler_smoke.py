@@ -54,7 +54,7 @@ def test_turn_on_coerces_string_id_and_delegates():
     provider.turn_on_device.return_value = {"success": True, "changed": True}
     h = DeviceControlHandler(data_provider=provider, logger=_LOGGER)
     result = h.turn_on("123")
-    provider.turn_on_device.assert_called_once_with(123)
+    provider.turn_on_device.assert_called_once_with(123, delay=0, duration=0)
     assert result == {"success": True, "changed": True}
 
 

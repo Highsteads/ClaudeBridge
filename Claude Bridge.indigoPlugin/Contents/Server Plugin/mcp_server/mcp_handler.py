@@ -297,16 +297,20 @@ class MCPHandler:
         with self._sessions_lock:
             session_count = len(self._sessions)
 
-        # Per-tool latency aggregates over the rolling window
+        # Per-tool latency + payload aggregates over the rolling window
         per_tool: Dict[str, Dict[str, Any]] = {}
         for entry in call_log:
-            agg = per_tool.setdefault(entry["name"], {"calls": 0, "errors": 0, "total_ms": 0, "max_ms": 0})
-            agg["calls"]    += 1
-            agg["errors"]   += 0 if entry["ok"] else 1
-            agg["total_ms"] += entry["duration_ms"]
-            agg["max_ms"]    = max(agg["max_ms"], entry["duration_ms"])
+            agg = per_tool.setdefault(entry["name"], {"calls": 0, "errors": 0, "total_ms": 0,
+                                                      "max_ms": 0, "total_bytes": 0, "max_bytes": 0})
+            agg["calls"]       += 1
+            agg["errors"]      += 0 if entry["ok"] else 1
+            agg["total_ms"]    += entry["duration_ms"]
+            agg["max_ms"]       = max(agg["max_ms"], entry["duration_ms"])
+            agg["total_bytes"] += entry.get("bytes", 0)
+            agg["max_bytes"]    = max(agg["max_bytes"], entry.get("bytes", 0))
         for name, agg in per_tool.items():
-            agg["avg_ms"] = round(agg["total_ms"] / agg["calls"], 1) if agg["calls"] else 0
+            agg["avg_ms"]    = round(agg["total_ms"] / agg["calls"], 1) if agg["calls"] else 0
+            agg["avg_bytes"] = round(agg["total_bytes"] / agg["calls"]) if agg["calls"] else 0
 
         # Vector store status (best-effort) — read via the manager's own get_stats()
         vs_status = {"available": False}
@@ -792,6 +796,7 @@ class MCPHandler:
         start = time.time()
         ok = False
         cache_hit = False
+        resp_bytes = 0
         try:
             # Cache-aware dispatch — only for tools in the read allow-list
             def _compute():
@@ -801,6 +806,9 @@ class MCPHandler:
                 tool_name, tool_args, _compute, no_cache=no_cache
             )
             ok = True
+            # Payload size — the real cost driver is how much the CLIENT has to
+            # read, not server latency; surfaced per-tool via /health.
+            resp_bytes = len(result) if isinstance(result, (str, bytes)) else 0
 
             # Mutating tools invalidate related cache buckets
             if not cache_hit:
@@ -861,6 +869,7 @@ class MCPHandler:
                     "duration_ms": duration_ms,
                     "ok":          ok,
                     "cache_hit":   cache_hit,
+                    "bytes":       resp_bytes,
                     "ts":          time.time(),
                 })
 
@@ -1046,28 +1055,47 @@ class MCPHandler:
         
         # Device control tools
         self._tools["device_turn_on"] = {
-            "description": "Turn on a device",
+            "description": ("Turn on a device. Optional delay (turn on in N seconds) and "
+                            "duration (auto-off after N seconds) — 'fan on for 10 minutes' "
+                            "is one call with duration=600."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "device_id": {
                         "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "The ID of the device to turn on"
+                    },
+                    "delay": {
+                        "type": "number",
+                        "description": "Seconds to wait before turning on (default 0 = now)"
+                    },
+                    "duration": {
+                        "type": "number",
+                        "description": "Seconds to stay on before automatic turn-off (default 0 = stay on)"
                     }
                 },
                 "required": ["device_id"]
             },
             "function": self._tool_device_turn_on
         }
-        
+
         self._tools["device_turn_off"] = {
-            "description": "Turn off a device",
+            "description": ("Turn off a device. Optional delay (turn off in N seconds) and "
+                            "duration (auto-ON again after N seconds)."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "device_id": {
                         "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "The ID of the device to turn off"
+                    },
+                    "delay": {
+                        "type": "number",
+                        "description": "Seconds to wait before turning off (default 0 = now)"
+                    },
+                    "duration": {
+                        "type": "number",
+                        "description": "Seconds to stay off before automatic turn-on (default 0 = stay off)"
                     }
                 },
                 "required": ["device_id"]
@@ -2578,6 +2606,98 @@ class MCPHandler:
             },
             "function": self._tool_rename_device
         }
+
+        # ── v2.9.0: device diagnostics, energy reset, delayed actions,
+        #            native broadcasts, folder deletion, API coverage audit ──
+        _id_only_schema = lambda what: {  # noqa: E731 — tiny local factory
+            "type": "object",
+            "properties": {"device_id": {"anyOf": [{"type": "number"}, {"type": "string"}],
+                                          "description": what}},
+            "required": ["device_id"],
+        }
+        self._tools["beep_device"] = {
+            "description": ("Ask a device to beep so you can physically identify it. "
+                            "Devices that don't support beeping ignore the command."),
+            "inputSchema": _id_only_schema("The device to beep"),
+            "function": self._tool_beep_device,
+        }
+        self._tools["ping_device"] = {
+            "description": ("Ping a device to check it is reachable on its network "
+                            "(Z-Wave and other native protocols). Returns reachability "
+                            "and round-trip time where supported."),
+            "inputSchema": _id_only_schema("The device to ping"),
+            "function": self._tool_ping_device,
+        }
+        self._tools["reset_energy_accumulator"] = {
+            "description": ("Reset a device's accumulated energy total (kWh) to zero — "
+                            "e.g. start a fresh count on an energy-metering smart plug. "
+                            "The previous total is returned but cannot be restored."),
+            "inputSchema": _id_only_schema("The energy-metering device to reset"),
+            "function": self._tool_reset_energy_accumulator,
+        }
+        self._tools["device_remove_delayed_actions"] = {
+            "description": ("Cancel pending delayed/timed actions for ONE device (e.g. a "
+                            "queued auto-off from device_turn_on duration), leaving other "
+                            "devices' delayed actions untouched."),
+            "inputSchema": _id_only_schema("The device whose delayed actions to cancel"),
+            "function": self._tool_device_remove_delayed_actions,
+        }
+        _no_args_schema = {"type": "object", "properties": {}}
+        self._tools["all_lights_off"] = {
+            "description": ("Send Indigo's native all-lights-OFF broadcast. Reaches "
+                            "native-protocol devices (Z-Wave/Insteon/X10) ONLY — devices "
+                            "owned by plugins (zigbee2mqtt, Shelly, Tasmota) are NOT "
+                            "affected; turn those off individually or via an action group."),
+            "inputSchema": _no_args_schema,
+            "function": self._tool_all_lights_off,
+        }
+        self._tools["all_lights_on"] = {
+            "description": ("Send Indigo's native all-lights-ON broadcast. Native-protocol "
+                            "devices (Z-Wave/Insteon/X10) ONLY — plugin-owned devices are "
+                            "not affected."),
+            "inputSchema": _no_args_schema,
+            "function": self._tool_all_lights_on,
+        }
+        self._tools["all_devices_off"] = {
+            "description": ("Send Indigo's native all-devices-OFF broadcast. Native-protocol "
+                            "devices (Z-Wave/Insteon/X10) ONLY — plugin-owned devices are "
+                            "not affected."),
+            "inputSchema": _no_args_schema,
+            "function": self._tool_all_devices_off,
+        }
+        _folder_schema = lambda kind: {  # noqa: E731
+            "type": "object",
+            "properties": {
+                "folder": {"anyOf": [{"type": "number"}, {"type": "string"}],
+                            "description": f"{kind} folder ID or name"},
+                "delete_children": {"type": "boolean",
+                                     "description": f"Also delete the {kind.lower()}s inside "
+                                                    f"(default false — a non-empty folder is refused)"},
+            },
+            "required": ["folder"],
+        }
+        self._tools["delete_device_folder"] = {
+            "description": ("Delete a device folder by ID or name. Refuses a non-empty "
+                            "folder unless delete_children=true (which deletes the devices "
+                            "inside it — irreversible)."),
+            "inputSchema": _folder_schema("Device"),
+            "function": self._tool_delete_device_folder,
+        }
+        self._tools["delete_variable_folder"] = {
+            "description": ("Delete a variable folder by ID or name. Refuses a non-empty "
+                            "folder unless delete_children=true (which deletes the variables "
+                            "inside it — irreversible)."),
+            "inputSchema": _folder_schema("Variable"),
+            "function": self._tool_delete_variable_folder,
+        }
+        self._tools["audit_api_coverage"] = {
+            "description": ("Diff the live indigo.* command namespaces against the frozen "
+                            "baseline captured at build time. Run after an Indigo upgrade to "
+                            "see new API callables Claude Bridge hasn't surfaced as tools yet "
+                            "(and removals that may break existing tools)."),
+            "inputSchema": _no_args_schema,
+            "function": self._tool_audit_api_coverage,
+        }
         self._tools["device_toggle"] = {
             "description": "Toggle on/off state. Auto-detects dimmer/relay/speedcontrol.",
             "inputSchema": {
@@ -3201,6 +3321,45 @@ class MCPHandler:
             return safe_json_dumps(self.system_tools_handler.create_variable_folder(name))
         except Exception as e:
             self.logger.error(f"create_variable_folder error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # v2.9.0 stubs ---------------------------------------------------------
+    def _tool_beep_device(self, device_id) -> str:
+        return self._ext_call("beep_device", device_id)
+    def _tool_ping_device(self, device_id) -> str:
+        return self._ext_call("ping_device", device_id)
+    def _tool_reset_energy_accumulator(self, device_id) -> str:
+        return self._ext_call("reset_energy_accumulator", device_id)
+    def _tool_device_remove_delayed_actions(self, device_id) -> str:
+        return self._ext_call("device_remove_delayed_actions", device_id)
+    def _tool_all_lights_off(self) -> str:
+        return self._ext_call("all_lights_off")
+    def _tool_all_lights_on(self) -> str:
+        return self._ext_call("all_lights_on")
+    def _tool_all_devices_off(self) -> str:
+        return self._ext_call("all_devices_off")
+
+    def _tool_delete_device_folder(self, folder, delete_children: bool = False) -> str:
+        try:
+            return safe_json_dumps(
+                self.system_tools_handler.delete_device_folder(folder, delete_children))
+        except Exception as e:
+            self.logger.error(f"delete_device_folder error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_delete_variable_folder(self, folder, delete_children: bool = False) -> str:
+        try:
+            return safe_json_dumps(
+                self.system_tools_handler.delete_variable_folder(folder, delete_children))
+        except Exception as e:
+            self.logger.error(f"delete_variable_folder error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_audit_api_coverage(self) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.audit_api_coverage())
+        except Exception as e:
+            self.logger.error(f"audit_api_coverage error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     def _tool_execute_indigo_python(self, code: str, mode: str = "exec") -> str:
@@ -3843,19 +4002,21 @@ class MCPHandler:
             self.logger.error(f"Get devices by type error: {e}")
             return safe_json_dumps({"error": str(e), "device_type": device_type})
     
-    def _tool_device_turn_on(self, device_id: int) -> str:
+    def _tool_device_turn_on(self, device_id: int, delay: int = 0, duration: int = 0) -> str:
         """Turn on device tool implementation."""
         try:
-            result = self.device_control_handler.turn_on(device_id)
+            result = self.device_control_handler.turn_on(device_id, delay=delay,
+                                                         duration=duration)
             return safe_json_dumps(result)
         except Exception as e:
             self.logger.error(f"Device turn on error: {e}")
             return safe_json_dumps({"error": str(e)})
-    
-    def _tool_device_turn_off(self, device_id: int) -> str:
+
+    def _tool_device_turn_off(self, device_id: int, delay: int = 0, duration: int = 0) -> str:
         """Turn off device tool implementation."""
         try:
-            result = self.device_control_handler.turn_off(device_id)
+            result = self.device_control_handler.turn_off(device_id, delay=delay,
+                                                          duration=duration)
             return safe_json_dumps(result)
         except Exception as e:
             self.logger.error(f"Device turn off error: {e}")

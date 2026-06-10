@@ -5,7 +5,21 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Fable 5
 # Date:        10-06-2026
-# Version:     2.8.6
+# Version:     2.9.0
+#
+# v2.9.0 (10-06-2026): API-coverage capability batch — 10 new tools (139 -> 149)
+# found by walking the live indigo.* namespaces and diffing against the tool
+# registry. device_turn_on/off gained delay= and duration= (Indigo-native timed
+# actions — "fan on for 10 minutes" in one call, guarded coercion per estate
+# rule); device_remove_delayed_actions cancels ONE device's pending timed
+# action. New: reset_energy_accumulator, beep_device, ping_device,
+# all_lights_off/on + all_devices_off (native-protocol broadcasts, honestly
+# labelled — plugin-owned devices don't hear them), delete_device_folder +
+# delete_variable_folder (refuse non-empty unless delete_children=true; ADMIN),
+# audit_api_coverage (diffs live API against the frozen 362-callable baseline in
+# system_tools/api_baseline.py so an Indigo upgrade reveals unbridged
+# capabilities). /health per-tool telemetry now includes avg/max response BYTES
+# (the client-side cost driver). +14 tests (283 local incl. live e2e).
 #
 # v2.8.6 (10-06-2026): Repo-audit hygiene release — no functional surface change.
 # requirements.txt pruned from ~20 declared packages to the 4 the code imports

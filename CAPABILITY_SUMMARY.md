@@ -1,9 +1,9 @@
 # ClaudeBridge — Full Capability Summary
-*For anyone evaluating whether to download and install ClaudeBridge v2.8.6*
+*For anyone evaluating whether to download and install ClaudeBridge v2.9.0*
 
 ClaudeBridge connects **Claude Code** (Anthropic's AI coding agent) directly to your running **Indigo home automation server** via the Model Context Protocol (MCP). Instead of asking Claude to write scripts blindly, Claude can read your actual devices, check live states, query history, write and test scripts, and reason about your real home — all from a single conversation.
 
-**Current tool count: 139 tools across 19 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost. (The README's tool table is auto-generated from the plugin's own registry and is the authoritative per-tool list.)
+**Current tool count: 149 tools across 20 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost. (The README's tool table is auto-generated from the plugin's own registry and is the authoritative per-tool list.)
 
 ---
 
@@ -338,6 +338,16 @@ A reference receiver and a webhook→Pushover relay ship in the repo's `examples
 **Example prompts:**
 > "Create a webhook that POSTs to my relay whenever a water leak sensor turns on"
 > "List my webhook subscriptions and tell me which one fired last"
+
+### 20. Timed Actions, Diagnostics & Housekeeping (10 tools — added v2.9.0)
+
+- `device_turn_on` / `device_turn_off` gained optional `delay` and `duration` — "fan on for 10 minutes" is one call, using Indigo's native delayed-action engine
+- `device_remove_delayed_actions` — cancel one device's pending timed action without touching the rest
+- `reset_energy_accumulator` — zero the lifetime kWh total on an energy-metering plug
+- `beep_device` / `ping_device` — physically identify a device, or check it answers on its network
+- `all_lights_off` / `all_lights_on` / `all_devices_off` — Indigo's native broadcasts (Z-Wave/Insteon/X10 devices only; plugin-owned devices are unaffected and the tool says so)
+- `delete_device_folder` / `delete_variable_folder` — complete the folder lifecycle; a non-empty folder is refused unless you explicitly opt in to deleting its contents
+- `audit_api_coverage` — diff the live indigo.* API against a frozen 362-callable baseline, so an Indigo upgrade reveals new capabilities worth bridging
 
 ---
 
