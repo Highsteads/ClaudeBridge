@@ -56,4 +56,5 @@ CLAUDE.md
 /IndigoSecrets_example.py
 /CAPABILITY_SUMMARY.md
 /CONTRIBUTING.md
+/ruff.toml
 .github/

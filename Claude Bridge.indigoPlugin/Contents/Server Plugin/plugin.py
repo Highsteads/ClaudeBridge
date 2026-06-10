@@ -346,7 +346,8 @@ class Plugin(indigo.PluginBase):
         else:
             self._ts_filter = None
 
-        # Startup banner moved to showPluginInfo on demand (revised 25-May-2026 per Jay).
+        # Startup banner moved to showPluginInfo on demand (revised 25-May-2026
+        # following Indigo's plugin-logging guidance).
 
         # Indigo trigger registry — populated by triggerStartProcessing/Stop.
         # Maps trigger.id -> trigger object so _fire_claude_event can find

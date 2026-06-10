@@ -1,8 +1,0 @@
-# Lint gate — errors only (Pyflakes F rules: undefined names, unused
-# imports/variables, duplicate arguments). Deliberately NOT a formatting or
-# style pass; the codebase keeps its existing conventions.
-target-version = "py313"
-extend-exclude = ["Claude Bridge.indigoPlugin/Contents/Packages"]
-
-[lint]
-select = ["F"]
