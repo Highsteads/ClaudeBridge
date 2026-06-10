@@ -6,7 +6,7 @@ the common library pattern with main.py as the primary entry point.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional
 from contextlib import contextmanager
 
 from .client import InfluxDBClient

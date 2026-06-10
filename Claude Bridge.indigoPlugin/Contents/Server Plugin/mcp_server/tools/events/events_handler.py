@@ -20,7 +20,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
-from typing import Any, Deque, Dict, List, Optional, Union
+from typing import Any, Deque, Dict, List, Optional
 
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider

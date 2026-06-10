@@ -4,7 +4,6 @@ Result formatter for search results.
 
 from typing import Dict, Any, List, Optional
 from ...common.json_encoder import filter_json, KEYS_TO_KEEP_MINIMAL_DEVICES
-from ...common.state_filter import StateFilter
 
 
 class ResultFormatter:

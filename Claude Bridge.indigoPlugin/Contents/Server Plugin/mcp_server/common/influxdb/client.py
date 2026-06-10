@@ -3,7 +3,6 @@ InfluxDB client management for MCP server.
 """
 
 import logging
-import os
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 

@@ -1,38 +1,17 @@
-# Anthropic Claude API
+# Claude Bridge runtime dependencies.
+# Indigo pip-installs this into Contents/Packages/ at plugin startup.
+# Keep this list to packages the code actually imports — every entry is
+# downloaded onto every user's machine. Transitive dependencies (requests,
+# httpx, six, dateutil, ...) are resolved by pip and must NOT be listed here.
+
+# Anthropic Claude API (startup connection test + completion calls)
 anthropic>=0.40.0
 
-# Data Processing
-pandas>=2.3.3
-numpy>=2.3.3
-pyyaml>=6.0
-dicttoxml>=1.7.16
-
-# HTTP Client
-requests>=2.32.4
-requests-toolbelt>=1.0.0
-
-# Security
-certifi>=2025.8.3
-
-# Configuration Management
-python-dotenv>=1.1.1
+# Schema models used by the LLM client
 pydantic>=2.12.2
-pydantic-settings>=2.11.0
 
-# InfluxDB Integration (optional historical data)
+# Optional historical_analysis tools — legacy InfluxDB 1.x client
 influxdb==5.3.2
-influxdb-client>=1.49.0
 
-# Template Engine
+# Prompt templating for historical analysis
 jinja2>=3.1.0
-
-# Utility Dependencies
-attrs>=25.3.0
-charset-normalizer>=3.4.2
-frozenlist>=1.7.0
-idna>=3.10
-multidict>=6.6.3
-urllib3>=2.5.0
-aiosignal>=1.4.0
-yarl>=1.20.1
-typing-extensions>=4.8.0

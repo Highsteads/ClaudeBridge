@@ -5,7 +5,6 @@ Provides structured progress reporting with percentages, ETA, and status indicat
 
 import logging
 import time
-from typing import Optional
 
 logger = logging.getLogger("Plugin")
 

@@ -3,9 +3,24 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Opus 4.8
-# Date:        09-06-2026
-# Version:     2.8.5
+# Author:      CliveS & Claude Fable 5
+# Date:        10-06-2026
+# Version:     2.8.6
+#
+# v2.8.6 (10-06-2026): Repo-audit hygiene release — no functional surface change.
+# requirements.txt pruned from ~20 declared packages to the 4 the code imports
+# (anthropic, pydantic, influxdb, jinja2 — the rest were never imported and
+# bloated every user install); dead stub modules removed
+# (openai_client/parallel_embeddings.py + langsmith_config.py, zero callers);
+# 37 lint errors fixed (unused imports/variables, placeholder-less f-strings);
+# tool cache now sweeps expired entries on touch instead of only on re-read;
+# webhooks.json 0600 re-asserted at load (covers a restore-from-backup);
+# setup.py renamed install.py (it never was a setuptools script). NEW process
+# guard-rails: GitHub Actions CI (pytest + ruff F-rules + README tool-table
+# staleness check + advisory pip-audit), registry↔scope↔cache consistency
+# tests, dispatch-path + handler smoke tests (suite 176 → 213), repo/bundle
+# duplicate-copy sync test, CONTRIBUTING.md with the add-a-tool recipe.
+# Docs corrected to the true 139-tool count (CAPABILITY_SUMMARY + README).
 #
 # v2.8.5 (09-06-2026): MCP transport reliability, round 2 — the stdio proxy
 # (indigo_mcp_proxy.py v1.4) now self-heals the two drop modes that survived
@@ -236,7 +251,6 @@ import anthropic
 # collision, (2) lets us load plugin_utils.py from the same directory under a
 # unique module name without registering "plugin_utils" globally.
 import os as _os
-import sys as _sys
 import importlib.util as _ilu
 
 def _load_module_by_path(name: str, path: str):
@@ -282,7 +296,6 @@ WEBHOOK_ALLOWLIST         = _get_secret("WEBHOOK_ALLOWLIST", [])
 # Import our modules
 from mcp_server import runtime_config
 from mcp_server.adapters.indigo_data_provider import IndigoDataProvider
-from mcp_server.common.openai_client.langsmith_config import get_langsmith_config
 from mcp_server.mcp_handler import MCPHandler
 from mcp_server.webhooks import SubscriptionStore, SubscriptionManager, WebhookDispatcher
 from mcp_server.webhooks.allowlist_loader import load_allowlist

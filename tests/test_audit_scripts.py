@@ -9,7 +9,6 @@
 # Date:        09-06-2026
 # Version:     1.0
 
-import os
 
 from mcp_server.tools.audit.audit_handler import (
     _iter_script_files,

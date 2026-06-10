@@ -320,12 +320,12 @@ example prompts.
 
 ### Quick Install (recommended)
 
-Clone the repo and run the setup script — it handles everything except enabling the plugin in Indigo:
+Clone the repo and run the installer — it handles everything except enabling the plugin in Indigo:
 
 ```bash
 git clone https://github.com/Highsteads/ClaudeBridge.git
 cd ClaudeBridge
-python3 setup.py
+python3 install.py
 ```
 
 The script:
@@ -339,7 +339,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 136 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 139 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first; the
@@ -785,6 +785,13 @@ README.md
 
 ## Changelog
 
+### 2.8.6 (2026-06-10)
+A housekeeping release off the back of a full repo audit — nothing about how the plugin behaves day-to-day changes, but quite a lot about how safely it can be changed in future does.
+
+The thing users will actually notice: **installs are much lighter**. The plugin's `requirements.txt` had accumulated around twenty packages over its life, of which the code only ever imported four — the rest (pandas and numpy among them, tens of megabytes of compiled code) were downloaded onto every machine for nothing. The list is now exactly the four that are used: `anthropic`, `pydantic`, `influxdb` and `jinja2`. Fewer packages means faster installs, fewer ways for the pip step to go wrong, and less third-party code sitting inside your Indigo folder.
+
+The rest is guard-rails for development. The repo now runs its full test suite (grown from 176 to 213 tests), an errors-only lint pass and a docs-staleness check automatically on every push via GitHub Actions — so a change that breaks a tool, leaves a new tool unclassified in the security scopes, forgets a cache-invalidation entry or lets the README drift out of date now fails loudly instead of shipping. There's a new `CONTRIBUTING.md` with the full recipe for adding a tool, a couple of genuinely dead stub modules have been removed, the documentation now consistently says 139 tools (the capability summary had been stuck on 136 since before the webhooks release), the tool cache no longer keeps expired entries around for keys that are never asked for again, the webhook store re-asserts its owner-only file permissions when loaded (in case it was ever restored from a backup with looser ones), and `setup.py` is now called `install.py` — it was always a one-shot installer, never a Python packaging file, and the old name invited a `pip install .` that could never work.
+
 ### 2.8.5 (2026-06-09)
 The follow-on to the reliability fix in 2.8.3, closing the last two ways the bridge connection could drop out from under you. The first was a near-cousin of the one already dealt with. A connection that has gone stale while sitting idle does not always fail the moment a request is sent, it sometimes fails a fraction later when the reply is read back, and the earlier fix only caught the first of those. Now both are handled. When Indigo's web server has clearly closed an idle connection and sent nothing back at all, the request plainly never ran, so it is safe to reconnect and send it again whatever it was. On top of that the proxy now does the sensible thing pre-emptively and opens a fresh connection if the old one has been sitting unused for more than ten seconds, so most of these never get the chance to happen in the first place.
 
@@ -1001,6 +1008,14 @@ To turn the prefix off (or back on) at any time:
 
 The setting is stored in `pluginPrefs` (`timestampEnabled`) and persists across
 restarts. Defaults to ON.
+
+---
+
+## Contributing
+
+Pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to run
+the test suite (no Indigo install needed) and the recipe for adding a new MCP
+tool. Every push runs the tests, lint and a docs-staleness check in CI.
 
 ---
 

@@ -1,9 +1,9 @@
 # ClaudeBridge — Full Capability Summary
-*For anyone evaluating whether to download and install ClaudeBridge v2.7.0*
+*For anyone evaluating whether to download and install ClaudeBridge v2.8.6*
 
 ClaudeBridge connects **Claude Code** (Anthropic's AI coding agent) directly to your running **Indigo home automation server** via the Model Context Protocol (MCP). Instead of asking Claude to write scripts blindly, Claude can read your actual devices, check live states, query history, write and test scripts, and reason about your real home — all from a single conversation.
 
-**Current tool count: 136 tools across 16 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost.
+**Current tool count: 139 tools across 19 categories.** This document describes everything ClaudeBridge can do, what it requires, and what to expect in terms of speed and cost. (The README's tool table is auto-generated from the plugin's own registry and is the authoritative per-tool list.)
 
 ---
 
@@ -322,6 +322,22 @@ ClaudeBridge makes Claude a hands-on partner for developing, debugging, and test
 > "Watch the hall motion sensor and tell me the next three state changes you see"
 > "Did the plugin log any errors in the last hour?"
 > "Scaffold a test script that exercises the shellyRelay device with ID 123456 and logs the result to variable 789012"
+
+### 19. Outbound Event Webhooks (3 tools — ADMIN scope)
+
+Push Indigo events to an external HTTPS receiver the moment they happen — no polling. Added in v2.8.0.
+
+- `webhook_create` — subscribe a receiver URL to device/variable changes, with optional state conditions, transition detection (`any_change` or specific from→to), dwell timers (state must hold for N seconds before firing) and a max-fires cap
+- `webhook_list` — list active subscriptions (signing keys redacted)
+- `webhook_delete` — remove a subscription
+
+**Security posture (default-deny):** the feature ships **disabled** (a PluginConfig checkbox turns it on). Receiver URLs must be HTTPS and pass an egress firewall — private/loopback/link-local/metadata address ranges are hard-blocked, the destination must be on your explicit allowlist (`IndigoSecrets.WEBHOOK_ALLOWLIST`, the config field, or `webhook_allowlist.json`), the URL is re-vetted at send time with the connection pinned to the vetted IP, and redirects are never followed. Every delivery is HMAC-SHA256 signed so the receiver can verify origin. Delivery is queued on a background worker — a slow receiver never blocks Indigo.
+
+A reference receiver and a webhook→Pushover relay ship in the repo's `examples/` folder.
+
+**Example prompts:**
+> "Create a webhook that POSTs to my relay whenever a water leak sensor turns on"
+> "List my webhook subscriptions and tell me which one fired last"
 
 ---
 

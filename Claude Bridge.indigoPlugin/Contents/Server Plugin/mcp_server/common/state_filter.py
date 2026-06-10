@@ -2,7 +2,7 @@
 State filtering utilities for Indigo entities.
 """
 
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 import re
 
 

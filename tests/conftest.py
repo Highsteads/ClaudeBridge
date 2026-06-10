@@ -27,10 +27,12 @@ def _resolve_server_plugin() -> str:
                           "Contents", "Server Plugin")
         if os.path.isdir(sp):
             return sp
-    return os.path.expanduser(
-        "~/Documents/GitHub/ClaudeBridge/Claude Bridge.indigoPlugin/"
-        "Contents/Server Plugin"
-    )
+    # Repo-bundle fallback, derived from this file's location so the suite
+    # runs on any checkout path (CI runners, other machines).
+    return os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), os.pardir,
+        "Claude Bridge.indigoPlugin", "Contents", "Server Plugin",
+    ))
 
 
 SERVER_PLUGIN = _resolve_server_plugin()

@@ -9,7 +9,6 @@
 # Date:        09-06-2026
 # Version:     1.0
 
-import queue
 
 from mcp_server.security.egress_guard import Allowlist
 from mcp_server.webhooks.subscription_model import Subscription

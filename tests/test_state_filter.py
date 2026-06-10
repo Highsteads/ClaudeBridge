@@ -7,7 +7,6 @@
 # Date:        06-06-2026
 # Version:     1.0
 
-import pytest
 
 from mcp_server.common.state_filter import StateFilter
 

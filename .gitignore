@@ -40,6 +40,9 @@ webhook_allowlist.json
 *.swp
 *.swo
 
+# Test runner artefacts
+.pytest_cache/
+
 # Logs
 *.log
 

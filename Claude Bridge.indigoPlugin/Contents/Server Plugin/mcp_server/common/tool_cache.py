@@ -179,6 +179,7 @@ class ToolCache:
         # key = (tool_name, args_json) → (expires_at, result_str)
         self._store: Dict[Tuple[str, str], Tuple[float, Any]] = {}
         self._lock  = threading.Lock()
+        self._last_sweep = 0.0   # monotonic ts of last expired-entry sweep
 
         # Per-key in-flight state so concurrent identical misses share one
         # compute() (avoids the thundering-herd duplicate the cache exists to
@@ -193,6 +194,20 @@ class ToolCache:
         self.invalidations = 0
 
     # ── Public API ────────────────────────────────────────────────────────
+
+    def _sweep_expired_locked(self, now: float) -> None:
+        """
+        Drop entries whose TTL has lapsed. Expired entries are normally removed
+        on re-read, but a key that is never requested again would otherwise sit
+        in the dict forever. Runs at most once per TTL window so it adds no
+        meaningful cost to the hot path. MUST be called with _lock held.
+        """
+        if now - self._last_sweep < max(self.default_ttl, 1):
+            return
+        self._last_sweep = now
+        expired = [k for k, (expires_at, _) in self._store.items() if expires_at <= now]
+        for k in expired:
+            del self._store[k]
 
     @staticmethod
     def is_cacheable(tool_name: str) -> bool:
@@ -226,8 +241,9 @@ class ToolCache:
 
         # Fast path — read under lock
         with self._lock:
-            entry = self._store.get(key)
             now = time.monotonic()
+            self._sweep_expired_locked(now)
+            entry = self._store.get(key)
             if entry and entry[0] > now:
                 self.hits += 1
                 return entry[1], True

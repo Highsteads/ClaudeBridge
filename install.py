@@ -1,14 +1,15 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Filename:    setup.py
+# Filename:    install.py (renamed from setup.py 10-06-2026 — it is a custom
+#              installer, not a setuptools script; `pip install .` was never valid)
 # Description: ClaudeBridge automated installer — sets up the plugin, proxy script,
 #              and Claude Code MCP configuration in one command.
 # Author:      CliveS & Claude Sonnet 4.6
 # Date:        03-04-2026
-# Version:     1.0
+# Version:     1.1
 #
 # Usage:
-#   python3 setup.py
+#   python3 install.py
 #
 # What this script does:
 #   1. Copies Claude Bridge.indigoPlugin to the Indigo Plugins directory
@@ -23,7 +24,6 @@
 #   - Restart Claude Code
 
 import json
-import os
 import re
 import shutil
 import sys
@@ -161,7 +161,7 @@ def patch_proxy_bearer_token():
         return None
 
     MCP_PROXY_DEST.write_text(new_text)
-    ok(f"Bearer token patched in proxy script")
+    ok("Bearer token patched in proxy script")
     return token
 
 

@@ -3,7 +3,7 @@ Get devices by type handler for retrieving all devices of a specific type.
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 
 from ...adapters.data_provider import DataProvider
 from ...common.indigo_device_types import IndigoDeviceType, DeviceClassifier, DeviceTypeResolver

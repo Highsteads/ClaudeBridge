@@ -2,7 +2,6 @@
 Base handler class for MCP server tools with standardized logging and common functionality.
 """
 
-import inspect
 import logging
 from typing import Optional, Any
 

@@ -35,6 +35,12 @@ class SubscriptionStore:
         """Return persisted subscriptions, or [] if the file is missing/corrupt."""
         if not os.path.exists(self._path):
             return []
+        # Re-assert 0600 — a file restored from a backup (Time Machine, manual
+        # copy) keeps the backup's permissions, and this file holds signing keys.
+        try:
+            os.chmod(self._path, 0o600)
+        except OSError as e:
+            self._logger.warning(f"Could not re-assert 0600 on {self._path}: {e}")
         try:
             with open(self._path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
