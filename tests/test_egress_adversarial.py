@@ -105,7 +105,7 @@ def test_mixed_dns_answer_refused(monkeypatch):
 # ── Hostname allow-listed but resolving to an internal IP -> refused ────────
 
 def test_allowlisted_name_resolving_internal_is_refused(monkeypatch):
-    _patch_dns(monkeypatch, {"rebind.example.com": ["192.168.100.160"]})
+    _patch_dns(monkeypatch, {"rebind.example.com": ["192.168.77.20"]})
     allow = Allowlist.from_entries(["rebind.example.com"])   # name allowed...
     assert _denied("https://rebind.example.com/h", allow)    # ...but IP is internal -> blocked
 

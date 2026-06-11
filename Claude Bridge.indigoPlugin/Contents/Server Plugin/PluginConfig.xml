@@ -132,7 +132,7 @@ and leave this field blank.</Label>
 
     <Field id="webhook_allowlist" type="textfield" defaultValue="">
         <Label>Egress allow-list:</Label>
-        <Description>Comma/newline-separated hosts, IPs or CIDRs the home may POST to. Forms: hooks.example.com, *.example.com, 203.0.113.5, 192.168.100.50/32. Blank = deny all. Unioned with IndigoSecrets.py WEBHOOK_ALLOWLIST.</Description>
+        <Description>Comma/newline-separated hosts, IPs or CIDRs the home may POST to. Forms: hooks.example.com, *.example.com, 203.0.113.5, 192.168.1.50/32. Blank = deny all. Unioned with IndigoSecrets.py WEBHOOK_ALLOWLIST.</Description>
     </Field>
 
     <Field id="webhook_http_allowlist" type="textfield" defaultValue="">
