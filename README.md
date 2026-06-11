@@ -512,7 +512,7 @@ authentication and protocol translation. The **Quick Install** script above sets
 The endpoint will be shown in the Indigo event log, e.g.:
 ```
 Local:   http://localhost:8176/message/com.clives.indigoplugin.claudebridge/mcp/
-Network: http://192.168.100.160:8176/message/com.clives.indigoplugin.claudebridge/mcp/
+Network: http://<your-indigo-server-ip>:8176/message/com.clives.indigoplugin.claudebridge/mcp/
 ```
 
 ---
@@ -894,7 +894,7 @@ Hardening pass on the new Event Webhooks, off the back of a multi-agent adversar
 ### 2.8.0 (2026-06-09)
 The big one — **Event Webhooks**, the feature that lets the home call out rather than only ever answering when you ask. You register a subscription ("the next time the front door opens", "if the battery drops below 20%", "when the garage stays open for ten minutes") and the plugin POSTs a signed JSON event to a web address you run, the instant the condition is met. That turns Claude Bridge from something you consult into something that can be wired into the loop — point the events at a little listener and have it act, notify, or hand the moment to Claude with the full context.
 
-It ships **switched off**, and it is deliberately careful about where it is allowed to send. Webhook targets are **default-deny**: nothing can be registered until you add an approved host to the allow-list (in the plugin config, or `IndigoSecrets.py` `WEBHOOK_ALLOWLIST`, which is read first). Anything pointing at the Indigo box itself, your router, the rest of the LAN, or a cloud metadata address is refused outright — a private or loopback address can only ever be reached if you knowingly opt its range in as a CIDR (e.g. `192.168.100.50/32`). Every delivery is checked again at send time (so a target can't quietly re-point itself at something internal after the fact), the connection is pinned to the address that was checked, redirects are never followed, and every event is signed with HMAC-SHA256 so your receiver can be sure it really came from your plugin. The three new tools (`webhook_create`, `webhook_list`, `webhook_delete`) are all admin-scope.
+It ships **switched off**, and it is deliberately careful about where it is allowed to send. Webhook targets are **default-deny**: nothing can be registered until you add an approved host to the allow-list (in the plugin config, or `IndigoSecrets.py` `WEBHOOK_ALLOWLIST`, which is read first). Anything pointing at the Indigo box itself, your router, the rest of the LAN, or a cloud metadata address is refused outright — a private or loopback address can only ever be reached if you knowingly opt its range in as a CIDR (e.g. `192.168.1.50/32`). Every delivery is checked again at send time (so a target can't quietly re-point itself at something internal after the fact), the connection is pinned to the address that was checked, redirects are never followed, and every event is signed with HMAC-SHA256 so your receiver can be sure it really came from your plugin. The three new tools (`webhook_create`, `webhook_list`, `webhook_delete`) are all admin-scope.
 
 There's a small reference receiver in `examples/webhook_receiver.py` that verifies the signature and prints each event, so you can see the whole thing working in a couple of minutes. To turn it on: Plugins → Claude Bridge → Configure → tick **Enable Event Webhooks** and fill in an allow-list. (Concept inspired by mlamoure's indigo-mcp-server, but written from scratch — that project ships no licence, so nothing was copied from it.)
 

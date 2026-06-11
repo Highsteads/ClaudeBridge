@@ -125,7 +125,7 @@ def _ip_in_extra_cidrs(ip: ipaddress._BaseAddress, allowlist: Allowlist) -> bool
     """True if the IP falls in an operator-listed extra CIDR. This is the ONLY
     way a hard-blocked (private/loopback/link-local) range becomes reachable —
     deliberately CIDR-only so a bare ip_literals entry can't punch a hole in the
-    hard block (you must knowingly opt a whole range in, e.g. 192.168.100.50/32)."""
+    hard block (you must knowingly opt a whole range in, e.g. 192.168.1.50/32)."""
     ip = _unmap(ip)
     return any(ip in net for net in allowlist.extra_cidrs)
 

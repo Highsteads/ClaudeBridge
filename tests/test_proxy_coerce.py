@@ -56,7 +56,7 @@ def test_leading_zero_code_left_as_string():
 
 
 def test_ip_address_left_as_string():
-    assert coerce({"host": "192.168.4.71"}) == {"host": "192.168.4.71"}
+    assert coerce({"host": "192.168.1.71"}) == {"host": "192.168.1.71"}
 
 
 def test_plus_prefixed_left_as_string():

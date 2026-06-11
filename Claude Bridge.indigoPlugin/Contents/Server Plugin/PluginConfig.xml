@@ -122,7 +122,7 @@ and leave this field blank.</Label>
     <Field id="separator_webhooks" type="separator"/>
 
     <Field id="webhooks_label" type="label" fontSize="small" alignWithControl="false">
-        <Label>Event Webhooks let the home POST a signed event to an external URL when a device/variable condition is met (the "home calls out" feature). OFF by default. SECURITY: targets are default-deny — only hosts on the allow-list below (or in IndigoSecrets.py WEBHOOK_ALLOWLIST, read first) can be registered. Private/LAN ranges need an explicit CIDR (e.g. 192.168.100.50/32). The 3 webhook tools are ADMIN-scope.</Label>
+        <Label>Event Webhooks let the home POST a signed event to an external URL when a device/variable condition is met (the "home calls out" feature). OFF by default. SECURITY: targets are default-deny — only hosts on the allow-list below (or in IndigoSecrets.py WEBHOOK_ALLOWLIST, read first) can be registered. Private/LAN ranges need an explicit CIDR (e.g. 192.168.1.50/32). The 3 webhook tools are ADMIN-scope.</Label>
     </Field>
 
     <Field id="webhooks_enabled" type="checkbox" defaultValue="false">

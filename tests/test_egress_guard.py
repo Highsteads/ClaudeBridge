@@ -29,7 +29,7 @@ EMPTY = Allowlist.from_entries([])
 
 @pytest.mark.parametrize("url", [
     "https://127.0.0.1/hook",            # loopback
-    "https://192.168.100.160/hook",      # private (the Indigo server itself)
+    "https://192.168.77.20/hook",        # private (an arbitrary LAN host)
     "http://169.254.169.254/latest/",    # cloud metadata
     "https://[::1]/hook",                # IPv6 loopback
     "https://[::ffff:127.0.0.1]/hook",   # IPv4-mapped loopback
@@ -49,8 +49,8 @@ def test_credentials_in_url_refused():
 # ── explicit opt-in escape hatches ──────────────────────────────────────────
 
 def test_extra_cidr_allows_lan_host():
-    allow = Allowlist.from_entries(["192.168.100.0/24"])
-    assert not _denied("https://192.168.100.50/hook", allow)
+    allow = Allowlist.from_entries(["192.168.77.0/24"])
+    assert not _denied("https://192.168.77.50/hook", allow)
 
 
 def test_ip_literal_allowlist_is_exact():
@@ -61,10 +61,10 @@ def test_ip_literal_allowlist_is_exact():
 
 def test_http_requires_separate_optin():
     # On the general allowlist but NOT the http allowlist -> https only.
-    allow = Allowlist.from_entries(["192.168.100.0/24"])
-    assert _denied("http://192.168.100.50/hook", allow)
-    allow2 = Allowlist.from_entries(["192.168.100.0/24"], http_entries=["192.168.100.50"])
-    assert not _denied("http://192.168.100.50/hook", allow2)
+    allow = Allowlist.from_entries(["192.168.77.0/24"])
+    assert _denied("http://192.168.77.50/hook", allow)
+    allow2 = Allowlist.from_entries(["192.168.77.0/24"], http_entries=["192.168.77.50"])
+    assert not _denied("http://192.168.77.50/hook", allow2)
 
 
 # ── host-pattern matching rules ─────────────────────────────────────────────
