@@ -1076,16 +1076,10 @@ the test suite (no Indigo install needed) and the recipe for adding a new MCP
 tool. Every push and pull request runs the tests, lint and a docs-staleness
 check automatically.
 
----
+## Authors & licence
 
-## Licence
-
-MIT — free to use, modify, and distribute. Attribution appreciated.
-
----
-
-## Authors
-
-Claude Fable 5 and CliveS.
+Vibed into existence by **CliveS**, who knew what he wanted, argued until he got it, and tested it on a real house. Typed at inhuman speed by **Claude** (Anthropic), who mostly did as it was told.
 
 Built conversationally — CliveS describing what the plugin should do and keeping it honest, Claude writing the code and testing it against the live system, each new version developed through the one before it. Which, fittingly, is exactly the way of working this plugin exists to give you. The proof is the plugin itself.
+
+© 2026 CliveS · [MIT licence](LICENSE) — copy it, fork it, bend it, break it, fix it, ship it. If it breaks, you get to keep both pieces.
