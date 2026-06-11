@@ -227,9 +227,14 @@ falls into the following groups — the full per-tool listing is in
   archive ("delete" moves to `_backups/_archived/`), and run scripts in
   Indigo's Python context. Covers both the `Scripts` and `Python Scripts`
   folders automatically.
-- **`scaffold_automation_script`** — generates a complete CliveS-convention
-  Python file with the standard file header, `log()` helper, and named
-  constants for every device/variable ID, all resolved live from Indigo.
+- **`scaffold_automation_script`** — generates a ready-to-run script in the
+  consistent house style every script here uses: a documented file header
+  (what it does, author, date, version), UPPER_CASE named constants for every
+  device and variable ID so no magic numbers appear in the logic, a
+  millisecond-timestamped `log()` helper so output lines up with the plugins'
+  logs, and error handling around anything that can fail — with every ID and
+  name resolved live from your actual Indigo server, so the script is correct
+  before you've even read it.
 - **`run_script`** auto-injects `indigo` into the script's globals (matching
   Indigo's GUI action runner) so ad-hoc scripts don't need their own
   `import indigo`.

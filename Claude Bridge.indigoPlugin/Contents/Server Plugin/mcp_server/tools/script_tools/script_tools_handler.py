@@ -341,7 +341,7 @@ class ScriptToolsHandler(BaseToolHandler):
         """
         Generate and save a complete Python script template to the Indigo
         Scripts folder. The scaffold includes:
-          - Standard file header (CliveS convention)
+          - Documented file header (filename, description, author, date, version)
           - log() helper function
           - Named constants for every supplied device/variable ID
             (names looked up live from Indigo so they're correct)
