@@ -64,6 +64,17 @@ produces plausible-looking code that doesn't run. The difference is
 having a feedback loop that lets the AI **verify** what it just wrote.
 
 Claude Bridge turns the Indigo system itself into that feedback loop.
+
+A confession that doubles as a credential: **this plugin was itself written by
+vibe coding.** Every version of Claude Bridge has been developed through a
+conversation with Claude — described in plain English, written by Claude, and
+tested by Claude against the live Indigo server, using the previous version of
+this very plugin as its eyes and hands. The twenty-odd other plugins on this
+GitHub account were built and are maintained the same way, with Claude Bridge
+as the feedback loop — the git history backs every word of that, if you fancy
+checking. So the examples below aren't speculation about what you could do.
+They're a description of how the thing you're reading about came to exist.
+
 Examples of how a session might go:
 
 ### Example 1 — write a Python script in one prompt
@@ -1072,4 +1083,4 @@ MIT — free to use, modify, and distribute. Attribution appreciated.
 
 Claude Fable 5 and CliveS.
 
-Built conversationally — CliveS describing what the plugin should do and keeping it honest, Claude writing the code and testing it against the live system. Which, fittingly, is exactly the way of working this plugin exists to give you.
+Built conversationally — CliveS describing what the plugin should do and keeping it honest, Claude writing the code and testing it against the live system, each new version developed through the one before it. Which, fittingly, is exactly the way of working this plugin exists to give you. The proof is the plugin itself.
