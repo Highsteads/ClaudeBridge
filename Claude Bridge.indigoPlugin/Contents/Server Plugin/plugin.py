@@ -3,9 +3,17 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Fable 5
-# Date:        10-06-2026
-# Version:     2.9.0
+# Author:      CliveS & Claude Opus 4.8
+# Date:        15-06-2026
+# Version:     2.9.1
+#
+# v2.9.1 (15-06-2026): device_history now returns timestamps in LOCAL time
+# (DST-aware) instead of the SQL Logger's raw UTC, so they match
+# device.lastChanged / indigo.server.getTime(). The SQL Logger stores ts in
+# UTC; the tool converts on output via SQLite datetime(ts,'localtime') while the
+# WHERE/ORDER BY still use the raw UTC column (time-window filter unaffected).
+# Result now carries "ts_timezone": "local". Fixes a real-world misread where raw
+# UTC rows were taken as local and produced a false sensor-dropout conclusion.
 #
 # v2.9.0 (10-06-2026): API-coverage capability batch — 10 new tools (139 -> 149)
 # found by walking the live indigo.* namespaces and diffing against the tool

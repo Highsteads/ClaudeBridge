@@ -755,6 +755,11 @@ class PluginDevToolsHandler(BaseToolHandler):
         Read recent history rows for a single device from the SQL Logger
         sqlite database. Returns timestamp + non-null state columns.
 
+        Timestamps (`ts`) are returned in LOCAL time (DST-aware), matching
+        device.lastChanged / indigo.server.getTime() — the SQL Logger stores
+        them in UTC, but this tool converts on output (see "ts_timezone":
+        "local" in the result).
+
         Args:
             device_id: numeric device ID
             hours:     how far back to read (default 24)
@@ -838,7 +843,15 @@ class PluginDevToolsHandler(BaseToolHandler):
                         # Move ts to front
                         cols = ["ts"] + [c for c in cols if c != "ts"]
 
-                col_list = ", ".join(cols)
+                # SQL Logger stores ts in UTC. Convert it to LOCAL time on the
+                # way out so returned timestamps match device.lastChanged /
+                # indigo.server.getTime() (DST-aware via the OS timezone). The
+                # WHERE/ORDER BY still operate on the raw UTC column, so the
+                # time-window filter and ordering are unaffected.
+                col_list = ", ".join(
+                    "datetime(ts, 'localtime') AS ts" if c == "ts" else c
+                    for c in cols
+                )
                 cur.execute(
                     f"SELECT {col_list} FROM {table} "
                     f"WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
@@ -855,6 +868,7 @@ class PluginDevToolsHandler(BaseToolHandler):
                     "hours":        hours,
                     "row_count":    len(rows),
                     "columns":      cols,
+                    "ts_timezone":  "local",
                     "rows":         rows,
                 }
             finally:
