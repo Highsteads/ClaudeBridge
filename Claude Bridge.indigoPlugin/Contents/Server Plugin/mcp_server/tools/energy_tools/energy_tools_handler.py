@@ -284,19 +284,18 @@ class EnergyToolsHandler(BaseToolHandler):
                 return {"success": False,
                         "error": "SigenEnergyManager log directory not found"}
 
-            # Coerce defensively — a lax client may send these as strings
-            try:
-                period_a_days = int(period_a_days)
-            except (ValueError, TypeError):
-                period_a_days = 7
-            try:
-                period_b_days = int(period_b_days)
-            except (ValueError, TypeError):
-                period_b_days = 7
-            try:
-                period_b_offset = int(period_b_offset)
-            except (ValueError, TypeError):
-                period_b_offset = 7
+            # Coerce defensively — a lax client may send these as strings — AND
+            # clamp: unbounded periods walk one file per day off disk, so a large
+            # value (or the two windows summed) would scan thousands of days.
+            # energy_daily_summary caps at 90 days; match that per window.
+            def _clamp_days(v, default, lo=1, hi=90):
+                try:
+                    return max(lo, min(int(v), hi))
+                except (ValueError, TypeError):
+                    return default
+            period_a_days   = _clamp_days(period_a_days, 7)
+            period_b_days   = _clamp_days(period_b_days, 7)
+            period_b_offset = _clamp_days(period_b_offset, 7, lo=0, hi=365)
 
             today = datetime.now()
 

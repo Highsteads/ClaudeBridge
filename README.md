@@ -832,6 +832,15 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.10.1 (2026-07-03)
+A follow-up batch working through the medium-priority findings from the same review. Fourteen were real and are fixed (about half of what was flagged turned out to be already-handled or harmless, and was left alone).
+
+The one you'd actually notice: **low-battery alerts now see your whole house.** They only ever looked at one of the three places Indigo can store a battery level, which happened to be the one your Zigbee sensors don't use — so 43 of the 55 battery devices here were invisible to the alert. All three places are checked now.
+
+The rest are the quiet sort: two on/off settings that could switch themselves back on when saved (a blank-looking value reading as "yes"), the log tool honouring the level you ask for instead of always saying "info", writing an empty value instead of the word "None" when you clear a variable, a couple of tools that used to claim success on input Indigo can't actually do (delaying an action group, looking up a plugin that isn't installed) now saying so plainly, the plugin-restart tool no longer freezing the web server while it waits, a week-vs-week energy comparison refusing a silly date range, the "is this variable still used" check erring on the side of caution when it can't tell, and the cache noticing a few more changes so it doesn't hand back stale lists.
+
+299 tests.
+
 ### 2.10.0 (2026-07-03)
 A deep-review fix batch — a full multi-agent bug hunt of the plugin, with every finding verified against the live system before anything was touched. Nine genuine faults came out of it, several of them tools that had never actually worked.
 

@@ -14,6 +14,17 @@ from typing import Dict, List, Any, Optional
 from .data_provider import DataProvider
 from ..common.json_encoder import filter_json, KEYS_TO_KEEP_MINIMAL_DEVICES
 
+# indigo.server.log(level=...) wants a Python logging int — a string is silently
+# ignored and logs as Info. Map the tool's string level to the real int.
+_LOG_LEVELS = {
+    "DEBUG":    logging.DEBUG,
+    "INFO":     logging.INFO,
+    "WARNING":  logging.WARNING,
+    "WARN":     logging.WARNING,
+    "ERROR":    logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
 
 class IndigoDataProvider(DataProvider):
     """Data provider implementation for accessing Indigo entities."""
@@ -461,8 +472,14 @@ class IndigoDataProvider(DataProvider):
             # Update variable value — Indigo variables are strings. Normalise a
             # bool to Indigo's lowercase convention ("true"/"false"), not Python's
             # capitalised str(True) == "True", so conditions/triggers comparing the
-            # value behave consistently.
-            new_value = str(value).lower() if isinstance(value, bool) else str(value)
+            # value behave consistently. A JSON null becomes an empty string, not
+            # the literal "None" (which no condition would ever expect).
+            if value is None:
+                new_value = ""
+            elif isinstance(value, bool):
+                new_value = str(value).lower()
+            else:
+                new_value = str(value)
             indigo.variable.updateValue(variable_id, value=new_value)
 
             # Re-index from the server (consistent with the device methods) rather
@@ -496,12 +513,21 @@ class IndigoDataProvider(DataProvider):
         try:
             if action_group_id not in indigo.actionGroups:
                 return {"error": f"Action group {action_group_id} not found"}
-            
-            # Execute action group with optional delay
+
+            # Indigo's actionGroup.execute has NO delay parameter (signature is
+            # execute(elem, event_data=None) — passing delay= raises TypeError).
+            # Action groups simply can't be delay-executed via scripting, so be
+            # honest rather than fail with an opaque type error. For a delayed
+            # action, wrap it in a Schedule or use a device timed action.
             if delay and delay > 0:
-                indigo.actionGroup.execute(action_group_id, delay=delay)
-            else:
-                indigo.actionGroup.execute(action_group_id)
+                return {
+                    "success": False,
+                    "error": ("Indigo cannot execute an action group after a delay "
+                              "(actionGroup.execute has no delay parameter). Run it "
+                              "immediately (omit delay), or use a Schedule / a device "
+                              "timed action for delayed execution."),
+                }
+            indigo.actionGroup.execute(action_group_id)
             
             return {
                 "success": True,
@@ -893,10 +919,16 @@ class IndigoDataProvider(DataProvider):
         """Write a message to the Indigo on-screen event log."""
         try:
             level_upper = (level or "INFO").upper()
+            # indigo.server.log(level=...) expects a Python logging INT. Passing a
+            # STRING (e.g. "WARNING") is silently ignored and the line logs as Info
+            # — so a WARNING/DEBUG request used to be echoed back as honoured while
+            # the log line was actually Info. Map to the real level int; use
+            # isError=True for ERROR so it renders red.
+            level_int = _LOG_LEVELS.get(level_upper, logging.INFO)
             if level_upper == "ERROR":
-                indigo.server.log(message, level=level_upper, isError=True)
+                indigo.server.log(message, level=level_int, isError=True)
             else:
-                indigo.server.log(message, level=level_upper)
+                indigo.server.log(message, level=level_int)
             return {"success": True, "message": message, "level": level_upper}
         except Exception as e:
             self.logger.error(f"Error writing to Indigo log: {e}")

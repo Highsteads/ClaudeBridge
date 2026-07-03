@@ -114,7 +114,9 @@ def _get_client() -> anthropic.Anthropic:
                 "ANTHROPIC_API_KEY must be configured (set in IndigoSecrets.py "
                 "or via Plugins -> Claude Bridge -> Configure) before calling Claude"
             )
-        _client = anthropic.Anthropic(api_key=key)
+        # Bound the client: the SDK default is connect 5s / read 600s / 2 retries,
+        # so a wedged connection could pin the calling IWS thread for ~10+ minutes.
+        _client = anthropic.Anthropic(api_key=key, timeout=30.0, max_retries=1)
         logger.debug("Claude (Anthropic) client initialised")
     return _client
 

@@ -54,7 +54,8 @@ for _bucket in _INVALIDATION_MAP.values():
 TTL_ONLY_CACHEABLE = {
     "energy_compare", "energy_daily_summary", "energy_log_days", "energy_status",
     "find_conflicts", "find_large_files", "find_orphaned_plugin_data",
-    "heating_status", "list_subscriptions", "security_status", "system_health",
+    "heating_status", "security_status", "system_health",
+    # list_subscriptions removed in v2.10.1 — subscribe/unsubscribe now invalidate it.
 }
 
 

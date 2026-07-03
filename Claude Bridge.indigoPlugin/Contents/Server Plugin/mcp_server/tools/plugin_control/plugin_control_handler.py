@@ -88,28 +88,35 @@ class PluginControlHandler(BaseToolHandler):
                     "error": "Indigo module not available",
                 }
 
-            # Get plugin from Indigo API
+            # Get plugin from Indigo API. NB getPlugin() returns a PluginInfo object
+            # even for an id that doesn't exist (its isEnabled() just returns False),
+            # so it never raises — we must confirm the plugin is real ourselves,
+            # otherwise a bogus id returns success:true / enabled:false.
             plugin = indigo.server.getPlugin(plugin_id)
 
-            # Extract plugin information
+            match = None
+            try:
+                for p in self._get_cached_plugins(include_disabled=True):
+                    if p["id"] == plugin_id:
+                        match = p
+                        break
+            except Exception:
+                match = None
+
+            if match is None:
+                return {
+                    "success": False,
+                    "error": f"Plugin '{plugin_id}' not found",
+                    "suggestion": "Use list_plugins to see available plugins",
+                }
+
             plugin_info = {
                 "id": plugin_id,
                 "enabled": plugin.isEnabled(),
-                "displayName": getattr(plugin, "pluginDisplayName", "Unknown"),
+                "displayName": getattr(plugin, "pluginDisplayName", match.get("name", "Unknown")),
+                "version": match.get("version", "Unknown"),
+                "path": match.get("path", "Unknown"),
             }
-
-            # Try to get version from plugin bundle
-            try:
-                plugins = self._get_cached_plugins(include_disabled=True)
-                for p in plugins:
-                    if p["id"] == plugin_id:
-                        plugin_info["version"] = p.get("version", "Unknown")
-                        plugin_info["path"] = p.get("path", "Unknown")
-                        break
-            except Exception:
-                plugin_info["version"] = "Unknown"
-                plugin_info["path"] = "Unknown"
-
             return {"success": True, "plugin": plugin_info}
 
         except AttributeError as e:
@@ -163,10 +170,11 @@ class PluginControlHandler(BaseToolHandler):
                     "suggestion": "Enable the plugin in Indigo before restarting",
                 }
 
-            # Restart the plugin (fire-and-forget — restart is asynchronous, so
-            # don't block the IWS request thread waiting for it).
+            # Restart the plugin (fire-and-forget — plugin.restart() defaults to
+            # waitUntilDone=True, which would BLOCK this IWS request thread for the
+            # whole stop+start cycle, contradicting the intent. Pass False.)
             self.logger.info(f"Restarting plugin: {plugin_id}")
-            plugin.restart()
+            plugin.restart(waitUntilDone=False)
 
             # Invalidate plugin cache
             self._invalidate_cache()

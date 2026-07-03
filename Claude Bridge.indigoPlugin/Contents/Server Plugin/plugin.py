@@ -5,7 +5,29 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Fable 5
 # Date:        03-07-2026
-# Version:     2.10.0
+# Version:     2.10.1
+#
+# v2.10.1 (03-07-2026): deep-review medium batch (14 verified mediums from the
+# 14 deferred modules; ~half of the reviewed mediums refuted or latent). Battery
+# reads now cover the `battery` custom state + native dev.batteryLevel, not just
+# `batteryLevel` — find_low_battery / home_status were missing 43 of the estate's
+# 55 battery devices (all the z2m sensors). Config gates webhooks_enabled +
+# auto_configure_claude_code use _as_bool not bool() (bool("false") is True →
+# fail-open). log_message maps its level string to a real logging int (a string
+# was silently ignored → WARNING/DEBUG logged as Info). update_variable writes ""
+# for JSON null, not "None". execute_schedule_now coerces ignore_conditions
+# properly (string "false" no longer bypasses conditions). action_execute_group
+# rejects a delay honestly (Indigo's actionGroup.execute has no delay param — it
+# raised TypeError). get_plugin_by_id returns not-found for a bogus id (getPlugin
+# returns a live-looking object for anything). restart_plugin passes
+# waitUntilDone=False (was blocking the IWS thread). energy_compare clamps its
+# period args (was an unbounded filesystem walk). audit_variables fails CLOSED on
+# a getDependencies error (was toward 'unreferenced' → unsafe delete hint).
+# find_conflicts also matches the indigo.device.<method>(id) idiom it was missing.
+# tool cache invalidates list_subscriptions on subscribe/unsubscribe and
+# list_variable_folders on create_variable_folder. Anthropic client bounded
+# (timeout=30, max_retries=1). Suite 292→299. Deferred (documented): latent
+# uncalled paths + heavier refactors — see the STATE plan doc.
 #
 # v2.10.0 (03-07-2026): deep-review fix batch (9 verified highs + the
 # return-vs-raise cluster). Tools return an {"error":...} payload instead of
@@ -769,7 +791,10 @@ class Plugin(indigo.PluginBase):
             # ~/.claude/settings.json edits).  Opt-in via PluginConfig — defaults
             # to True so existing users keep their current setup, but lets a user
             # disable silent dotfile rewriting if they manage these themselves.
-            if self.pluginPrefs.get("auto_configure_claude_code", True):
+            # _as_bool, not raw truthiness: a saved dialog stores this as the string
+            # "false", which is truthy — so a user who unticked it would still get
+            # their ~/.mcp.json / settings.json rewritten on every startup.
+            if self._as_bool(self.pluginPrefs.get("auto_configure_claude_code", True)):
                 self._setup_claude_code_integration()
             else:
                 self.logger.info("Claude Code auto-configure disabled in PluginConfig — skipping ~/.mcp.json and ~/.claude/settings.json updates")
@@ -917,7 +942,10 @@ class Plugin(indigo.PluginBase):
         """(Re)read the enabled flag + static allow-list from prefs and
         IndigoSecrets.WEBHOOK_ALLOWLIST. After a config-dialog save Indigo returns
         these as STRINGS, so coerce defensively (the standing pref-type gotcha)."""
-        self.webhooks_enabled = bool(self.pluginPrefs.get("webhooks_enabled", False))
+        # _as_bool, not bool(): after a config-dialog save Indigo re-serialises the
+        # checkbox as the string "false", and bool("false") is True — which would
+        # silently turn this dark-by-default egress feature ON.
+        self.webhooks_enabled = self._as_bool(self.pluginPrefs.get("webhooks_enabled", False))
         static = list(WEBHOOK_ALLOWLIST) if isinstance(WEBHOOK_ALLOWLIST, (list, tuple)) else []
         cfg = self.pluginPrefs.get("webhook_allowlist", "") or ""
         static += [h.strip() for h in str(cfg).replace("\n", ",").split(",") if h.strip()]

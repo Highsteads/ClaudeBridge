@@ -39,6 +39,15 @@ def _coerce_id(value) -> int:
     raise ValueError(f"Expected numeric ID, got {value!r}")
 
 
+def _coerce_bool(value) -> bool:
+    """Coerce an MCP arg to bool. A JSON true is True; everything else goes via
+    a string test so the STRING "false"/"0"/"no"/"off"/"" (how a lax client or a
+    re-serialised value arrives) is correctly False — bool("false") would be True."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
 def _deps_to_plain(deps) -> Dict[str, Any]:
     """Deep-convert an indigo.Dict of dependents to plain JSON-friendly types.
 
@@ -296,13 +305,14 @@ class ExtendedToolsHandler(BaseToolHandler):
                                   {"schedule_id": schedule_id, "ignore_conditions": ignore_conditions})
         try:
             sid = _coerce_id(schedule_id)
+            ignore = _coerce_bool(ignore_conditions)
             sched = indigo.schedules[sid]
-            indigo.schedule.execute(sid, ignoreConditions=bool(ignore_conditions))
+            indigo.schedule.execute(sid, ignoreConditions=ignore)
             msg = (f"Executed schedule '{sched.name}'"
-                   f"{' (conditions bypassed)' if ignore_conditions else ''}")
+                   f"{' (conditions bypassed)' if ignore else ''}")
             self.log_tool_outcome("execute_schedule_now", True, msg)
             return {"success": True, "schedule_id": sid,
-                    "ignore_conditions": bool(ignore_conditions), "message": msg}
+                    "ignore_conditions": ignore, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "execute_schedule_now")
 

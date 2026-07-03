@@ -73,6 +73,7 @@ _PLUGIN_TOOLS = {"list_plugins", "get_plugin_by_id", "get_plugin_status"}
 _SCRIPT_TOOLS = {"list_python_scripts", "list_script_backups", "read_script",
                  "find_orphaned_scripts"}
 _MEMORY_TOOLS = {"recall", "recall_topics"}
+_SUBSCRIPTION_TOOLS = {"list_subscriptions"}
 
 # Arbitrary-mutation tools whose effect on cached state can't be scoped to a
 # single entity bucket — invalidate EVERYTHING for these.
@@ -134,6 +135,11 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "variable_update":          _VARIABLE_TOOLS,
     "variable_delete":          _VARIABLE_TOOLS,
     "variable_move_to_folder":  _VARIABLE_TOOLS,
+    "create_variable_folder":   _VARIABLE_TOOLS,   # shows up in list_variable_folders
+    "create_device_folder":     _DEVICE_TOOLS,
+    # ── Subscriptions (change list_subscriptions output) ────────────────
+    "subscribe":                _SUBSCRIPTION_TOOLS,
+    "unsubscribe":              _SUBSCRIPTION_TOOLS,
     # ── Action groups ───────────────────────────────────────────────────
     "action_execute_group":     _ACTION_TOOLS | _DEVICE_TOOLS,
     "duplicate_action_group":   _ACTION_TOOLS,

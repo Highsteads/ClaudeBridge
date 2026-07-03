@@ -23,6 +23,7 @@ except ImportError:
 
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
+from ...common.battery import battery_pct as _battery_pct
 
 
 def _scripts_dirs() -> List[str]:
@@ -257,12 +258,8 @@ class AuditHandler(BaseToolHandler):
         low = []
         for did in indigo.devices:
             dev = indigo.devices[did]
-            batt = dev.states.get("batteryLevel")
-            if batt is None:
-                continue
-            try:
-                pct = int(batt)
-            except (ValueError, TypeError):
+            pct = _battery_pct(dev)
+            if pct is None:
                 continue
             if pct <= threshold:
                 low.append({
@@ -370,13 +367,18 @@ class AuditHandler(BaseToolHandler):
                 # Authoritative reverse-dependency check (the data behind Indigo's
                 # own "used by…" delete warning).
                 dep_categories: List[str] = []
+                dep_check_failed = False
                 try:
                     deps = self._deps_to_dict(indigo.variable.getDependencies(v.id))
                     dep_categories = [c for c, items in deps.items() if items]
                 except Exception:
-                    dep_categories = []
+                    # Fail CLOSED: if we couldn't determine dependencies, do NOT
+                    # imply the variable is unreferenced — flagging a referenced
+                    # var as a deletion candidate is the dangerous direction.
+                    dep_check_failed = True
 
-                if not in_scripts and not name_ref and not dep_categories:
+                if (not in_scripts and not name_ref
+                        and not dep_categories and not dep_check_failed):
                     unused.append({
                         "id":    v.id,
                         "name":  v.name,
@@ -492,13 +494,20 @@ class AuditHandler(BaseToolHandler):
                 r"(?:indigo\.)?(?:devices|variables|device|variable)"
                 r"(?:\s*\[\s*|\s*\(\s*|_by_id\s*\(\s*)(\d{6,12})\b"
             )
+            # Also catch the dominant method-call idiom the pattern above misses:
+            # indigo.device.turnOn(123), indigo.variable.updateValue(456, ...),
+            # indigo.device.getDependencies(789) — the id is the first call arg.
+            ref_pat_method = re.compile(
+                r"indigo\.(?:device|variable)\.\w+\(\s*(\d{6,12})\b"
+            )
             ctx_id_map: Dict[int, List[str]] = {}
             for name, content in _iter_script_files(script_dirs):
-                for m in ref_pat.findall(content):
-                    iid = int(m)
-                    ctx_id_map.setdefault(iid, [])
-                    if name not in ctx_id_map[iid]:
-                        ctx_id_map[iid].append(name)
+                for pat in (ref_pat, ref_pat_method):
+                    for m in pat.findall(content):
+                        iid = int(m)
+                        ctx_id_map.setdefault(iid, [])
+                        if name not in ctx_id_map[iid]:
+                            ctx_id_map[iid].append(name)
 
             # Orphaned: context-qualified IDs in scripts that aren't any device
             # or variable.

@@ -27,6 +27,7 @@ except ImportError:
 
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
+from ...common.battery import battery_pct as _battery_pct
 
 # SigenEnergyManager device type IDs
 SIGEN_INVERTER_TYPE  = "sigenergyInverter"
@@ -126,7 +127,7 @@ class HomeStatusHandler(BaseToolHandler):
                                        "error": str(dev.errorState)})
                 except AttributeError:
                     pass
-                batt = dev.states.get("batteryLevel")
+                batt = _battery_pct(dev)
                 if batt is not None:
                     try:
                         if int(batt) <= 20:
@@ -241,7 +242,7 @@ class HomeStatusHandler(BaseToolHandler):
                             errors.append(dev.name)
                     except AttributeError:
                         pass
-                    batt = dev.states.get("batteryLevel")
+                    batt = _battery_pct(dev)
                     if batt is not None:
                         try:
                             if int(batt) <= 20:
