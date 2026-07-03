@@ -523,10 +523,17 @@ if __name__ == "__main__":
             import io
             import sys as _sys
 
-            old_stdout = _sys.stdout
-            old_stderr = _sys.stderr
+            from ...common.exec_lock import STDOUT_SWAP_LOCK
+
             captured_out = io.StringIO()
             captured_err = io.StringIO()
+
+            # Serialise the process-global stdout/stderr swap: concurrent
+            # run_script/execute_indigo_python calls would otherwise interleave
+            # and permanently corrupt sys.stdout for the whole plugin process.
+            STDOUT_SWAP_LOCK.acquire()
+            old_stdout = _sys.stdout
+            old_stderr = _sys.stderr
             _sys.stdout = captured_out
             _sys.stderr = captured_err
 
@@ -547,6 +554,7 @@ if __name__ == "__main__":
             finally:
                 _sys.stdout = old_stdout
                 _sys.stderr = old_stderr
+                STDOUT_SWAP_LOCK.release()
 
             out = captured_out.getvalue()
             err = captured_err.getvalue()

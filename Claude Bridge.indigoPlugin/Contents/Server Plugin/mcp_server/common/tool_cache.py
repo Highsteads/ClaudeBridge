@@ -136,8 +136,6 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "variable_move_to_folder":  _VARIABLE_TOOLS,
     # ── Action groups ───────────────────────────────────────────────────
     "action_execute_group":     _ACTION_TOOLS | _DEVICE_TOOLS,
-    "enable_action_group":      _ACTION_TOOLS,
-    "disable_action_group":     _ACTION_TOOLS,
     "duplicate_action_group":   _ACTION_TOOLS,
     "delete_action_group":      _ACTION_TOOLS,
     # ── Schedules ───────────────────────────────────────────────────────
@@ -237,11 +235,18 @@ class ToolCache:
         args: Dict[str, Any],
         compute: Callable[[], Any],
         no_cache: bool = False,
+        cache_ok: Optional[Callable[[Any], bool]] = None,
     ) -> Tuple[Any, bool]:
         """
         Return ``(value, cache_hit)``. If the tool is not cacheable or the
         client requested ``Cache-Control: no-cache``, ``compute()`` runs and
         the result is *not* stored.
+
+        ``cache_ok`` is an optional predicate on the computed value: when it
+        returns False the value is returned to the caller but NOT stored. The
+        dispatch layer uses this so a tool that returns an error result (tools
+        return an ``{"error": ...}`` payload instead of raising) is never cached
+        and re-served as a "hit" for the full TTL.
         """
         if no_cache or not self.is_cacheable(tool_name) or self.default_ttl == 0:
             return compute(), False
@@ -286,10 +291,12 @@ class ToolCache:
                 # Compute outside the store lock to avoid serialising callers
                 # for other keys.
                 result = compute()
+                store_it = cache_ok is None or cache_ok(result)
                 with self._lock:
-                    # Stamp expiry from AFTER compute() so a slow compute does
-                    # not shorten the effective TTL.
-                    self._store[key] = (time.monotonic() + self.default_ttl, result)
+                    if store_it:
+                        # Stamp expiry from AFTER compute() so a slow compute does
+                        # not shorten the effective TTL.
+                        self._store[key] = (time.monotonic() + self.default_ttl, result)
                     self.misses += 1
                 return result, False
         finally:

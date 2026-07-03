@@ -12,6 +12,7 @@ converts it into a JSON-RPC error (-32099 in the server-defined range).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -129,15 +130,30 @@ class RateLimiter:
             day_log.append(now)
 
     def snapshot(self) -> Dict[str, Dict[str, int]]:
-        """Return current usage per session — used by /health endpoint."""
+        """Return current usage per session — used by /health endpoint.
+
+        The bucket key is the RAW bearer token (see check(): keyed on
+        `bearer or session_id`). /health is only IWS-bearer-gated, travels over
+        the reflector, and the Show Health menu writes it to the event log — so
+        the key MUST be masked here or a low-privilege token holder could harvest
+        another client's admin bearer. We publish a non-reversible short digest,
+        which still uniquely distinguishes callers for the usage counts.
+        """
         with self._lock:
             return {
-                sid: {
+                self._mask_key(sid): {
                     "minute": len(self._minute_log.get(sid, ())),
                     "day":    len(self._day_log.get(sid, ())),
                 }
                 for sid in set(self._minute_log) | set(self._day_log)
             }
+
+    @staticmethod
+    def _mask_key(key: str) -> str:
+        """Non-reversible label for a rate-limit key (bearer token/session id)."""
+        if not key or key == "anonymous":
+            return key or "anonymous"
+        return "token-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
     def reset_session(self, session_id: str) -> None:
         """Forget a session's history — call when a session terminates."""

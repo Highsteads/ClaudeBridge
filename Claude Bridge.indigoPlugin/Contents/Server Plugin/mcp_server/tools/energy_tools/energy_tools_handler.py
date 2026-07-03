@@ -215,18 +215,43 @@ class EnergyToolsHandler(BaseToolHandler):
                 if ss_home > 0 else None
             )
 
+            # Did ANY day actually yield a kWh total? SigenEnergyManager does not
+            # log a per-day PV/import/export/home summary line (only SOC + a
+            # consumption-profile line), so kWh totals are typically absent. Never
+            # present a fabricated all-zero total as if it were real generation —
+            # null the totals and flag it, pointing at the live/historical source.
+            kwh_available = any(
+                d.get(k) is not None
+                for d in daily
+                for k in ("pv_kwh", "import_kwh", "export_kwh", "home_kwh")
+            )
+            if kwh_available:
+                period_totals = {**totals, "self_sufficiency_pct": self_suff}
+            else:
+                period_totals = {k: None for k in totals}
+                period_totals["self_sufficiency_pct"] = None
+
             result = {
                 "success":         True,
                 "days_requested":  days,
                 "days_found":      len(daily),
+                "kwh_totals_available": kwh_available,
                 "days_used_for_self_sufficiency": len(ss_days),
                 "incomplete_days": len(daily) - len(ss_days),
-                "period_totals":   {**totals,
-                                    "self_sufficiency_pct": self_suff},
+                "period_totals":   period_totals,
                 "daily":           daily,
             }
+            if not kwh_available:
+                result["note"] = (
+                    "Per-day kWh totals (PV/import/export/home) are not recorded in the "
+                    "SigenEnergyManager logs — only SOC is. Totals are reported as null, not 0. "
+                    "For today's live totals use energy_status or the 'Sigenergy Inverter' device "
+                    "states (pvDailyKwh / gridDailyImportKwh / gridDailyExportKwh / homeDailyKwh); "
+                    "for historical daily totals use analyze_historical_data (InfluxDB)."
+                )
             self.log_tool_outcome("energy_daily_summary", True,
-                                  f"{len(daily)} days parsed")
+                                  f"{len(daily)} days parsed"
+                                  + ("" if kwh_available else " (no kWh totals in logs)"))
             return result
         except Exception as exc:
             return self.handle_exception(exc, "energy_daily_summary")
@@ -282,6 +307,7 @@ class EnergyToolsHandler(BaseToolHandler):
                 ss_home = 0.0
                 ss_import = 0.0
                 complete = 0
+                any_kwh = False   # did any day in this period carry a kWh total?
                 for i in range(start_offset, start_offset + n_days):
                     date    = today - timedelta(days=i)
                     logpath = _log_file_for_date(log_dir, date)
@@ -306,6 +332,7 @@ class EnergyToolsHandler(BaseToolHandler):
                     for k in totals:
                         if day_data.get(k) is not None:
                             totals[k] = round(totals[k] + day_data[k], 2)
+                            any_kwh = True
                     # Self-sufficiency only from days with BOTH home and import.
                     if (day_data.get("home_kwh") is not None
                             and day_data.get("import_kwh") is not None):
@@ -314,8 +341,12 @@ class EnergyToolsHandler(BaseToolHandler):
                         complete  += 1
                 sself  = (round(max(0.0, min(100.0, (1 - ss_import / ss_home) * 100)), 1)
                           if ss_home > 0 else None)
-                return {**totals,
+                # If no day yielded a kWh total, report null totals rather than a
+                # misleading all-zero — the logs simply don't carry them.
+                reported = {**totals} if any_kwh else {k: None for k in totals}
+                return {**reported,
                         "self_sufficiency_pct": sself,
+                        "kwh_totals_available": any_kwh,
                         "days_found": len(dates),
                         "complete_days": complete,
                         "dates": dates}
@@ -339,6 +370,14 @@ class EnergyToolsHandler(BaseToolHandler):
                     for k in ("pv_kwh", "import_kwh", "export_kwh", "home_kwh")
                 },
             }
+            if not (a["kwh_totals_available"] or b["kwh_totals_available"]):
+                result["kwh_totals_available"] = False
+                result["note"] = (
+                    "Per-day kWh totals are not recorded in the SigenEnergyManager logs, so this "
+                    "comparison has no generation/consumption data (totals reported as null). Use "
+                    "analyze_historical_data (InfluxDB) for historical kWh comparisons, or "
+                    "energy_status for today's live figures."
+                )
             self.log_tool_outcome("energy_compare", True,
                                   "Energy period comparison complete")
             return result

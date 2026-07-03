@@ -802,10 +802,23 @@ class MCPHandler:
             def _compute():
                 return self._tools[tool_name]["function"](**tool_args)
 
+            # Tools return an {"error": ...} payload instead of raising, so the
+            # cache must NOT store an error result (it would be replayed as a
+            # "hit" for the full TTL). cache_ok gates storage on a healthy result.
             result, cache_hit = self.tool_cache.get_or_compute(
-                tool_name, tool_args, _compute, no_cache=no_cache
+                tool_name, tool_args, _compute, no_cache=no_cache,
+                cache_ok=self._result_ok,
             )
-            ok = True
+            # A result that carries an error is a FAILED call. The earlier
+            # except-only handling never saw it (the tool swallowed its own
+            # exception and returned an error dict), so telemetry counted it as a
+            # success and the sensitive-tool scrub never fired. Correct both here.
+            ok = self._result_ok(result)
+            if not ok:
+                with self._telemetry_lock:
+                    self._tool_error_count += 1
+                if tool_name in self._SENSITIVE_ERROR_TOOLS:
+                    result = self._scrub_error_result(result)
             # Payload size — the real cost driver is how much the CLIENT has to
             # read, not server latency; surfaced per-tool via /health.
             resp_bytes = len(result) if isinstance(result, (str, bytes)) else 0
@@ -872,6 +885,51 @@ class MCPHandler:
                     "bytes":       resp_bytes,
                     "ts":          time.time(),
                 })
+
+    @staticmethod
+    def _result_ok(result: Any) -> bool:
+        """True if a tool result string does NOT represent an error.
+
+        Tool wrappers return safe_json_dumps({"error":..,"success":False}) on
+        failure instead of raising, so the dispatch layer must inspect the
+        payload — otherwise error results get cached and replayed for the full
+        TTL, counted as successes in telemetry, and (for sensitive tools) leak
+        raw error text the except-branch scrub was meant to strip.
+        """
+        if not isinstance(result, str):
+            return True
+        s = result.lstrip()
+        if not s.startswith("{"):
+            return True
+        try:
+            obj = json.loads(result)
+        except (ValueError, TypeError):
+            return True
+        if not isinstance(obj, dict):
+            return True
+        if obj.get("success") is False:
+            return False
+        # A top-level "error" without an explicit success:True also means failure.
+        if "error" in obj and obj.get("success") is not True:
+            return False
+        return True
+
+    @staticmethod
+    def _scrub_error_result(result: Any) -> str:
+        """Replace a sensitive tool's raw error text with a generic pointer.
+
+        The real error is already logged server-side by the tool wrapper; only
+        the client copy (which can travel over the reflector) is scrubbed.
+        """
+        try:
+            obj = json.loads(result) if isinstance(result, str) else {}
+        except (ValueError, TypeError):
+            obj = {}
+        if not isinstance(obj, dict):
+            obj = {}
+        obj["success"] = False
+        obj["error"] = "see the Claude Bridge event log for details"
+        return safe_json_dumps(obj)
 
     @staticmethod
     def _extract_bearer(headers: Dict[str, str]) -> Optional[str]:
@@ -2383,8 +2441,9 @@ class MCPHandler:
                 "Fire all Indigo Triggers of type 'Claude Bridge → Claude Event' with "
                 "a structured payload. Use this to drive Indigo automations from a Claude "
                 "tool call. Inside the user's Trigger actions, the payload is available "
-                "as %%eventData:name%%, %%eventData:data%%, %%eventData:source%%. Users "
-                "filter on event name via standard Trigger Conditions."
+                "via Indigo's event-data substitution %%e:\"name\"%%, %%e:\"data\"%%, "
+                "%%e:\"source\"%%. Users filter on event name with a Script Condition "
+                "testing event_data.get('name')."
             ),
             "inputSchema": {
                 "type": "object",
@@ -2392,12 +2451,12 @@ class MCPHandler:
                     "name": {
                         "type": "string",
                         "description": "Short event name (e.g. 'sunset_routine', 'leak_detected'). "
-                                       "Triggers can filter on this via %%eventData:name%%."
+                                       "Triggers can filter on this via a Script Condition on event_data."
                     },
                     "data": {
                         "type": "object",
                         "description": "Optional structured payload. Serialised to JSON and exposed "
-                                       "as %%eventData:data%%."
+                                       "as %%e:\"data\"%%."
                     },
                     "source": {
                         "type": "string",
@@ -2869,29 +2928,10 @@ class MCPHandler:
             },
             "function": self._tool_duplicate_action_group
         }
-        self._tools["enable_action_group"] = {
-            "description": "Enable or disable an action group.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action_group_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
-                    "value":           {"type": "boolean", "description": "True to enable"}
-                },
-                "required": ["action_group_id"]
-            },
-            "function": self._tool_enable_action_group
-        }
-        self._tools["disable_action_group"] = {
-            "description": "Disable an action group (convenience for enable_action_group value=False).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action_group_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
-                },
-                "required": ["action_group_id"]
-            },
-            "function": self._tool_disable_action_group
-        }
+        # enable_action_group / disable_action_group removed in v2.10.0 — the IOM
+        # has no indigo.actionGroup.enable and ActionGroup has no enabled state,
+        # so both tools raised AttributeError 100% of the time (action groups
+        # cannot be enabled/disabled, unlike triggers and schedules).
         self._tools["action_group_get_dependencies"] = {
             "description": "Get dependents of an action group. Useful before deleting.",
             "inputSchema": {
@@ -3450,10 +3490,8 @@ class MCPHandler:
         return self._ext_call("delete_action_group", action_group_id)
     def _tool_duplicate_action_group(self, action_group_id, new_name: str = None) -> str:
         return self._ext_call("duplicate_action_group", action_group_id, new_name=new_name)
-    def _tool_enable_action_group(self, action_group_id, value: bool = True) -> str:
-        return self._ext_call("enable_action_group", action_group_id, value=value)
-    def _tool_disable_action_group(self, action_group_id) -> str:
-        return self._ext_call("disable_action_group", action_group_id)
+    # _tool_enable_action_group / _tool_disable_action_group removed in v2.10.0
+    # (action groups have no enable/disable in the IOM — see registration note).
     def _tool_action_group_get_dependencies(self, action_group_id) -> str:
         return self._ext_call("action_group_get_dependencies", action_group_id)
 

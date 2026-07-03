@@ -101,7 +101,7 @@ WRITE_TOOLS: Set[str] = {
     "enable_schedule", "disable_schedule", "execute_schedule_now", "schedule_remove_delayed_actions",
     "enable_trigger", "disable_trigger",
     "fire_indigo_event", "fire_trigger",
-    "enable_action_group", "disable_action_group", "duplicate_action_group",
+    "duplicate_action_group",
     # Folders / device housekeeping
     "create_device_folder", "create_variable_folder",
     "enable_device", "rename_device", "move_device_to_folder", "move_trigger_to_folder",

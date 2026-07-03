@@ -39,6 +39,30 @@ def _coerce_id(value) -> int:
     raise ValueError(f"Expected numeric ID, got {value!r}")
 
 
+def _deps_to_plain(deps) -> Dict[str, Any]:
+    """Deep-convert an indigo.Dict of dependents to plain JSON-friendly types.
+
+    getDependencies() returns an indigo.Dict keyed
+    actionGroups/controlPages/devices/schedules/triggers/variables, whose VALUES
+    are indigo.List objects of indigo.Dict entries ({"ID":.., "Name":..}). A
+    shallow dict(deps) leaves those values as indigo.List, which the JSON encoder
+    serialises to {} via its __dict__ fallback — so every dependency list came
+    back EMPTY and the "useful before deleting" check always said "no dependents".
+    Convert each entry explicitly.
+    """
+    out: Dict[str, Any] = {}
+    for key, lst in (dict(deps) if deps else {}).items():
+        items = []
+        for entry in (lst or []):
+            try:
+                items.append(dict(entry))
+            except (TypeError, ValueError):
+                items.append({"ID": getattr(entry, "id", None),
+                              "Name": getattr(entry, "name", str(entry))})
+        out[key] = items
+    return out
+
+
 class ExtendedToolsHandler(BaseToolHandler):
     """All the IOM wrappers added in v2.5.0."""
 
@@ -173,7 +197,7 @@ class ExtendedToolsHandler(BaseToolHandler):
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.DimmerDevice):
                 return {"success": False, "error": f"'{dev.name}' is not a dimmer"}
-            indigo.dimmer.brightenBy(did, value=amount)
+            indigo.dimmer.brighten(did, by=amount)
             msg = f"Brightened '{dev.name}' by {amount}%"
             self.log_tool_outcome("dimmer_brighten_by", True, msg)
             return {"success": True, "device_id": did, "amount": amount, "message": msg}
@@ -193,7 +217,7 @@ class ExtendedToolsHandler(BaseToolHandler):
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.DimmerDevice):
                 return {"success": False, "error": f"'{dev.name}' is not a dimmer"}
-            indigo.dimmer.dimBy(did, value=amount)
+            indigo.dimmer.dim(did, by=amount)
             msg = f"Dimmed '{dev.name}' by {amount}%"
             self.log_tool_outcome("dimmer_dim_by", True, msg)
             return {"success": True, "device_id": did, "amount": amount, "message": msg}
@@ -303,7 +327,7 @@ class ExtendedToolsHandler(BaseToolHandler):
             sid = _coerce_id(schedule_id)
             deps = indigo.schedule.getDependencies(sid)
             # indigo.Dict converts cleanly via dict(...)
-            deps_dict = dict(deps) if deps else {}
+            deps_dict = _deps_to_plain(deps)
             return {"success": True, "schedule_id": sid, "dependencies": deps_dict}
         except Exception as exc:
             return self.handle_exception(exc, "schedule_get_dependencies")
@@ -375,24 +399,10 @@ class ExtendedToolsHandler(BaseToolHandler):
         except Exception as exc:
             return self.handle_exception(exc, "duplicate_action_group")
 
-    def enable_action_group(self, action_group_id, value: bool = True) -> Dict[str, Any]:
-        """Enable or disable an action group."""
-        self.log_incoming_request("enable_action_group",
-                                  {"action_group_id": action_group_id, "value": value})
-        try:
-            aid = _coerce_id(action_group_id)
-            ag = indigo.actionGroups[aid]
-            indigo.actionGroup.enable(aid, value=bool(value))
-            msg = f"{'Enabled' if value else 'Disabled'} action group '{ag.name}'"
-            self.log_tool_outcome("enable_action_group", True, msg)
-            return {"success": True, "action_group_id": aid,
-                    "enabled": bool(value), "message": msg}
-        except Exception as exc:
-            return self.handle_exception(exc, "enable_action_group")
-
-    def disable_action_group(self, action_group_id) -> Dict[str, Any]:
-        """Disable an action group (convenience for enable_action_group value=False)."""
-        return self.enable_action_group(action_group_id, value=False)
+    # enable_action_group / disable_action_group removed in v2.10.0: the IOM has
+    # no indigo.actionGroup.enable and ActionGroup has no 'enabled' state, so
+    # both always raised AttributeError. Action groups cannot be enabled/disabled
+    # (unlike triggers and schedules) — there is nothing to wrap.
 
     def action_group_get_dependencies(self, action_group_id) -> Dict[str, Any]:
         """Return the dependents of an action group as a plain dict."""
@@ -401,7 +411,7 @@ class ExtendedToolsHandler(BaseToolHandler):
         try:
             aid = _coerce_id(action_group_id)
             deps = indigo.actionGroup.getDependencies(aid)
-            deps_dict = dict(deps) if deps else {}
+            deps_dict = _deps_to_plain(deps)
             return {"success": True, "action_group_id": aid, "dependencies": deps_dict}
         except Exception as exc:
             return self.handle_exception(exc, "action_group_get_dependencies")

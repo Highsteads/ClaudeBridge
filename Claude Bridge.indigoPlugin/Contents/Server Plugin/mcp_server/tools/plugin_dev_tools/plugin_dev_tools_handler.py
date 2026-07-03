@@ -311,6 +311,16 @@ class PluginDevToolsHandler(BaseToolHandler):
                 if not bundle_id:
                     return {**result, "restart_error":
                             "Could not read CFBundleIdentifier from Info.plist"}
+                # Never self-restart ClaudeBridge from inside its own MCP session:
+                # it kills the in-flight response and blacks out IWS for minutes
+                # (the same reason restart_plugin refuses). Markers are already
+                # removed; tell the caller to reload via the Plugins menu instead.
+                if bundle_id == "com.clives.indigoplugin.claudebridge":
+                    return {**result, "restarted": False, "restart_skipped": True,
+                            "message": (f"Removed {len(removed)} success marker(s). "
+                                        "Refusing to self-restart Claude Bridge (would kill this "
+                                        "MCP session and black out IWS) — reload it from "
+                                        "Plugins → Claude Bridge → Reload to rebuild dependencies.")}
                 try:
                     plugin = indigo.server.getPlugin(bundle_id)
                     if plugin is None:

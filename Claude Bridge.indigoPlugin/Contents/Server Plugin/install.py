@@ -53,7 +53,29 @@ PROXY_SCRIPT_NAME  = "indigo_mcp_proxy.py"
 PROXY_IN_BUNDLE    = REPO_ROOT / PLUGIN_BUNDLE_NAME / "Contents" / "Server Plugin" / PROXY_SCRIPT_NAME
 
 INDIGO_BASE        = Path("/Library/Application Support/Perceptive Automation")
-INDIGO_APP         = INDIGO_BASE / "Indigo 2025.1"
+
+
+def _find_indigo_app(base: Path) -> Path:
+    """Return the newest installed 'Indigo <year>.<minor>' app folder that has a
+    Plugins directory. NEVER hardcode a version — the folder name changes every
+    release, and a pinned literal silently installs into a dead tree on any other
+    version. Sort by the numeric (year, minor) so 2025.10 > 2025.2 > 2025.1."""
+    def _ver_key(p: Path):
+        try:
+            nums = p.name.split("Indigo ", 1)[1].split(".")
+            return tuple(int(n) for n in nums[:2])
+        except (IndexError, ValueError):
+            return (0, 0)
+    candidates = sorted(
+        (p for p in base.glob("Indigo 20*") if (p / "Plugins").is_dir()),
+        key=_ver_key,
+    )
+    if not candidates:
+        sys.exit(f"No 'Indigo 20xx.x' install with a Plugins folder found under {base}")
+    return candidates[-1]
+
+
+INDIGO_APP         = _find_indigo_app(INDIGO_BASE)
 PLUGINS_DIR        = INDIGO_APP / "Plugins"
 SECRETS_JSON       = INDIGO_APP / "Preferences/secrets.json"
 
@@ -109,7 +131,15 @@ def install_plugin_bundle():
 
     if not PLUGINS_DIR.exists():
         err(f"Indigo Plugins directory not found: {PLUGINS_DIR}")
-        err("Is Indigo 2025.1 installed?")
+        err("Is Indigo installed?")
+        sys.exit(1)
+
+    # Guard against running the installer FROM the installed bundle: if src and
+    # dest resolve to the same directory, rmtree(dest) would delete src too and
+    # copytree would then crash, leaving no plugin at all. Refuse instead.
+    if src.resolve() == dest.resolve():
+        err(f"Refusing to install: source and destination are the same directory ({dest}).")
+        err("Run install.py from the DOWNLOADED repo/zip, not from the copy already in Indigo's Plugins folder.")
         sys.exit(1)
 
     if dest.exists():

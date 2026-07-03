@@ -3,9 +3,28 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Opus 4.8
-# Date:        15-06-2026
-# Version:     2.9.1
+# Author:      CliveS & Claude Fable 5
+# Date:        03-07-2026
+# Version:     2.10.0
+#
+# v2.10.0 (03-07-2026): deep-review fix batch (9 verified highs + the
+# return-vs-raise cluster). Tools return an {"error":...} payload instead of
+# raising, so the dispatch now inspects the result: error results are no longer
+# cached and replayed for the TTL, no longer counted as successes in telemetry,
+# and secret-bearing tools' raw error text is actually scrubbed (the old
+# except-only scrub never fired). /health no longer leaks raw bearer tokens
+# (rate_limiter.snapshot masks keys). fire_claude_event now passes trigger_data
+# so the eventData payload actually reaches triggers (Events.xml corrected to the
+# real %%e:"name"%% syntax). plugin_refresh_deps refuses to self-restart CB.
+# execute_indigo_python / run_script serialise their global stdout swap (was
+# thread-unsafe). dimmer_brighten_by/dim_by call the real brighten()/dim() IOM
+# methods. schedule/action_group_get_dependencies deep-convert so dependents
+# actually appear (were always empty). energy_daily_summary/energy_compare no
+# longer fabricate all-zero kWh totals from a [Daily] log line Sigen never emits
+# — they null the totals and say so. install.py resolves the Indigo version
+# folder dynamically and refuses to run from the installed bundle (self-delete
+# guard). REMOVED enable_action_group / disable_action_group (149 -> 147): the
+# IOM has no such capability, so both failed 100%. Suite 283 -> 292.
 #
 # v2.9.1 (15-06-2026): device_history now returns timestamps in LOCAL time
 # (DST-aware) instead of the SQL Logger's raw UTC, so they match
@@ -1121,8 +1140,10 @@ class Plugin(indigo.PluginBase):
 
         Auth: gated by IWS bearer auth only (like every /message/ endpoint) —
         it does NOT pass through the plugin's per-token scope layer. That is
-        intentional: it exposes no secrets and no mutation, only read-only
-        diagnostics, so a 'read'-equivalent gate is sufficient.
+        intentional: it performs no mutation, only read-only diagnostics, so a
+        'read'-equivalent gate is sufficient. Rate-limiter keys (bearer tokens)
+        are masked to a non-reversible digest before they reach this payload —
+        see RateLimiter.snapshot() — so no token strings are exposed.
         """
         if not self.mcp_handler:
             return {
@@ -1560,7 +1581,13 @@ class Plugin(indigo.PluginBase):
         for trigger in self.event_triggers.values():
             if trigger.pluginTypeId == "claudeEvent":
                 try:
-                    indigo.trigger.execute(trigger)
+                    # Pass the payload as trigger_data so it reaches condition/
+                    # embedded scripts (event_data) and the %%e:"name"%% /
+                    # %%e:"data"%% / %%e:"source"%% substitutions. Without this the
+                    # payload is silently dropped and name-filtered triggers can't
+                    # discriminate. (Signature confirmed live: execute(trigger,
+                    # ignoreConditions=False, trigger_data=None).)
+                    indigo.trigger.execute(trigger, trigger_data=payload)
                     fired += 1
                 except Exception as e:
                     self.logger.error(f"[Trigger] execute failed for claudeEvent (id={trigger.id}): {e}")

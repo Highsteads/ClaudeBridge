@@ -87,10 +87,10 @@ class ScriptingShellHandler(BaseToolHandler):
             return {"success": False,
                     "error": f"mode must be 'exec' or 'eval', got {mode!r}"}
 
+        from ...common.exec_lock import STDOUT_SWAP_LOCK
+
         captured_out = io.StringIO()
         captured_err = io.StringIO()
-        old_stdout, old_stderr = sys.stdout, sys.stderr
-        sys.stdout, sys.stderr = captured_out, captured_err
 
         ns: Dict[str, Any] = {
             "__name__": "__mcp_exec__",
@@ -100,6 +100,12 @@ class ScriptingShellHandler(BaseToolHandler):
         error_msg: Optional[str] = None
         tb_text:   Optional[str] = None
         value_repr: Optional[str] = None
+
+        # Serialise the process-global stdout/stderr swap: concurrent exec/run_script
+        # calls would otherwise interleave and permanently corrupt sys.stdout.
+        STDOUT_SWAP_LOCK.acquire()
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = captured_out, captured_err
 
         try:
             try:
@@ -118,6 +124,7 @@ class ScriptingShellHandler(BaseToolHandler):
                 tb_text   = traceback.format_exc()
         finally:
             sys.stdout, sys.stderr = old_stdout, old_stderr
+            STDOUT_SWAP_LOCK.release()
 
         out = captured_out.getvalue()
         err = captured_err.getvalue()
