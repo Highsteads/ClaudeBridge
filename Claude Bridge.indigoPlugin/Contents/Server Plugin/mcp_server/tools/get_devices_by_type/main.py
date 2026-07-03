@@ -28,13 +28,15 @@ class GetDevicesByTypeHandler(BaseToolHandler):
         super().__init__(tool_name="get_devices_by_type", logger=logger)
         self.data_provider = data_provider
     
-    def get_devices(self, device_type: str) -> Dict[str, Any]:
+    def get_devices(self, device_type: str, limit: int = 200) -> Dict[str, Any]:
         """
         Get all devices of a specific type.
-        
+
         Args:
             device_type: The device type to filter by (dimmer, relay, sensor, etc.)
-            
+            limit: Max devices to return (default 200) — bounds the response size
+                   on a large estate. Excess is reported via 'truncated'.
+
         Returns:
             Dictionary with list of devices and metadata
         """
@@ -68,13 +70,25 @@ class GetDevicesByTypeHandler(BaseToolHandler):
             # Sort by name for consistent output
             filtered_devices.sort(key=lambda d: d.get("name", "").lower())
 
-            # Log results
-            device_count = len(filtered_devices)
-            self.info_log(f"💡 Found {device_count} '{device_type}' devices")
+            # Bound the response size on a big estate.
+            try:
+                limit = max(1, int(limit))
+            except (TypeError, ValueError):
+                limit = 200
+            total_matched = len(filtered_devices)
+            truncated = total_matched > limit
+            if truncated:
+                filtered_devices = filtered_devices[:limit]
+
+            self.info_log(f"💡 Found {total_matched} '{device_type}' devices"
+                          + (f" (returning first {limit})" if truncated else ""))
 
             return {
                 "device_type": device_type,
-                "count": device_count,
+                "count": len(filtered_devices),
+                "total_matched": total_matched,
+                "truncated": truncated,
+                "limit": limit,
                 "devices": filtered_devices,
                 "success": True
             }

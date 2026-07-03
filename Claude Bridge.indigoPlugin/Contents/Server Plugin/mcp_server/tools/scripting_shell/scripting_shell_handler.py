@@ -34,6 +34,12 @@ except ImportError:
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 
+# Best-effort wall-clock limit for a single execute_indigo_python call. A runaway
+# script past this frees the IWS thread with a timeout error (the worker thread is
+# orphaned — Python can't kill a thread — but the server keeps serving). Generous
+# so normal sub-second usage is never affected.
+_EXEC_TIMEOUT_SECONDS = 60
+
 
 def _indigo_app_name() -> str:
     """
@@ -87,6 +93,7 @@ class ScriptingShellHandler(BaseToolHandler):
             return {"success": False,
                     "error": f"mode must be 'exec' or 'eval', got {mode!r}"}
 
+        import threading
         from ...common.exec_lock import STDOUT_SWAP_LOCK
 
         captured_out = io.StringIO()
@@ -97,35 +104,54 @@ class ScriptingShellHandler(BaseToolHandler):
             "indigo":   indigo,
         }
 
-        error_msg: Optional[str] = None
-        tb_text:   Optional[str] = None
-        value_repr: Optional[str] = None
+        res: Dict[str, Any] = {"error_msg": None, "tb_text": None, "value_repr": None}
 
-        # Serialise the process-global stdout/stderr swap: concurrent exec/run_script
-        # calls would otherwise interleave and permanently corrupt sys.stdout.
-        STDOUT_SWAP_LOCK.acquire()
-        old_stdout, old_stderr = sys.stdout, sys.stderr
-        sys.stdout, sys.stderr = captured_out, captured_err
-
-        try:
+        # Run the exec in a worker thread and join with a timeout so a runaway
+        # script (e.g. an infinite loop) does NOT wedge the IWS request thread
+        # forever — the handler returns a timeout error and frees the thread. The
+        # fast path (normal sub-second code) is unaffected. The stdout/stderr swap
+        # is serialised via STDOUT_SWAP_LOCK inside the worker so concurrent calls
+        # can't corrupt sys.stdout.
+        def _worker():
+            STDOUT_SWAP_LOCK.acquire()
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = captured_out, captured_err
             try:
-                if mode == "eval":
-                    value = eval(compile(code, "<mcp_exec>", "eval"), ns)  # noqa: S307
-                    try:
-                        value_repr = repr(value)
-                    except Exception as repr_exc:
-                        value_repr = f"<repr failed: {repr_exc}>"
-                else:
-                    exec(compile(code, "<mcp_exec>", "exec"), ns)  # noqa: S102
-            except SystemExit:
-                pass  # treat sys.exit() as normal completion
-            except Exception as exc:
-                error_msg = f"{type(exc).__name__}: {exc}"
-                tb_text   = traceback.format_exc()
-        finally:
-            sys.stdout, sys.stderr = old_stdout, old_stderr
-            STDOUT_SWAP_LOCK.release()
+                try:
+                    if mode == "eval":
+                        value = eval(compile(code, "<mcp_exec>", "eval"), ns)  # noqa: S307
+                        try:
+                            res["value_repr"] = repr(value)
+                        except Exception as repr_exc:
+                            res["value_repr"] = f"<repr failed: {repr_exc}>"
+                    else:
+                        exec(compile(code, "<mcp_exec>", "exec"), ns)  # noqa: S102
+                except SystemExit:
+                    pass  # treat sys.exit() as normal completion
+                except Exception as exc:
+                    res["error_msg"] = f"{type(exc).__name__}: {exc}"
+                    res["tb_text"]   = traceback.format_exc()
+            finally:
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+                STDOUT_SWAP_LOCK.release()
 
+        _t = threading.Thread(target=_worker, daemon=True, name="mcp-exec")
+        _t.start()
+        _t.join(timeout=_EXEC_TIMEOUT_SECONDS)
+        if _t.is_alive():
+            self.log_tool_outcome("execute_indigo_python", False,
+                                  f"timed out after {_EXEC_TIMEOUT_SECONDS}s")
+            return {
+                "success": False, "mode": mode, "timed_out": True,
+                "error": (f"Execution exceeded the {_EXEC_TIMEOUT_SECONDS}s limit and was left "
+                          "running in the background so the request thread could be freed. A "
+                          "genuinely infinite script needs a plugin reload to clear."),
+                "stdout": captured_out.getvalue()[:8000],
+            }
+
+        error_msg  = res["error_msg"]
+        tb_text    = res["tb_text"]
+        value_repr = res["value_repr"]
         out = captured_out.getvalue()
         err = captured_err.getvalue()
 

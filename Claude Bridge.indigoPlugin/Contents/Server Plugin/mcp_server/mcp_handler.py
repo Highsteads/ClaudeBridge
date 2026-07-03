@@ -56,6 +56,16 @@ class MCPHandler:
         "webhook_create", "webhook_list", "webhook_delete",
     })
 
+    # Tools that change entity STRUCTURE (the devices/variables/actions the search
+    # index holds). After one of these, refresh the search index out-of-band so
+    # search_entities reflects the change without waiting for the next interval.
+    _SEARCH_REFRESH_TOOLS = frozenset({
+        "delete_device", "duplicate_device", "rename_device",
+        "variable_create", "variable_delete",
+        "delete_action_group", "duplicate_action_group",
+        "execute_indigo_python", "run_script",
+    })
+
     def __init__(
         self,
         data_provider: DataProvider,
@@ -836,6 +846,12 @@ class MCPHandler:
                     self.logger.debug(
                         f"Cache: dropped {dropped} entries after {tool_name}"
                     )
+                # If the tool changed entity STRUCTURE (added/removed/renamed a
+                # device/variable/action, or ran arbitrary code), refresh the
+                # search index now instead of waiting up to update_interval — the
+                # add_entity/remove_entity single-item hooks were never wired.
+                if tool_name in self._SEARCH_REFRESH_TOOLS and self.vector_store_manager:
+                    self.vector_store_manager.refresh_async()
 
             response = {
                 "jsonrpc": "2.0",
@@ -1110,6 +1126,10 @@ class MCPHandler:
                     "device_type": {
                         "type": "string",
                         "description": "Device type. Valid types: dimmer, relay, sensor, multiio, speedcontrol, sprinkler, thermostat, device. Aliases supported: light→dimmer, switch→relay, motion→sensor, fan→speedcontrol, etc."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max devices to return (default 200). Response reports total_matched + truncated."
                     }
                 },
                 "required": ["device_type"]
@@ -4175,10 +4195,10 @@ class MCPHandler:
             self.logger.error(f"[search_entities]: Error - {e}")
             return safe_json_dumps({"error": str(e), "query": query})
     
-    def _tool_get_devices_by_type(self, device_type: str) -> str:
+    def _tool_get_devices_by_type(self, device_type: str, limit: int = 200) -> str:
         """Get devices by type tool implementation."""
         try:
-            result = self.get_devices_by_type_handler.get_devices(device_type)
+            result = self.get_devices_by_type_handler.get_devices(device_type, limit=limit)
             return safe_json_dumps(result)
         except Exception as e:
             self.logger.error(f"Get devices by type error: {e}")

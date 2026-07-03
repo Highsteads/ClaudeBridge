@@ -57,14 +57,15 @@ class StateFilter:
                 if not StateFilter._matches_complex_condition(entity, key, expected_value):
                     return False
             else:
-                # Simple equality check
+                # Simple equality check (numeric-aware — Indigo serialises many
+                # states as strings like '72.5', so a raw == to a number misses).
                 # First check direct property
                 if key in entity:
-                    if entity[key] != expected_value:
+                    if not StateFilter._loose_eq(entity[key], expected_value):
                         return False
                 # Then check in states dictionary if present
                 elif "states" in entity and key in entity["states"]:
-                    if entity["states"][key] != expected_value:
+                    if not StateFilter._loose_eq(entity["states"][key], expected_value):
                         return False
                 else:
                     # State not found, condition fails
@@ -73,9 +74,20 @@ class StateFilter:
         return True
     
     @staticmethod
+    def _loose_eq(a: Any, b: Any) -> bool:
+        """Equality that treats a numeric string and a number as equal — Indigo
+        stores many states as strings ('72.5', '20'), so a raw == to a numeric
+        filter value would never match. Falls back to direct == for non-numerics
+        (e.g. 'on' == 'on', True == True)."""
+        try:
+            return float(a) == float(b)
+        except (TypeError, ValueError):
+            return a == b
+
+    @staticmethod
     def _matches_complex_condition(
-        entity: Dict[str, Any], 
-        key: str, 
+        entity: Dict[str, Any],
+        key: str,
         condition: Dict[str, str]
     ) -> bool:
         """
@@ -119,9 +131,9 @@ class StateFilter:
                     return False
                 elif operator == "lte" and not (v <= e):
                     return False
-            elif operator == "ne" and not (value != expected):
+            elif operator == "ne" and StateFilter._loose_eq(value, expected):
                 return False
-            elif operator == "eq" and not (value == expected):
+            elif operator == "eq" and not StateFilter._loose_eq(value, expected):
                 return False
             elif operator == "contains" and expected not in str(value):
                 return False

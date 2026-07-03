@@ -843,6 +843,13 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.11.1 (2026-07-03)
+A tidy-up pass that cleared the lower-priority items parked from the big reviews. All under-the-hood, nothing you need to do.
+
+The ones worth knowing: searching or filtering on a numeric value now matches even when Indigo stored that reading as text (it usually does), so "find me thermostats set to 21" behaves as you'd expect. A runaway snippet of code — an accidental infinite loop — now times out and frees the web server instead of tying up a thread until the next reload. The short-term cache can no longer briefly hand back a stale answer if something changed at the exact moment it was fetching. Search results now update straight away after you add, remove or rename a device rather than waiting for the next refresh. And a couple of quiet edge cases: script backups can't tread on a similarly-named script's backups, and asking for "all devices of type X" now caps its answer on a very large house.
+
+304 → 309 tests.
+
 ### 2.11.0 (2026-07-03)
 This one came from holding the plugin up against the *whole* of Indigo's own API and asking what Claude still couldn't reach. Eleven new tools and a couple of things the plugin had been promising but not delivering.
 

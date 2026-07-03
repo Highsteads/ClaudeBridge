@@ -54,9 +54,14 @@ class VectorStoreManager:
         
         # Track last update time for optimization
         self._last_update_time = 0
-        
+
         # Progress tracking for initialization
         self._is_initializing = False
+
+        # Coalesces out-of-band refreshes (refresh_async) so a burst of structural
+        # mutations triggers at most one in-flight rebuild.
+        self._refresh_lock = threading.Lock()
+        self._refresh_pending = False
     
     def start(self) -> None:
         """Start the vector store manager."""
@@ -256,6 +261,34 @@ class VectorStoreManager:
             self.logger.error(f"\t❌ Vector store update failed: {e}")
             raise
     
+    def refresh_async(self) -> None:
+        """Trigger an out-of-band search-index rebuild WITHOUT blocking the caller.
+
+        Called after a tool changes entity structure (create/delete/rename a
+        device/variable/action, or an arbitrary-exec tool) so search reflects the
+        change immediately instead of waiting up to update_interval seconds. The
+        add_entity/remove_entity single-item hooks were never wired; this whole-
+        store refresh is the simple, correct alternative. Coalesced: a burst of
+        mutations spawns at most one in-flight rebuild.
+        """
+        if not self._running or not self.vector_store:
+            return
+        with self._refresh_lock:
+            if self._refresh_pending:
+                return
+            self._refresh_pending = True
+
+        def _run():
+            try:
+                self.update_now()
+            except Exception:
+                self.logger.exception("async search refresh failed (contained)")
+            finally:
+                with self._refresh_lock:
+                    self._refresh_pending = False
+
+        threading.Thread(target=_run, daemon=True, name="VectorStore-Refresh").start()
+
     def _start_background_updates(self) -> None:
         """Start background update thread."""
         # Never clear _stop_updates here — that would wipe a shutdown signal
@@ -347,10 +380,15 @@ class VectorStoreManager:
         old_interval = self.update_interval
         self.update_interval = interval
         
-        # Restart background updates with new interval
+        # Restart background updates with new interval. _stop_background_updates()
+        # SETS the _stop_updates flag, and _start_background_updates() deliberately
+        # refuses to run while it's set (it treats the flag as a shutdown signal) —
+        # so we must clear it here before restarting, or an interval change would
+        # permanently kill the background refresh.
         if self._running:
             self._stop_background_updates()
             if interval > 0:
+                self._stop_updates.clear()
                 self._start_background_updates()
-        
+
         self.logger.info(f"Update interval changed from {old_interval}s to {interval}s")

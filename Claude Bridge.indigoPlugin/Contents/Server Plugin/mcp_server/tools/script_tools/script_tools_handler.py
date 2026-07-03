@@ -22,6 +22,7 @@ Tools:
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime
@@ -37,6 +38,11 @@ from ...adapters.data_provider import DataProvider
 
 BACKUP_DIR_NAME = "_backups"
 MAX_BACKUPS_PER_SCRIPT = 5
+
+# Best-effort wall-clock limit for a single run_script call — generous, since a
+# real automation script can legitimately take a while. Past this the IWS thread
+# is freed with a timeout error (worker thread orphaned; server keeps serving).
+_RUN_SCRIPT_TIMEOUT_SECONDS = 120
 
 
 def _scripts_dir() -> str:
@@ -127,12 +133,15 @@ def _make_backup(script_path: str) -> Optional[str]:
     except OSError:
         return None
 
-    # Prune old backups for this script
+    # Prune old backups for this script. Match ONLY "<stem>.<timestamp>.py" — a
+    # plain startswith("<stem>.") also matches a SIBLING script whose name starts
+    # with this one plus a dot (e.g. pruning 'foo' would sweep 'foo.bar' backups,
+    # or delete the backup just created). Requiring a timestamp after the dot
+    # confines the prune to this script's own backups.
     try:
-        pattern = f"{stem}."
+        ts_re = re.compile(r"^" + re.escape(stem) + r"\.\d{8}_\d{6}(?:_\d+)?\.py$")
         backups = sorted(
-            [e.path for e in os.scandir(backup_dir)
-             if e.name.startswith(pattern) and e.name.endswith(".py")],
+            [e.path for e in os.scandir(backup_dir) if ts_re.match(e.name)],
         )
         while len(backups) > MAX_BACKUPS_PER_SCRIPT:
             try:
@@ -522,40 +531,56 @@ if __name__ == "__main__":
 
             import io
             import sys as _sys
+            import threading as _threading
 
             from ...common.exec_lock import STDOUT_SWAP_LOCK
 
             captured_out = io.StringIO()
             captured_err = io.StringIO()
+            _res = {"error_msg": None}
 
-            # Serialise the process-global stdout/stderr swap: concurrent
-            # run_script/execute_indigo_python calls would otherwise interleave
-            # and permanently corrupt sys.stdout for the whole plugin process.
-            STDOUT_SWAP_LOCK.acquire()
-            old_stdout = _sys.stdout
-            old_stderr = _sys.stderr
-            _sys.stdout = captured_out
-            _sys.stderr = captured_err
-
-            try:
-                code = compile(source, path, "exec")
-                ns = {
-                    "__file__": path,
-                    "__name__": "__main__",
-                    "indigo":   indigo,
-                }
+            # Run the script in a worker thread with a join timeout so a runaway
+            # script can't wedge the IWS request thread forever (see the same
+            # pattern + rationale in execute_indigo_python). The stdout/stderr
+            # swap is serialised via STDOUT_SWAP_LOCK inside the worker.
+            def _worker():
+                STDOUT_SWAP_LOCK.acquire()
+                old_stdout = _sys.stdout
+                old_stderr = _sys.stderr
+                _sys.stdout = captured_out
+                _sys.stderr = captured_err
                 try:
-                    exec(code, ns)  # noqa: S102
-                    error_msg = None
-                except SystemExit:
-                    error_msg = None  # clean exit via sys.exit() is normal
-                except Exception as exc:
-                    error_msg = str(exc)
-            finally:
-                _sys.stdout = old_stdout
-                _sys.stderr = old_stderr
-                STDOUT_SWAP_LOCK.release()
+                    code = compile(source, path, "exec")
+                    ns = {
+                        "__file__": path,
+                        "__name__": "__main__",
+                        "indigo":   indigo,
+                    }
+                    try:
+                        exec(code, ns)  # noqa: S102
+                        _res["error_msg"] = None
+                    except SystemExit:
+                        _res["error_msg"] = None  # clean exit via sys.exit() is normal
+                    except Exception as exc:
+                        _res["error_msg"] = str(exc)
+                finally:
+                    _sys.stdout = old_stdout
+                    _sys.stderr = old_stderr
+                    STDOUT_SWAP_LOCK.release()
 
+            _t = _threading.Thread(target=_worker, daemon=True, name="mcp-run-script")
+            _t.start()
+            _t.join(timeout=_RUN_SCRIPT_TIMEOUT_SECONDS)
+            if _t.is_alive():
+                return {
+                    "success": False, "name": os.path.basename(path), "timed_out": True,
+                    "error": (f"Script exceeded the {_RUN_SCRIPT_TIMEOUT_SECONDS}s limit and was left "
+                              "running in the background so the request thread could be freed. A "
+                              "genuinely infinite script needs a plugin reload to clear."),
+                    "stdout": captured_out.getvalue()[:4000],
+                }
+
+            error_msg = _res["error_msg"]
             out = captured_out.getvalue()
             err = captured_err.getvalue()
 

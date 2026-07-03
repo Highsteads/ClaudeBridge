@@ -199,6 +199,11 @@ class ToolCache:
         self._store: Dict[Tuple[str, str], Tuple[float, Any]] = {}
         self._lock  = threading.Lock()
         self._last_sweep = 0.0   # monotonic ts of last expired-entry sweep
+        # Bumped on every invalidation/clear. A compute() that spans a bump ran
+        # against now-invalidated state, so its result must NOT be stored — else
+        # a read that started before a mutation could reinstate a stale entry
+        # AFTER the invalidation dropped it (a TOCTOU that would survive to TTL).
+        self._generation = 0
 
         # Per-key in-flight state so concurrent identical misses share one
         # compute() (avoids the thundering-herd duplicate the cache exists to
@@ -299,12 +304,18 @@ class ToolCache:
                         self.hits += 1
                         # We waited on another caller that already computed this.
                         return entry[1], True
+                    gen_at_start = self._generation
 
                 # Compute outside the store lock to avoid serialising callers
                 # for other keys.
                 result = compute()
                 store_it = cache_ok is None or cache_ok(result)
                 with self._lock:
+                    # If an invalidation/clear happened WHILE we were computing,
+                    # our result reflects pre-mutation state — do not store it, or
+                    # it would reinstate a stale entry the invalidation just dropped.
+                    if self._generation != gen_at_start:
+                        store_it = False
                     if store_it:
                         # Stamp expiry from AFTER compute() so a slow compute does
                         # not shorten the effective TTL.
@@ -339,6 +350,10 @@ class ToolCache:
         if not buckets:
             return 0
         with self._lock:
+            # Bump generation for EVERY real invalidation, even if nothing is
+            # cached right now — an in-flight compute for one of these buckets
+            # must still be prevented from storing its pre-mutation result.
+            self._generation += 1
             keys_to_drop = [k for k in self._store if k[0] in buckets]
             for k in keys_to_drop:
                 del self._store[k]
@@ -349,6 +364,7 @@ class ToolCache:
     def clear(self) -> int:
         """Drop everything. Returns count cleared."""
         with self._lock:
+            self._generation += 1
             n = len(self._store)
             self._store.clear()
             return n

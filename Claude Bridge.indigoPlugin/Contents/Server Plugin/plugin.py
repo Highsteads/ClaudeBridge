@@ -5,7 +5,23 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Fable 5
 # Date:        03-07-2026
-# Version:     2.11.0
+# Version:     2.11.1
+#
+# v2.11.1 (03-07-2026): deferred-medium cleanup (the low-priority/heavier items
+# parked from the v2.10.x reviews). state_filter eq/ne are now numeric-aware
+# (a stringy '72.5' state matches an eq:72.5 filter — ordering ops already were);
+# tool_cache has a generation guard so a mutation landing WHILE a read computes
+# no longer lets the read reinstate a stale entry after the invalidation (TOCTOU);
+# vector-store search now refreshes out-of-band after a structure-changing tool
+# (delete/rename/create device/variable/action, run_script, execute_indigo_python)
+# instead of waiting for the interval, and set_update_interval no longer
+# permanently kills the background refresh (cleared the stop flag); execute_indigo_
+# python + run_script run in a worker thread with a join timeout (60s / 120s) so a
+# runaway script frees the IWS thread instead of wedging it; backup pruning is
+# timestamp-anchored so pruning script 'foo' can't delete sibling 'foo.bar' backups;
+# get_devices_by_type takes a limit (default 200) + reports total_matched/truncated.
+# Suite 304->309. Assessed-but-not-fixed (genuinely marginal/by-design) documented
+# in the STATE plan doc.
 #
 # v2.11.0 (03-07-2026): API-coverage feature batch (compared CB's tool surface
 # against the full live indigo.* IOM + the first-hand reference). 11 new tools
