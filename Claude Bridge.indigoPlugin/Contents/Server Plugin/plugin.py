@@ -5,7 +5,21 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Fable 5
 # Date:        03-07-2026
-# Version:     2.10.1
+# Version:     2.11.0
+#
+# v2.11.0 (03-07-2026): API-coverage feature batch (compared CB's tool surface
+# against the full live indigo.* IOM + the first-hand reference). 11 new tools
+# (147->158): Z-Wave management — zwave_send_config_parameter (set a config
+# parameter without the GUI — the ZEN58 pain point), zwave_start/stop_network_
+# optimize (mesh heal), zwave_enter_inclusion_mode / enter_exclusion_mode /
+# exit_inclusion_exclusion_mode (physically add/remove devices, all ADMIN);
+# trigger_get_dependencies (parity with schedule/action_group); increase/
+# decrease_cool_setpoint (parity with heat); get_reflector_status; get_indigo_paths
+# (install/logs/DB paths). NEW: MCP prompts — CB advertised the capability but
+# shipped none; now 5 guided templates (house_state, energy_day_review,
+# battery_sweep, recover_wedged_plugin, zwave_tune_sensor) via mcp_server/prompts.py.
+# NEW resource indigo://logs/recent (last 200 event-log lines, all plugins, via
+# getEventLogList). Suite 299->304. api_baseline confirmed current (362==362).
 #
 # v2.10.1 (03-07-2026): deep-review medium batch (14 verified mediums from the
 # 14 deferred modules; ~half of the reviewed mediums refuted or latent). Battery

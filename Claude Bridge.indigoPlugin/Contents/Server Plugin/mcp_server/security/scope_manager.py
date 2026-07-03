@@ -75,6 +75,7 @@ READ_TOOLS: Set[str] = {
     "find_low_battery", "find_orphaned_plugin_data", "find_orphaned_scripts", "find_stale_devices",
     "find_large_files", "dependency_map", "action_group_get_dependencies", "schedule_get_dependencies",
     "get_deprecated_elements", "get_latitude_longitude", "get_reflector_url", "get_web_server_url",
+    "trigger_get_dependencies", "get_reflector_status", "get_indigo_paths",
     "calculate_sunrise", "calculate_sunset", "check_plugin_updates", "read_script", "recall",
     "recall_topics", "get_events", "query_event_log", "security_status", "system_health",
     "plugin_diff_source_vs_installed", "plugin_lint", "plugin_node_check_html",
@@ -90,6 +91,7 @@ WRITE_TOOLS: Set[str] = {
     "dimmer_brighten_by", "dimmer_dim_by",
     "set_heat_setpoint", "set_cool_setpoint", "set_hvac_mode",
     "increase_heat_setpoint", "decrease_heat_setpoint",
+    "increase_cool_setpoint", "decrease_cool_setpoint",
     "set_color", "set_fan_mode", "set_fan_speed",
     "speedcontrol_decrease", "speedcontrol_increase", "speedcontrol_set_index",
     "sprinkler_next_zone", "sprinkler_pause", "sprinkler_previous_zone", "sprinkler_resume",
@@ -131,6 +133,11 @@ ADMIN_TOOLS: Set[str] = {
     "delete_device_folder", "delete_variable_folder",   # v2.9.0 — can cascade-delete contents
     # Physical security
     "lock_device", "unlock_device",
+    # Z-Wave management — config params, mesh heal, and physical inclusion/exclusion.
+    # ADMIN: sendConfigParm reprograms a device, inclusion/exclusion pairs/unpairs hardware,
+    # and a network optimize is estate-wide radio traffic.
+    "zwave_send_config_parameter", "zwave_start_network_optimize", "zwave_stop_network_optimize",
+    "zwave_enter_inclusion_mode", "zwave_enter_exclusion_mode", "zwave_exit_inclusion_exclusion_mode",
     # Outbound webhooks — registering an egress target POSTs home state to an
     # external URL, strictly more sensitive than a WRITE (data-leaving-the-house).
     "webhook_create", "webhook_list", "webhook_delete",

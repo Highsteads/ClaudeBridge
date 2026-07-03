@@ -498,6 +498,46 @@ class SystemToolsHandler(BaseToolHandler):
         except Exception as exc:
             return self.handle_exception(exc, "get_reflector_url")
 
+    def get_reflector_status(self) -> Dict[str, Any]:
+        """Return the full reflector status dict (connection state, not just the
+        URL) via indigo.server.getReflectorStatus()."""
+        self.log_incoming_request("get_reflector_status", {})
+        try:
+            try:
+                status = indigo.server.getReflectorStatus()
+            except AttributeError:
+                return {"success": False,
+                        "error": "indigo.server.getReflectorStatus() unavailable on this Indigo version"}
+            # It's an indigo.Dict — convert to a plain dict for JSON.
+            status = dict(status) if status else {}
+            self.log_tool_outcome("get_reflector_status", True, "ok")
+            return {"success": True, "status": status}
+        except Exception as exc:
+            return self.handle_exception(exc, "get_reflector_status")
+
+    def get_indigo_paths(self) -> Dict[str, Any]:
+        """Return the key filesystem paths of this Indigo install — the install
+        folder, Logs folder, and the SQL Logger history DB (file + name). Lets a
+        client locate the history DB it queries and the logs it reads without
+        hardcoding a version-specific path."""
+        self.log_incoming_request("get_indigo_paths", {})
+        try:
+            def _try(fn):
+                try:
+                    return fn()
+                except Exception:
+                    return None
+            paths = {
+                "install_folder": _try(indigo.server.getInstallFolderPath),
+                "logs_folder":    _try(indigo.server.getLogsFolderPath),
+                "db_file":        _try(indigo.server.getDbFilePath),
+                "db_name":        _try(indigo.server.getDbName),
+            }
+            self.log_tool_outcome("get_indigo_paths", True, "ok")
+            return {"success": True, "paths": paths}
+        except Exception as exc:
+            return self.handle_exception(exc, "get_indigo_paths")
+
     # ────────────────────────────────────────────────────────────────────────
     # create_device_folder / create_variable_folder
     # ────────────────────────────────────────────────────────────────────────

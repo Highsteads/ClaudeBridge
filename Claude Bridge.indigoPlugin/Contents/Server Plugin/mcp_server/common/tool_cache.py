@@ -101,6 +101,12 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "increase_heat_setpoint":   _DEVICE_TOOLS,
     "decrease_heat_setpoint":   _DEVICE_TOOLS,
     "set_cool_setpoint":        _DEVICE_TOOLS,
+    "increase_cool_setpoint":   _DEVICE_TOOLS,
+    "decrease_cool_setpoint":   _DEVICE_TOOLS,
+    # Z-Wave: a config param changes device behaviour; inclusion/exclusion adds/removes devices.
+    "zwave_send_config_parameter":         _DEVICE_TOOLS,
+    "zwave_enter_inclusion_mode":          _DEVICE_TOOLS,
+    "zwave_enter_exclusion_mode":          _DEVICE_TOOLS,
     "set_hvac_mode":            _DEVICE_TOOLS,
     "set_fan_mode":             _DEVICE_TOOLS,
     "set_fan_speed":            _DEVICE_TOOLS,

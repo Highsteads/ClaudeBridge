@@ -426,6 +426,118 @@ class ExtendedToolsHandler(BaseToolHandler):
         except Exception as exc:
             return self.handle_exception(exc, "action_group_get_dependencies")
 
+    def trigger_get_dependencies(self, trigger_id) -> Dict[str, Any]:
+        """Return the dependents of a trigger as a plain dict (parity with the
+        schedule/action-group versions — trigger.getDependencies exists too)."""
+        self.log_incoming_request("trigger_get_dependencies", {"trigger_id": trigger_id})
+        try:
+            tid = _coerce_id(trigger_id)
+            deps = indigo.trigger.getDependencies(tid)
+            deps_dict = _deps_to_plain(deps)
+            return {"success": True, "trigger_id": tid, "dependencies": deps_dict}
+        except Exception as exc:
+            return self.handle_exception(exc, "trigger_get_dependencies")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Z-Wave management (config parameters, network heal, inclusion/exclusion)
+    # ════════════════════════════════════════════════════════════════════════
+
+    def zwave_send_config_parameter(self, device_id, param_index: int,
+                                    param_size: int, param_value: int,
+                                    wait_for_ack: bool = True) -> Dict[str, Any]:
+        """Set a Z-Wave configuration parameter on a device (indigo.zwave.sendConfigParm).
+        param_size is the byte width Indigo should send (1, 2 or 4)."""
+        self.log_incoming_request("zwave_send_config_parameter",
+                                  {"device_id": device_id, "param_index": param_index,
+                                   "param_size": param_size, "param_value": param_value})
+        try:
+            did = _coerce_id(device_id)
+            try:
+                pidx, psize, pval = int(param_index), int(param_size), int(param_value)
+            except (TypeError, ValueError):
+                return {"success": False,
+                        "error": "param_index, param_size and param_value must be integers"}
+            if psize not in (1, 2, 4):
+                return {"success": False, "error": "param_size must be 1, 2 or 4 (bytes)"}
+            dev = indigo.devices[did]
+            indigo.zwave.sendConfigParm(device=dev, paramIndex=pidx, paramSize=psize,
+                                        paramValue=pval, waitUntilAck=_coerce_bool(wait_for_ack))
+            msg = (f"Sent Z-Wave config param {pidx}={pval} ({psize}-byte) to '{dev.name}'")
+            self.log_tool_outcome("zwave_send_config_parameter", True, msg)
+            return {"success": True, "device_id": did, "param_index": pidx,
+                    "param_size": psize, "param_value": pval, "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "zwave_send_config_parameter")
+
+    def zwave_start_network_optimize(self, device_id=None) -> Dict[str, Any]:
+        """Start a Z-Wave network optimisation (mesh heal). Optionally scope it to
+        one device/node; omit device_id to optimise the whole network."""
+        self.log_incoming_request("zwave_start_network_optimize", {"device_id": device_id})
+        try:
+            if device_id in (None, "", 0, "0"):
+                indigo.zwave.startNetworkOptimize()
+                target = "whole network"
+            else:
+                did = _coerce_id(device_id)
+                dev = indigo.devices[did]
+                node = getattr(dev, "address", None)
+                indigo.zwave.startNetworkOptimize(nodeId=node)
+                target = f"node {node} ('{dev.name}')"
+            msg = f"Started Z-Wave network optimisation ({target})"
+            self.log_tool_outcome("zwave_start_network_optimize", True, msg)
+            return {"success": True, "target": target, "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "zwave_start_network_optimize")
+
+    def zwave_stop_network_optimize(self) -> Dict[str, Any]:
+        """Stop an in-progress Z-Wave network optimisation."""
+        self.log_incoming_request("zwave_stop_network_optimize", {})
+        try:
+            indigo.zwave.stopNetworkOptimize()
+            self.log_tool_outcome("zwave_stop_network_optimize", True, "stopped")
+            return {"success": True, "message": "Stopped Z-Wave network optimisation"}
+        except Exception as exc:
+            return self.handle_exception(exc, "zwave_stop_network_optimize")
+
+    def zwave_enter_inclusion_mode(self, use_encryption: bool = False) -> Dict[str, Any]:
+        """Put the Z-Wave controller into INCLUSION mode to add a new device. The
+        controller stays in this mode until a device is added or you call
+        zwave_exit_inclusion_exclusion_mode. Physically pairs hardware."""
+        self.log_incoming_request("zwave_enter_inclusion_mode",
+                                  {"use_encryption": use_encryption})
+        try:
+            indigo.zwave.enterInclusionMode(useEncryption=_coerce_bool(use_encryption))
+            msg = ("Z-Wave controller is now in INCLUSION mode — activate the new device's "
+                   "pairing/learn button. Call zwave_exit_inclusion_exclusion_mode to cancel.")
+            self.log_tool_outcome("zwave_enter_inclusion_mode", True, msg)
+            return {"success": True, "mode": "inclusion",
+                    "encrypted": _coerce_bool(use_encryption), "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "zwave_enter_inclusion_mode")
+
+    def zwave_enter_exclusion_mode(self) -> Dict[str, Any]:
+        """Put the Z-Wave controller into EXCLUSION mode to remove a device.
+        Physically unpairs hardware."""
+        self.log_incoming_request("zwave_enter_exclusion_mode", {})
+        try:
+            indigo.zwave.enterExclusionMode()
+            msg = ("Z-Wave controller is now in EXCLUSION mode — activate the device's "
+                   "pairing/learn button to remove it. Call zwave_exit_inclusion_exclusion_mode to cancel.")
+            self.log_tool_outcome("zwave_enter_exclusion_mode", True, msg)
+            return {"success": True, "mode": "exclusion", "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "zwave_enter_exclusion_mode")
+
+    def zwave_exit_inclusion_exclusion_mode(self) -> Dict[str, Any]:
+        """Take the Z-Wave controller back out of inclusion/exclusion mode."""
+        self.log_incoming_request("zwave_exit_inclusion_exclusion_mode", {})
+        try:
+            indigo.zwave.exitInclusionExclusionMode()
+            self.log_tool_outcome("zwave_exit_inclusion_exclusion_mode", True, "exited")
+            return {"success": True, "message": "Z-Wave controller left inclusion/exclusion mode"}
+        except Exception as exc:
+            return self.handle_exception(exc, "zwave_exit_inclusion_exclusion_mode")
+
     # ════════════════════════════════════════════════════════════════════════
     # Sprinkler suite
     # ════════════════════════════════════════════════════════════════════════

@@ -618,13 +618,19 @@ class MCPHandler:
         
         # Prompt methods (stubs for now)
         elif method == "prompts/list":
+            from .prompts import list_prompts
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
-                "result": {"prompts": []}
+                "result": {"prompts": list_prompts()}
             }
         elif method == "prompts/get":
-            return self._json_error(msg_id, -32602, "Unknown prompt")
+            from .prompts import get_prompt
+            p = (params or {})
+            result = get_prompt(p.get("name", ""), p.get("arguments") or {})
+            if result is None:
+                return self._json_error(msg_id, -32602, f"Unknown prompt: {p.get('name')!r}")
+            return {"jsonrpc": "2.0", "id": msg_id, "result": result}
         
         # Unknown method
         else:
@@ -1377,6 +1383,35 @@ class MCPHandler:
                 "required": ["device_id"]
             },
             "function": self._tool_decrease_heat_setpoint
+        }
+
+        self._tools["increase_cool_setpoint"] = {
+            "description": ("Increase the cool setpoint on a thermostat by a given delta "
+                            "(default 0.5 degC)."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}],
+                                  "description": "The thermostat device ID"},
+                    "delta": {"type": "number", "description": "Degrees Celsius to increase by (default 0.5)"}
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_increase_cool_setpoint
+        }
+        self._tools["decrease_cool_setpoint"] = {
+            "description": ("Decrease the cool setpoint on a thermostat by a given delta "
+                            "(default 0.5 degC)."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}],
+                                  "description": "The thermostat device ID"},
+                    "delta": {"type": "number", "description": "Degrees Celsius to decrease by (default 0.5)"}
+                },
+                "required": ["device_id"]
+            },
+            "function": self._tool_decrease_cool_setpoint
         }
 
         self._tools["get_device_by_name"] = {
@@ -2499,6 +2534,19 @@ class MCPHandler:
             "inputSchema": {"type": "object", "properties": {}},
             "function": self._tool_get_reflector_url
         }
+        self._tools["get_reflector_status"] = {
+            "description": ("Return the full Indigo Reflector status dict (connection state, "
+                            "not just the URL) via indigo.server.getReflectorStatus()."),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_get_reflector_status
+        }
+        self._tools["get_indigo_paths"] = {
+            "description": ("Return this Indigo install's key filesystem paths — install folder, "
+                            "Logs folder, and the SQL Logger history DB (file + name). Use to locate "
+                            "the history DB / logs without hardcoding a version-specific path."),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_get_indigo_paths
+        }
 
         # ── Folder creation ───────────────────────────────────────────────
         self._tools["create_device_folder"] = {
@@ -2942,6 +2990,76 @@ class MCPHandler:
                 "required": ["action_group_id"]
             },
             "function": self._tool_action_group_get_dependencies
+        }
+        self._tools["trigger_get_dependencies"] = {
+            "description": "Get dependents of a trigger (what references it). Useful before deleting.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": {"anyOf": [{"type": "number"}, {"type": "string"}]}
+                },
+                "required": ["trigger_id"]
+            },
+            "function": self._tool_trigger_get_dependencies
+        }
+
+        # ── Z-Wave management ─────────────────────────────────────────────
+        self._tools["zwave_send_config_parameter"] = {
+            "description": ("Set a Z-Wave configuration parameter on a device. ADMIN. "
+                            "param_size is the byte width (1, 2 or 4). Use this to tune a "
+                            "sensor's behaviour (motion sensitivity, report intervals, etc.) "
+                            "without the Indigo GUI — check the device manual for parameter numbers."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id":   {"anyOf": [{"type": "number"}, {"type": "string"}]},
+                    "param_index": {"type": "integer", "description": "Config parameter number"},
+                    "param_size":  {"type": "integer", "description": "Byte width: 1, 2 or 4"},
+                    "param_value": {"type": "integer", "description": "Value to set"},
+                    "wait_for_ack": {"type": "boolean", "description": "Wait for the device to ack (default true)"}
+                },
+                "required": ["device_id", "param_index", "param_size", "param_value"]
+            },
+            "function": self._tool_zwave_send_config_parameter
+        }
+        self._tools["zwave_start_network_optimize"] = {
+            "description": ("Start a Z-Wave network optimisation (mesh heal). ADMIN. Omit device_id "
+                            "to heal the whole network, or pass one to heal around that node."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}, {"type": "null"}]}
+                }
+            },
+            "function": self._tool_zwave_start_network_optimize
+        }
+        self._tools["zwave_stop_network_optimize"] = {
+            "description": "Stop an in-progress Z-Wave network optimisation. ADMIN.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_zwave_stop_network_optimize
+        }
+        self._tools["zwave_enter_inclusion_mode"] = {
+            "description": ("Put the Z-Wave controller into INCLUSION mode to ADD a new device — "
+                            "physically pairs hardware. ADMIN. The user then activates the device's "
+                            "learn/pairing button. Call zwave_exit_inclusion_exclusion_mode to cancel."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "use_encryption": {"type": "boolean", "description": "Use S0 encryption during inclusion (default false)"}
+                }
+            },
+            "function": self._tool_zwave_enter_inclusion_mode
+        }
+        self._tools["zwave_enter_exclusion_mode"] = {
+            "description": ("Put the Z-Wave controller into EXCLUSION mode to REMOVE a device — "
+                            "physically unpairs hardware. ADMIN. Call zwave_exit_inclusion_exclusion_mode to cancel."),
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_zwave_enter_exclusion_mode
+        }
+        self._tools["zwave_exit_inclusion_exclusion_mode"] = {
+            "description": "Take the Z-Wave controller back out of inclusion/exclusion mode. ADMIN.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "function": self._tool_zwave_exit_inclusion_exclusion_mode
         }
 
         # ── Sprinkler suite ───────────────────────────────────────────────
@@ -3494,6 +3612,25 @@ class MCPHandler:
     # (action groups have no enable/disable in the IOM — see registration note).
     def _tool_action_group_get_dependencies(self, action_group_id) -> str:
         return self._ext_call("action_group_get_dependencies", action_group_id)
+    def _tool_trigger_get_dependencies(self, trigger_id) -> str:
+        return self._ext_call("trigger_get_dependencies", trigger_id)
+    # Z-Wave management -----------------------------------------------------
+    def _tool_zwave_send_config_parameter(self, device_id, param_index: int,
+                                          param_size: int, param_value: int,
+                                          wait_for_ack: bool = True) -> str:
+        return self._ext_call("zwave_send_config_parameter", device_id,
+                              param_index=param_index, param_size=param_size,
+                              param_value=param_value, wait_for_ack=wait_for_ack)
+    def _tool_zwave_start_network_optimize(self, device_id=None) -> str:
+        return self._ext_call("zwave_start_network_optimize", device_id)
+    def _tool_zwave_stop_network_optimize(self) -> str:
+        return self._ext_call("zwave_stop_network_optimize")
+    def _tool_zwave_enter_inclusion_mode(self, use_encryption: bool = False) -> str:
+        return self._ext_call("zwave_enter_inclusion_mode", use_encryption=use_encryption)
+    def _tool_zwave_enter_exclusion_mode(self) -> str:
+        return self._ext_call("zwave_enter_exclusion_mode")
+    def _tool_zwave_exit_inclusion_exclusion_mode(self) -> str:
+        return self._ext_call("zwave_exit_inclusion_exclusion_mode")
 
     # Sprinkler suite ------------------------------------------------------
     def _tool_sprinkler_set_zone(self, device_id, zone_index: int) -> str:
@@ -3937,6 +4074,13 @@ class MCPHandler:
             "description": "List all Indigo devices",
             "function": self._resource_list_devices
         }
+
+        # Live event-log tail as a readable resource (server-wide, all plugins).
+        self._resources["indigo://logs/recent"] = {
+            "name": "Recent event log",
+            "description": "The last 200 Indigo event-log lines (all plugins), newest last",
+            "function": self._resource_recent_logs
+        }
         
         self._resources["indigo://devices/{device_id}"] = {
             "name": "Device",
@@ -4166,6 +4310,34 @@ class MCPHandler:
             return safe_json_dumps(result)
         except Exception as e:
             self.logger.error(f"Increase heat setpoint error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_increase_cool_setpoint(self, device_id: int, delta: float = 0.5) -> str:
+        try:
+            return safe_json_dumps(self.device_control_handler.increase_cool_setpoint(device_id, delta))
+        except Exception as e:
+            self.logger.error(f"Increase cool setpoint error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_decrease_cool_setpoint(self, device_id: int, delta: float = 0.5) -> str:
+        try:
+            return safe_json_dumps(self.device_control_handler.decrease_cool_setpoint(device_id, delta))
+        except Exception as e:
+            self.logger.error(f"Decrease cool setpoint error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_get_reflector_status(self) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.get_reflector_status())
+        except Exception as e:
+            self.logger.error(f"get_reflector_status error: {e}")
+            return safe_json_dumps({"error": str(e), "success": False})
+
+    def _tool_get_indigo_paths(self) -> str:
+        try:
+            return safe_json_dumps(self.system_tools_handler.get_indigo_paths())
+        except Exception as e:
+            self.logger.error(f"get_indigo_paths error: {e}")
             return safe_json_dumps({"error": str(e), "success": False})
 
     def _tool_decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> str:
@@ -4527,6 +4699,32 @@ class MCPHandler:
             return safe_json_dumps(devices)
         except Exception as e:
             self.logger.error(f"Resource list devices error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _resource_recent_logs(self) -> str:
+        """Recent Indigo event-log lines (server-wide) as a readable resource.
+
+        Backed by indigo.server.getEventLogList — the same proven API query_event_log
+        uses — so no fragile live-broadcast subscription. TimeStamp is a LOCAL naive
+        datetime (not JSON-serialisable), so it's formatted to a string here. TypeVal:
+        1=Error, 3=Warning, 8=Info.
+        """
+        import indigo
+        _LEVELS = {1: "Error", 3: "Warning", 8: "Info"}
+        try:
+            rows = indigo.server.getEventLogList(returnAsList=True, lineCount=200)
+            lines = []
+            for r in rows:
+                ts = r.get("TimeStamp")
+                lines.append({
+                    "time":    ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts),
+                    "source":  r.get("TypeStr", ""),
+                    "level":   _LEVELS.get(r.get("TypeVal"), str(r.get("TypeVal", ""))),
+                    "message": r.get("Message", ""),
+                })
+            return safe_json_dumps({"count": len(lines), "lines": lines})
+        except Exception as e:
+            self.logger.error(f"Resource recent logs error: {e}")
             return safe_json_dumps({"error": str(e)})
     
     def _resource_get_device(self, device_id: str) -> str:

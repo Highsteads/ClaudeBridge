@@ -326,3 +326,39 @@ class DeviceControlHandler(BaseToolHandler):
             return result
         except Exception as e:
             return self.handle_exception(e, f"decreasing heat setpoint on device ID {device_id}")
+
+    def increase_cool_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Increase the cool setpoint by delta degrees Celsius."""
+        try:
+            device_id = self._coerce_device_id(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.increase_cool_setpoint(device_id, delta)
+            if "error" in result:
+                self.info_log(f"❌ Increase cool setpoint error: {result['error']}")
+            else:
+                self.info_log(
+                    f"❄️ {result.get('device_name', device_id)} "
+                    f"cool setpoint ↑ {result.get('previous')} → {result.get('current')} degC"
+                )
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"increasing cool setpoint on device ID {device_id}")
+
+    def decrease_cool_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Decrease the cool setpoint by delta degrees Celsius."""
+        try:
+            device_id = self._coerce_device_id(device_id)
+            if not isinstance(device_id, int):
+                return {"error": "device_id must be an integer", "success": False}
+            result = self.data_provider.decrease_cool_setpoint(device_id, delta)
+            if "error" in result:
+                self.info_log(f"❌ Decrease cool setpoint error: {result['error']}")
+            else:
+                self.info_log(
+                    f"❄️ {result.get('device_name', device_id)} "
+                    f"cool setpoint ↓ {result.get('previous')} → {result.get('current')} degC"
+                )
+            return result
+        except Exception as e:
+            return self.handle_exception(e, f"decreasing cool setpoint on device ID {device_id}")

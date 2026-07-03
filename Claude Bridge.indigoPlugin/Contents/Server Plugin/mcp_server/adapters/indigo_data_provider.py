@@ -706,6 +706,38 @@ class IndigoDataProvider(DataProvider):
             self.logger.error(f"Error setting cool setpoint on {device_id}: {e}")
             return {"error": str(e), "success": False}
 
+    def _adjust_cool_setpoint(self, device_id: int, delta: float) -> Dict[str, Any]:
+        """Nudge the cool setpoint by delta degrees Celsius (mirrors the heat pair)."""
+        try:
+            if device_id not in indigo.devices:
+                return {"error": f"Device {device_id} not found", "success": False}
+            dev = indigo.devices[device_id]
+            previous = dev.coolSetpoint if hasattr(dev, 'coolSetpoint') else None
+            if previous is None:
+                return {"error": f"Device '{dev.name}' has no cool setpoint", "success": False}
+            new_setpoint = round(float(previous) + float(delta), 1)
+            new_setpoint = max(self.SETPOINT_COOL_MIN_C,
+                               min(self.SETPOINT_COOL_MAX_C, new_setpoint))
+            indigo.thermostat.setCoolSetpoint(device_id, value=new_setpoint)
+            dev = indigo.devices[device_id]
+            confirmed = hasattr(dev, 'coolSetpoint')
+            current = dev.coolSetpoint if confirmed else None
+            self.logger.info(f"Adjusted cool setpoint '{dev.name}': {previous} -> {current} degC")
+            return {"success": True, "device_name": dev.name,
+                    "previous": previous, "current": current, "delta": delta,
+                    "confirmed": confirmed}
+        except Exception as e:
+            self.logger.error(f"Error adjusting cool setpoint on {device_id}: {e}")
+            return {"error": str(e), "success": False}
+
+    def increase_cool_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Increase the cool setpoint by delta degrees Celsius."""
+        return self._adjust_cool_setpoint(device_id, abs(float(delta)))
+
+    def decrease_cool_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Decrease the cool setpoint by delta degrees Celsius."""
+        return self._adjust_cool_setpoint(device_id, -abs(float(delta)))
+
     def set_hvac_mode(self, device_id: int, mode: str) -> Dict[str, Any]:
         """Set HVAC mode on a thermostat device."""
         _MODE_MAP = {
