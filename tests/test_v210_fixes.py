@@ -12,8 +12,6 @@
 import json
 import logging
 
-import pytest
-
 _LOG = logging.getLogger("test-v210")
 
 
