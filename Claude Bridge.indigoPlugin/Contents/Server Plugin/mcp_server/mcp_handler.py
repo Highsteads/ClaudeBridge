@@ -39,6 +39,8 @@ from .tools.energy_tools import EnergyToolsHandler
 from .tools.scripting_shell import ScriptingShellHandler
 from .tools.extended_tools import ExtendedToolsHandler
 from .tools.plugin_dev_tools import PluginDevToolsHandler
+from .tools.automation_detail import AutomationDetailHandler
+from .adapters.indidb import IndiDbStructureStore
 
 
 class MCPHandler:
@@ -257,6 +259,28 @@ class MCPHandler:
             data_provider=self.data_provider,
             logger=self.logger
         )
+        # Read-only view of the .indiDb for action steps / conditions the
+        # IOM never exposes. The lambda defers getDbFilePath() to first use
+        # (and lets tests substitute a fixture path).
+        self.indidb_store = IndiDbStructureStore(
+            db_path_supplier=self._get_db_file_path,
+            logger=self.logger,
+        )
+        self.automation_detail_handler = AutomationDetailHandler(
+            data_provider=self.data_provider,
+            structure_store=self.indidb_store,
+            log_query_handler=self.log_query_handler,
+            logger=self.logger,
+        )
+
+    @staticmethod
+    def _get_db_file_path():
+        """Path of Indigo's active database file (None outside Indigo)."""
+        try:
+            import indigo
+            return indigo.server.getDbFilePath()
+        except Exception:
+            return None
 
     def stop(self):
         """Stop the MCP handler and cleanup resources."""
@@ -1968,13 +1992,24 @@ class MCPHandler:
         }
 
         self._tools["enable_schedule"] = {
-            "description": "Enable an Indigo schedule by ID or name.",
+            "description": (
+                "Enable an Indigo schedule by ID or name. Optionally delay the "
+                "enable and/or auto-revert to disabled after duration_seconds."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "schedule_id": {
                         "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "Schedule ID (number) or name (string)"
+                    },
+                    "delay_seconds": {
+                        "type": "number",
+                        "description": "Seconds to wait before enabling (optional)"
+                    },
+                    "duration_seconds": {
+                        "type": "number",
+                        "description": "Auto-revert to disabled after this many seconds (optional)"
                     }
                 },
                 "required": ["schedule_id"]
@@ -1983,13 +2018,25 @@ class MCPHandler:
         }
 
         self._tools["disable_schedule"] = {
-            "description": "Disable an Indigo schedule by ID or name.",
+            "description": (
+                "Disable an Indigo schedule by ID or name. Optionally delay the "
+                "disable and/or auto-revert to enabled after duration_seconds "
+                "(e.g. silence a schedule for an hour)."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "schedule_id": {
                         "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "Schedule ID (number) or name (string)"
+                    },
+                    "delay_seconds": {
+                        "type": "number",
+                        "description": "Seconds to wait before disabling (optional)"
+                    },
+                    "duration_seconds": {
+                        "type": "number",
+                        "description": "Auto-revert to enabled after this many seconds (optional)"
                     }
                 },
                 "required": ["schedule_id"]
@@ -2007,13 +2054,24 @@ class MCPHandler:
         }
 
         self._tools["enable_trigger"] = {
-            "description": "Enable an Indigo trigger by ID or name.",
+            "description": (
+                "Enable an Indigo trigger by ID or name. Optionally delay the "
+                "enable and/or auto-revert to disabled after duration_seconds."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "trigger_id": {
                         "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "Trigger ID (number) or name (string)"
+                    },
+                    "delay_seconds": {
+                        "type": "number",
+                        "description": "Seconds to wait before enabling (optional)"
+                    },
+                    "duration_seconds": {
+                        "type": "number",
+                        "description": "Auto-revert to disabled after this many seconds (optional)"
                     }
                 },
                 "required": ["trigger_id"]
@@ -2022,18 +2080,242 @@ class MCPHandler:
         }
 
         self._tools["disable_trigger"] = {
-            "description": "Disable an Indigo trigger by ID or name.",
+            "description": (
+                "Disable an Indigo trigger by ID or name. Optionally delay the "
+                "disable and/or auto-revert to enabled after duration_seconds "
+                "(e.g. suppress a motion trigger for 30 minutes)."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "trigger_id": {
                         "anyOf": [{"type": "number"}, {"type": "string"}],
                         "description": "Trigger ID (number) or name (string)"
+                    },
+                    "delay_seconds": {
+                        "type": "number",
+                        "description": "Seconds to wait before disabling (optional)"
+                    },
+                    "duration_seconds": {
+                        "type": "number",
+                        "description": "Auto-revert to enabled after this many seconds (optional)"
                     }
                 },
                 "required": ["trigger_id"]
             },
             "function": self._tool_disable_trigger
+        }
+
+    # ── Automation introspection tools (v2.12.0) ─────────────────────────────
+
+        _detail_id_schema = {
+            "anyOf": [{"type": "number"}, {"type": "string"}],
+            "description": "Numeric ID (preferred) or exact name"
+        }
+        _include_scripts_schema = {
+            "type": "boolean",
+            "description": "Include embedded script source (default true; "
+                           "false returns line counts only)"
+        }
+
+        self._tools["get_trigger_details"] = {
+            "description": (
+                "Full definition of one trigger: event settings, conditions, "
+                "and the ACTION STEPS (device commands, variable sets, "
+                "embedded/linked scripts, plugin actions) that the IOM does "
+                "not expose. Read from Indigo's database file — very recent "
+                "edits may lag by a few minutes."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": _detail_id_schema,
+                    "include_scripts": _include_scripts_schema,
+                },
+                "required": ["trigger_id"]
+            },
+            "function": self._tool_get_trigger_details
+        }
+
+        self._tools["get_schedule_details"] = {
+            "description": (
+                "Full definition of one schedule: decoded timing (time/date "
+                "type, sun offsets, repeat interval), conditions, and action "
+                "steps including embedded scripts. Read from Indigo's "
+                "database file — very recent edits may lag by a few minutes."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": _detail_id_schema,
+                    "include_scripts": _include_scripts_schema,
+                },
+                "required": ["schedule_id"]
+            },
+            "function": self._tool_get_schedule_details
+        }
+
+        self._tools["get_action_group_details"] = {
+            "description": (
+                "Full definition of one action group: conditions and action "
+                "steps including embedded scripts. Read from Indigo's "
+                "database file — very recent edits may lag by a few minutes."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action_group_id": _detail_id_schema,
+                    "include_scripts": _include_scripts_schema,
+                },
+                "required": ["action_group_id"]
+            },
+            "function": self._tool_get_action_group_details
+        }
+
+        self._tools["find_automation_references"] = {
+            "description": (
+                "Reverse lookup: which triggers/schedules/action groups "
+                "reference a device, variable, or action group — role-tagged "
+                "(watches / condition_reads / acts_on / sets / executes, plus "
+                "heuristic script/plugin-config id matches) and following "
+                "action-group execution chains transitively. Cross-checked "
+                "against the server's own dependency graph. Richer than "
+                "dependency_map for automation debugging and safe-delete "
+                "checks."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["device", "variable", "action_group"],
+                        "description": "Kind of entity to find references to"
+                    },
+                    "entity_id": {
+                        "type": "number",
+                        "description": "Numeric entity ID"
+                    },
+                    "include_server_check": {
+                        "type": "boolean",
+                        "description": "Also merge indigo getDependencies "
+                                       "results (default true)"
+                    }
+                },
+                "required": ["entity_type", "entity_id"]
+            },
+            "function": self._tool_find_automation_references
+        }
+
+        self._tools["investigate_event"] = {
+            "description": (
+                "Answer 'what caused this device change?' — finds the change "
+                "in the event log, collects trigger/schedule/action-group "
+                "activity in a window around it, and ranks candidates by "
+                "temporal proximity plus structural evidence (does the "
+                "automation actually act on the device, directly or through "
+                "action-group chains?). Reports likelihood with evidence, "
+                "never certainty."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "type": "number",
+                        "description": "Device whose change to investigate "
+                                       "(or use search_text)"
+                    },
+                    "search_text": {
+                        "type": "string",
+                        "description": "Log-line fragment to locate the "
+                                       "target event instead of device_id"
+                    },
+                    "around_time": {
+                        "type": "string",
+                        "description": "Investigate the match nearest this "
+                                       "time (HH:MM[:SS] today, or full "
+                                       "YYYY-MM-DD HH:MM:SS)"
+                    },
+                    "occurrence": {
+                        "type": "number",
+                        "description": "1 = most recent match, 2 = one "
+                                       "before, ... (default 1)"
+                    },
+                    "lookback_seconds": {
+                        "type": "number",
+                        "description": "Candidate window before the event "
+                                       "(default 60)"
+                    },
+                    "lookahead_seconds": {
+                        "type": "number",
+                        "description": "Candidate window after the event "
+                                       "(default 5)"
+                    },
+                    "search_days": {
+                        "type": "number",
+                        "description": "How many days of logs to search for "
+                                       "the target event (default 2, max 14)"
+                    }
+                }
+            },
+            "function": self._tool_investigate_event
+        }
+
+        _update_fields_schema = {
+            "type": "object",
+            "description": "Fields to change, e.g. {\"name\": \"New name\"}"
+        }
+
+        self._tools["update_trigger"] = {
+            "description": (
+                "Edit a trigger's basic fields: name, description, and — for "
+                "device-state-change or variable-change triggers — the event "
+                "settings (device_id, state_selector, state_change_type, "
+                "state_value, variable_id, variable_change_type, "
+                "variable_value). Change types accept e.g. 'becomes_true', "
+                "'becomes_false', 'changes'. Action steps and conditions "
+                "cannot be edited (Indigo UI only). Returns before/after."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": _detail_id_schema,
+                    "fields": _update_fields_schema,
+                },
+                "required": ["trigger_id", "fields"]
+            },
+            "function": self._tool_update_trigger
+        }
+
+        self._tools["update_schedule"] = {
+            "description": (
+                "Rename a schedule or edit its description. Timing fields are "
+                "read-only via the API (Indigo UI only). Returns before/after."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": _detail_id_schema,
+                    "fields": _update_fields_schema,
+                },
+                "required": ["schedule_id", "fields"]
+            },
+            "function": self._tool_update_schedule
+        }
+
+        self._tools["update_action_group"] = {
+            "description": (
+                "Rename an action group or edit its description. Action steps "
+                "cannot be edited (Indigo UI only). Returns before/after."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action_group_id": _detail_id_schema,
+                    "fields": _update_fields_schema,
+                },
+                "required": ["action_group_id", "fields"]
+            },
+            "function": self._tool_update_action_group
         }
 
     # ── Audit tools ───────────────────────────────────────────────────────
@@ -3789,16 +4071,22 @@ class MCPHandler:
             self.logger.error(f"list_schedules error: {e}")
             return safe_json_dumps({"error": str(e)})
 
-    def _tool_enable_schedule(self, schedule_id) -> str:
+    def _tool_enable_schedule(self, schedule_id, delay_seconds=None,
+                              duration_seconds=None) -> str:
         try:
-            return safe_json_dumps(self.schedule_control_handler.enable_schedule(schedule_id))
+            return safe_json_dumps(self.schedule_control_handler.enable_schedule(
+                schedule_id, delay_seconds=delay_seconds,
+                duration_seconds=duration_seconds))
         except Exception as e:
             self.logger.error(f"enable_schedule error: {e}")
             return safe_json_dumps({"error": str(e)})
 
-    def _tool_disable_schedule(self, schedule_id) -> str:
+    def _tool_disable_schedule(self, schedule_id, delay_seconds=None,
+                               duration_seconds=None) -> str:
         try:
-            return safe_json_dumps(self.schedule_control_handler.disable_schedule(schedule_id))
+            return safe_json_dumps(self.schedule_control_handler.disable_schedule(
+                schedule_id, delay_seconds=delay_seconds,
+                duration_seconds=duration_seconds))
         except Exception as e:
             self.logger.error(f"disable_schedule error: {e}")
             return safe_json_dumps({"error": str(e)})
@@ -3810,18 +4098,102 @@ class MCPHandler:
             self.logger.error(f"list_triggers error: {e}")
             return safe_json_dumps({"error": str(e)})
 
-    def _tool_enable_trigger(self, trigger_id) -> str:
+    def _tool_enable_trigger(self, trigger_id, delay_seconds=None,
+                             duration_seconds=None) -> str:
         try:
-            return safe_json_dumps(self.schedule_control_handler.enable_trigger(trigger_id))
+            return safe_json_dumps(self.schedule_control_handler.enable_trigger(
+                trigger_id, delay_seconds=delay_seconds,
+                duration_seconds=duration_seconds))
         except Exception as e:
             self.logger.error(f"enable_trigger error: {e}")
             return safe_json_dumps({"error": str(e)})
 
-    def _tool_disable_trigger(self, trigger_id) -> str:
+    def _tool_disable_trigger(self, trigger_id, delay_seconds=None,
+                              duration_seconds=None) -> str:
         try:
-            return safe_json_dumps(self.schedule_control_handler.disable_trigger(trigger_id))
+            return safe_json_dumps(self.schedule_control_handler.disable_trigger(
+                trigger_id, delay_seconds=delay_seconds,
+                duration_seconds=duration_seconds))
         except Exception as e:
             self.logger.error(f"disable_trigger error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    # ── Automation introspection dispatch methods (v2.12.0) ─────────────────
+
+    def _tool_get_trigger_details(self, trigger_id, include_scripts=True) -> str:
+        try:
+            return safe_json_dumps(self.automation_detail_handler.get_details(
+                "trigger", trigger_id, include_scripts=bool(include_scripts)))
+        except Exception as e:
+            self.logger.error(f"get_trigger_details error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_get_schedule_details(self, schedule_id, include_scripts=True) -> str:
+        try:
+            return safe_json_dumps(self.automation_detail_handler.get_details(
+                "schedule", schedule_id, include_scripts=bool(include_scripts)))
+        except Exception as e:
+            self.logger.error(f"get_schedule_details error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_get_action_group_details(self, action_group_id,
+                                       include_scripts=True) -> str:
+        try:
+            return safe_json_dumps(self.automation_detail_handler.get_details(
+                "action_group", action_group_id,
+                include_scripts=bool(include_scripts)))
+        except Exception as e:
+            self.logger.error(f"get_action_group_details error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_find_automation_references(self, entity_type, entity_id,
+                                         include_server_check=True) -> str:
+        try:
+            return safe_json_dumps(
+                self.automation_detail_handler.find_automation_references(
+                    entity_type, entity_id,
+                    include_server_check=bool(include_server_check)))
+        except Exception as e:
+            self.logger.error(f"find_automation_references error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_investigate_event(self, device_id=None, search_text=None,
+                                around_time=None, occurrence=1,
+                                lookback_seconds=60, lookahead_seconds=5,
+                                search_days=2) -> str:
+        try:
+            return safe_json_dumps(self.automation_detail_handler.investigate_event(
+                device_id=device_id, search_text=search_text,
+                around_time=around_time, occurrence=occurrence,
+                lookback_seconds=lookback_seconds,
+                lookahead_seconds=lookahead_seconds,
+                search_days=search_days))
+        except Exception as e:
+            self.logger.error(f"investigate_event error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_update_trigger(self, trigger_id, fields) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.update_trigger(
+                trigger_id, fields))
+        except Exception as e:
+            self.logger.error(f"update_trigger error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_update_schedule(self, schedule_id, fields) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.update_schedule(
+                schedule_id, fields))
+        except Exception as e:
+            self.logger.error(f"update_schedule error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_update_action_group(self, action_group_id, fields) -> str:
+        try:
+            return safe_json_dumps(self.schedule_control_handler.update_action_group(
+                action_group_id, fields))
+        except Exception as e:
+            self.logger.error(f"update_action_group error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     # ── Audit dispatch methods ──────────────────────────────────────────────

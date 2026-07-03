@@ -5,7 +5,26 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Fable 5
 # Date:        03-07-2026
-# Version:     2.11.1
+# Version:     2.12.0
+#
+# v2.12.0 (03-07-2026): AUTOMATION INTROSPECTION feature batch (clean-room
+# reimplementation of the concepts in mlamoure's indigo-mcp-server v2026.6.0,
+# grounded in our own first-hand .indiDb schema harvest). New read-only
+# adapters/indidb/ (streaming iterparse of the live database via
+# indigo.server.getDbFilePath(), (mtime,size)-cached with stat throttle,
+# torn-read tolerant) + role-tagged reverse index (watches / condition_reads /
+# acts_on / sets / executes + heuristic script/plugin-config id matches,
+# cycle-safe AG->AG chain expansion). 8 new tools (158->166):
+# get_trigger_details / get_schedule_details / get_action_group_details (full
+# action steps, conditions, embedded scripts — the parts the IOM never
+# exposes), find_automation_references (file scan merged with server
+# getDependencies, source-labelled), investigate_event (ranks likely causes
+# of a device change: temporal proximity + structural evidence over the
+# dated event logs), update_trigger (writable event attrs + before/after
+# snapshot + not-applied warning; kStateChange/kVarChange enum coercion),
+# update_schedule / update_action_group (name+description — schedule TIMING
+# attrs live-confirmed read-only on 2025.2). enable/disable_trigger+schedule
+# gain delay_seconds/duration_seconds (native IOM auto-revert). Suite 307->347.
 #
 # v2.11.1 (03-07-2026): deferred-medium cleanup (the low-priority/heavier items
 # parked from the v2.10.x reviews). state_filter eq/ne are now numeric-aware

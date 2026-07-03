@@ -82,6 +82,10 @@ READ_TOOLS: Set[str] = {
     "plugin_show_packages_versions", "plugin_validate_xml",
     # v2.9.0 — read-only API drift detector
     "audit_api_coverage",
+    # v2.12.0 — automation introspection (read-only .indiDb structure store
+    # + event-log correlation)
+    "get_trigger_details", "get_schedule_details", "get_action_group_details",
+    "find_automation_references", "investigate_event",
 }
 
 # Tools that *modify* Indigo state — require 'write' or 'admin'.
@@ -118,6 +122,9 @@ WRITE_TOOLS: Set[str] = {
     "beep_device", "ping_device", "reset_energy_accumulator",
     "device_remove_delayed_actions",
     "all_lights_off", "all_lights_on", "all_devices_off",
+    # v2.12.0 — automation field editing (reversible renames/re-points via
+    # replaceOnServer; action steps and conditions are untouchable)
+    "update_trigger", "update_schedule", "update_action_group",
 }
 
 # Destructive / irreversible / code-execution / lifecycle / physical-security — require 'admin'.
