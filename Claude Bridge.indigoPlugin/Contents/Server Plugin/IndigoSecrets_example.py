@@ -5,9 +5,9 @@
 #              IndigoSecrets.py lives at:
 #                  /Library/Application Support/Perceptive Automation/IndigoSecrets.py
 #              It is NEVER committed to git. Keep a backup in a password manager.
-# Author:      CliveS & Claude Sonnet 4.6
-# Date:        24-03-2026
-# Version:     1.0
+# Author:      CliveS & Claude Opus 4.8
+# Date:        04-07-2026
+# Version:     1.1
 
 # ============================================================
 # HOW THIS FILE WORKS
@@ -59,7 +59,8 @@ ANTHROPIC_API_KEY = "sk-ant-..."
 
 # ============================
 # Octopus Energy
-# Required by: OctopusAccountReader plugin
+# Required by: SigenEnergyManager (Kraken account economics) + the
+#              octopus_tracker_rate.py rate script
 # ============================
 OCTOPUS_API_KEY = "sk_live_..."
 OCTOPUS_ACCOUNT = "A-XXXXXXXX"
@@ -73,16 +74,12 @@ OCTOPUS_GAS_MPRN   = ""
 OCTOPUS_GAS_SERIAL = ""
 
 # ============================
-# Octopus Energy - Export (optional, add when known)
+# Octopus Energy - Export (optional)
+#   Used by SigenEnergyManager v5.19+ for the Export Sync dashboard card
+#   (compares Sigenergy daily export against settled Octopus readings).
 # ============================
-# OCTOPUS_EXPORT_MPAN   = ""
-# OCTOPUS_EXPORT_SERIAL = ""
-
-# ============================
-# Home Assistant
-# ============================
-HA_URL   = "http://192.168.x.x:8123"
-HA_TOKEN = ""
+OCTOPUS_EXPORT_MPAN   = ""
+OCTOPUS_EXPORT_SERIAL = ""
 
 # ============================
 # OpenWeatherMap (optional)
@@ -110,14 +107,51 @@ MQTT_PASSWORD = ""
 
 # ============================
 # Location
-# Required by: SigenergySolar, weather integrations
+# Required by: SigenEnergyManager (solar forecast), other weather integrations
+# Leave at 0.0 to fall back to PluginConfig values; the SigenEnergyManager
+# plugin's built-in fallback is Big Ben, London (51.5007, -0.1246).
 # ============================
 LATITUDE  = 0.0
 LONGITUDE = 0.0
 
 # ============================
+# Dashboards plugin (optional)
+# Required by: Dashboards plugin (com.clives.indigoplugin.dashboards)
+# SIGEN_DASHBOARD_URL  — URL of an external Sigenergy mini-dashboard reached
+#                        via the "Open Legacy Sigen Dashboard" menu item.
+#                        Leave blank to disable the menu item.
+# DASHBOARDS_CAMERAS   — JSON string OR python list of camera dicts. Each
+#                        dict needs host, name, vendor ("dahua" or "hikvision").
+#                        Leave blank to disable the cameras grid + MJPEG
+#                        proxy + go2rtc. All cams share DAHUA_USER /
+#                        DAHUA_PASS (despite the name, those work for
+#                        Hikvision too).
+# ============================
+SIGEN_DASHBOARD_URL = ""
+DASHBOARDS_CAMERAS  = ""  # e.g. '[{"host":"192.168.1.50","name":"Door","vendor":"dahua"}]'
+# DASHBOARDS_HIDDEN_SCENES — action groups hidden from the Scenes page.
+#                        Entries match a group name, a group ID (string), or
+#                        "folder:Folder Name" to hide a whole folder.
+DASHBOARDS_HIDDEN_SCENES = []  # e.g. ["Internal Reset", "folder:Maintenance"]
+
+# ============================
+# ShellyDirect plugin (optional)
+# Required by: ShellyDirect plugin (com.clives.indigoplugin.shellydirect)
+# INDIGO_SERVER_IP         — LAN IP Shelly devices use to reach Indigo for
+#                            webhook callbacks (e.g. 192.168.1.10)
+# SHELLY_USERNAME          — optional, only if your Shelly devices have auth
+# SHELLY_PASSWORD          — optional, only if your Shelly devices have auth
+# SHELLY_DISCOVERY_SUBNETS — first three octets, comma-separated for multiple
+#                            subnets (e.g. "192.168.1" or "192.168.1, 10.0.1")
+# ============================
+INDIGO_SERVER_IP         = ""
+SHELLY_USERNAME          = ""
+SHELLY_PASSWORD          = ""
+SHELLY_DISCOVERY_SUBNETS = ""
+
+# ============================
 # Sigenergy Inverter (Modbus TCP)
-# Required by: SigenergySolar plugin
+# Required by: SigenEnergyManager plugin
 # ============================
 SIGENERGY_IP               = ""        # e.g. 192.168.x.x
 SIGENERGY_PORT             = 502
@@ -126,7 +160,7 @@ SIGENERGY_INVERTER_ADDRESS = 1
 
 # ============================
 # Solcast (Solar Forecast API)
-# Required by: SigenergySolar plugin
+# Required by: SigenEnergyManager plugin
 # ============================
 SOLCAST_API_KEY = ""
 
@@ -142,7 +176,7 @@ EXPORT_RATE_P = 15.0    # p/kWh flat export rate
 
 # ============================
 # Axle VPP (optional)
-# Required by: SigenergySolar plugin (Axle VPP feature)
+# Required by: SigenEnergyManager plugin (Axle VPP feature)
 # ============================
 AXLE_API_TOKEN = ""
 
@@ -169,6 +203,17 @@ AXLE_SUPPORT_EMAIL = ""
 CLAUDEBRIDGE_BEARER_TOKEN = ""
 
 # ============================
+# Indigo REST API client config
+# Required by: Dashboards plugin (HTML pages served from IWS).
+# INDIGO_URL     - server URL the browser dashboards talk to.
+# INDIGO_API_KEY - Bearer token for /v2/api requests. Same value as
+#                  CLAUDEBRIDGE_BEARER_TOKEN (Indigo's first secrets.json entry).
+# Leave blank to be prompted for them on first page visit.
+# ============================
+INDIGO_URL     = ""
+INDIGO_API_KEY = ""
+
+# ============================
 # InfluxDB (optional)
 # Required by: Claude Bridge plugin (historical_analysis MCP tools)
 # ============================
@@ -177,3 +222,62 @@ INFLUXDB_PORT     = 8086
 INFLUXDB_USERNAME = ""
 INFLUXDB_PASSWORD = ""
 INFLUXDB_DATABASE = ""
+
+# ============================
+# Alert email routing (per-plugin)
+# Required by: WaterLeakMonitor (leak detection), EvoHomeControl (overheat),
+#              SigenEnergyManager (power-cut grid lost/restored alerts)
+# Each plugin will fall back to a PluginConfig field if these are blank.
+# ============================
+WATERLEAK_ALERT_EMAIL = ""
+OVERHEAT_ALERT_EMAIL  = ""
+POWERCUT_EMAIL        = ""
+
+# ============================
+# Dahua / Amcrest IP cameras
+# Required by: Dashboards plugin (cameras.html snapshot page)
+# DAHUA_USER/PASS is a single account used for all listed cameras.
+# DAHUA_CAM_IPS lists every camera you own — the Dashboards plugin picks
+# the subset to display from its own config; other plugins/scripts can
+# iterate the full list.
+# ============================
+DAHUA_USER    = ""                          # camera admin username (e.g. "admin")
+DAHUA_PASS    = ""                          # camera admin password
+DAHUA_CAM_IPS = []                          # e.g. ["192.168.x.10", "192.168.x.11"]
+
+# ============================
+# Ecowitt Weather Station plugin
+# Required by: Ecowitt plugin (optional PASSKEY routing).
+# When set, the plugin only accepts pushes whose PASSKEY matches.
+# Find your gateway's PASSKEY on the Main Gateway device's `passkey` state
+# after the first push arrives. Leave blank to accept any.
+# ============================
+ECOWITT_PASSKEY = ""
+
+# UniFi UDR / Network controller (read-only diagnostics)
+UNIFI_HOST     = "192.168.1.1"
+UNIFI_USERNAME = ""
+UNIFI_PASSWORD = ""
+
+# Command Centre dedicated console access token (optional; gates the web console)
+COMMANDCENTRE_TOKEN = ""
+
+# ============================
+# ClaudeBridge — outbound webhook egress allow-list
+# Required by: ClaudeBridge event-subscription webhooks (optional feature).
+# Hosts/IPs/CIDRs the home is permitted to POST device state to. DEFAULT-DENY:
+# an empty list means no webhook target can be registered at all. Forms:
+#   "hooks.example.com"      exact host
+#   "*.example.com"          any sub-domain (not the bare domain)
+#   "203.0.113.5"            a specific PUBLIC IP
+#   "192.168.1.50/32"        a private/LAN host — CIDR form is REQUIRED to opt a
+#                            private/loopback range past the SSRF hard block
+# ============================
+WEBHOOK_ALLOWLIST = []
+
+# Pushover application/API token (create at https://pushover.net/apps/build)
+# Required by: ClaudeBridge webhook->Pushover relay (examples/webhook_pushover_relay.py)
+PUSHOVER_APP_TOKEN = ""
+
+# Weekly home digest recipient (weekly_home_digest.py)
+DIGEST_EMAIL = ""
