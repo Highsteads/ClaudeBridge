@@ -4,8 +4,20 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Fable 5
-# Date:        03-07-2026
-# Version:     2.12.0
+# Date:        17-07-2026
+# Version:     2.12.1
+#
+# v2.12.1 (17-07-2026): dispatch hardening — unknown tool arguments are now
+# REJECTED with -32602 naming both the unknown and the valid argument names.
+# Previously an unrecognised kwarg either TypeError'd or (when a client strips
+# non-schema properties before sending) silently vanished so the parameter's
+# DEFAULT ran instead — live-hit 17-Jul: enable_device called with enable=false
+# re-ENABLED the device and reported success. enable_device also gained
+# `enable` as a documented alias of `value` (explicit value wins). Sweep of the
+# other boolean-default tools found them fail-safe (delete_children=False,
+# ignore_conditions=False, restart=False etc. all default to doing LESS).
+# Tests 349 -> 352 (test_dispatch.py: unknown-arg rejection, known-arg
+# dispatch, alias resolution).
 #
 # v2.12.0 (03-07-2026): AUTOMATION INTROSPECTION feature batch (clean-room
 # reimplementation of the concepts in mlamoure's indigo-mcp-server v2026.6.0,

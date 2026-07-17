@@ -829,6 +829,24 @@ class MCPHandler:
                 f"Missing required argument(s) for {tool_name}: {', '.join(sorted(missing))}"
             )
 
+        # ── Unknown-argument rejection (v2.12.1) ─────────────────────────
+        # A misnamed argument must FAIL LOUDLY, never silently vanish: a
+        # dropped/unknown kwarg either TypeErrors in the **kwargs call below or
+        # — worse, when a client strips non-schema properties before sending —
+        # the parameter's DEFAULT silently wins and the tool does the opposite
+        # of what the caller asked (live-hit 17-Jul-2026: enable_device called
+        # with enable=false ran with value=True and re-enabled the device while
+        # reporting success). Name the unknowns AND the valid names in the error.
+        props = schema.get("properties") or {}
+        if props:
+            unknown = [k for k in tool_args if k not in props]
+            if unknown:
+                return self._json_error(
+                    msg_id, -32602,
+                    f"Unknown argument(s) for {tool_name}: {', '.join(sorted(unknown))} "
+                    f"— valid arguments: {', '.join(sorted(props))}"
+                )
+
         # ── Per-call progress emitter (used by long-running tools) ───────
         emitter = ProgressEmitter(request_id=msg_id, tool_name=tool_name)
         self._emitter_local.emitter = emitter
@@ -2997,7 +3015,10 @@ class MCPHandler:
                 "properties": {
                     "device_id": {"anyOf": [{"type": "number"}, {"type": "string"}]},
                     "value":     {"type": "boolean",
-                                  "description": "True to enable, False to disable (default True)"}
+                                  "description": "True to enable, False to disable (default True)"},
+                    "enable":    {"type": "boolean",
+                                  "description": "Alias of value — the name callers "
+                                                 "naturally reach for (v2.12.1)"}
                 },
                 "required": ["device_id"]
             },
@@ -3869,8 +3890,11 @@ class MCPHandler:
         return self._ext_call("duplicate_device", device_id, new_name=new_name)
     def _tool_move_device_to_folder(self, device_id, folder_id) -> str:
         return self._ext_call("move_device_to_folder", device_id, folder_id)
-    def _tool_enable_device(self, device_id, value: bool = True) -> str:
-        return self._ext_call("enable_device", device_id, value=value)
+    def _tool_enable_device(self, device_id, value=None, enable=None) -> str:
+        # `enable` is an accepted alias for `value` (v2.12.1) — explicit value
+        # wins if a caller supplies both; default remains True (enable).
+        resolved = value if value is not None else (enable if enable is not None else True)
+        return self._ext_call("enable_device", device_id, value=resolved)
     def _tool_rename_device(self, device_id, new_name: str) -> str:
         return self._ext_call("rename_device", device_id, new_name)
     def _tool_device_toggle(self, device_id) -> str:

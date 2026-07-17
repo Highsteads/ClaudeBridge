@@ -169,3 +169,50 @@ def test_happy_path_shape_and_telemetry(tmp_path):
     assert len(h._tool_call_log) == 1
     entry = h._tool_call_log[0]
     assert entry["name"] == "list_devices" and entry["ok"] is True
+
+
+# ── v2.12.1: unknown-argument rejection + enable_device alias ─────────────────
+
+_ADMIN_SCOPES = {"tokens": {"admin-key": {"name": "admin-tests",
+                                          "scopes": ["admin"]}}}
+
+
+def test_unknown_argument_rejected_loudly(tmp_path):
+    """A misnamed argument must return -32602 naming it — never be silently
+    dropped so a parameter default inverts the caller's intent (live-hit
+    17-Jul-2026: enable_device called with enable=false re-ENABLED the device)."""
+    calls = []
+    tools = {"demo": _tool(lambda value=True: calls.append(value) or "ok",
+                           properties={"value": {"type": "boolean"}})}
+    h = _make_handler(tmp_path, scopes_data=_ADMIN_SCOPES, tools=tools)
+    resp = h._handle_tools_call(1, {"name": "demo", "arguments": {"enable": False}},
+                                {"authorization": "Bearer admin-key"})
+    assert resp["error"]["code"] == -32602
+    assert "enable" in resp["error"]["message"]
+    assert "value" in resp["error"]["message"], "error must list the valid names"
+    assert calls == [], "the tool must NOT have run"
+
+
+def test_known_arguments_still_dispatch(tmp_path):
+    calls = []
+    tools = {"demo": _tool(lambda value=True: calls.append(value) or "ok",
+                           properties={"value": {"type": "boolean"}})}
+    h = _make_handler(tmp_path, scopes_data=_ADMIN_SCOPES, tools=tools)
+    resp = h._handle_tools_call(2, {"name": "demo", "arguments": {"value": False}},
+                                {"authorization": "Bearer admin-key"})
+    assert "error" not in resp
+    assert calls == [False]
+
+
+def test_enable_device_alias_resolves(tmp_path):
+    """enable= is an accepted alias of value= and must carry the caller's
+    False through to the extended handler."""
+    h = object.__new__(MCPHandler)
+    seen = {}
+    h._ext_call = lambda name, did, value: seen.update({"name": name, "value": value}) or "ok"
+    MCPHandler._tool_enable_device(h, 42, enable=False)
+    assert seen == {"name": "enable_device", "value": False}
+    MCPHandler._tool_enable_device(h, 42)            # default stays enable
+    assert seen["value"] is True
+    MCPHandler._tool_enable_device(h, 42, value=False, enable=True)
+    assert seen["value"] is False, "explicit value wins over the alias"
