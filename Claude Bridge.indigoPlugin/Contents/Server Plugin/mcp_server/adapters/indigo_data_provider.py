@@ -12,6 +12,7 @@ import time
 from typing import Dict, List, Any, Optional
 
 from .data_provider import DataProvider
+from ..common.device_props import device_dict
 from ..common.json_encoder import filter_json, KEYS_TO_KEEP_MINIMAL_DEVICES
 
 # indigo.server.log(level=...) wants a Python logging int — a string is silently
@@ -59,7 +60,7 @@ class IndigoDataProvider(DataProvider):
         try:
             for dev_id in indigo.devices:
                 dev = indigo.devices[dev_id]
-                devices.append(dict(dev))
+                devices.append(device_dict(dev))
         except Exception as e:
             self.logger.error(f"Error getting all devices: {e}")
             
@@ -79,7 +80,7 @@ class IndigoDataProvider(DataProvider):
         try:
             if device_id in indigo.devices:
                 dev = indigo.devices[device_id]
-                return dict(dev)
+                return device_dict(dev)
         except Exception as e:
             self.logger.error(f"Error getting device {device_id}: {e}")
             
@@ -222,7 +223,7 @@ class IndigoDataProvider(DataProvider):
         try:
             for dev_id in indigo.devices:
                 dev = indigo.devices[dev_id]
-                devices.append(dict(dev))
+                devices.append(device_dict(dev))
         except Exception as e:
             self.logger.error(f"Error getting all devices (unfiltered): {e}")
             
@@ -923,18 +924,18 @@ class IndigoDataProvider(DataProvider):
             # Try exact match first
             for dev in indigo.devices:
                 if dev.name == name_stripped:
-                    return dict(dev)
+                    return device_dict(dev)
             # Fallback: case-insensitive
             for dev in indigo.devices:
                 if dev.name.lower() == name_lower:
-                    return dict(dev)
+                    return device_dict(dev)
             # Partial match — collect ALL substring matches so we never silently
             # return the first of several candidates (which could mutate the
             # wrong physical device). One match: return it. More than one:
             # return an ambiguity error listing the candidates to disambiguate.
             partial = [dev for dev in indigo.devices if name_lower in dev.name.lower()]
             if len(partial) == 1:
-                return dict(partial[0])
+                return device_dict(partial[0])
             if len(partial) > 1:
                 candidates = [{"id": dev.id, "name": dev.name} for dev in partial]
                 return {

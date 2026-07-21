@@ -22,6 +22,7 @@ except ImportError:
     pass
 
 from ..base_handler import BaseToolHandler
+from ...common.device_props import device_address
 from ...adapters.data_provider import DataProvider
 from ...common.battery import battery_pct as _battery_pct
 
@@ -452,10 +453,18 @@ class AuditHandler(BaseToolHandler):
                 name_map.setdefault(dev.name.lower(), []).append(
                     {"id": dev.id, "name": dev.name, "enabled": dev.enabled}
                 )
-                addr = (getattr(dev, "address", "") or "").strip()
+                # device_address, not dev.address: many plugins leave the
+                # native attribute EMPTY and keep the real address in their own
+                # props. Live 21-Jul-2026 — all 19 ShellyDirect devices had an
+                # empty dev.address, so this check was blind to every one of
+                # them and reported "no duplicates" over a real IP clash.
+                addr = device_address(dev)
                 if addr:
                     addr_map.setdefault(addr, []).append(
-                        {"id": dev.id, "name": dev.name, "address": addr}
+                        {"id": dev.id, "name": dev.name, "address": addr,
+                         "addressSource": ("native"
+                                           if (getattr(dev, "address", "") or "").strip()
+                                           else "pluginProps")}
                     )
 
             duplicate_names = [

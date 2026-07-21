@@ -5,7 +5,34 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        21-07-2026
-# Version:     2.12.2
+# Version:     2.12.3
+#
+# v2.12.3 (21-07-2026): FOREIGN DEVICE PROPS — `dev.pluginProps` is EMPTY for
+# devices owned by another plugin when read from this plugin's host. Measured
+# live: 197 of 221 devices estate-wide returned {} from `pluginProps`, while
+# `dev.globalProps[dev.pluginId]` was correct for 204 of them (the remaining 15
+# genuinely have no plugin props). `dict(dev)` carried the same empty copy, so
+# every tool that serialised a device inherited the hole — and an empty read
+# looks exactly like "this property is not set", which is the dangerous part.
+# It produced a duplicate-IP audit reporting "no duplicates" over a live clash
+# that was corrupting energy data, and nearly a wrong severity call on a plugin
+# review finding.
+# * New `mcp_server/common/device_props.py`: `device_props()` /
+#   `device_props_with_source()` read globalProps[pluginId] first, then
+#   pluginProps, then ownerProps last (ownerProps can be STALE — it lagged
+#   several saved-prop versions on an ApplianceMonitor device the same day).
+#   Every read is exception-safe; junk input returns empty, never raises.
+# * `device_dict()` replaces bare `dict(dev)` at all six serialisation sites in
+#   indigo_data_provider, so search_entities(detail='full'), get_device_by_id,
+#   get_device_by_name and the vector store all get repaired props. It also
+#   records `pluginPropsSource` ("globalProps"/"pluginProps"/"ownerProps"/
+#   "empty") so an empty result is stated rather than inferred.
+# * `device_address()` + `resolvedAddress`: find_conflicts' shared-address
+#   check read only the native `dev.address`, and ALL 19 ShellyDirect devices
+#   have an empty one (137 devices estate-wide do) — it was blind to every one
+#   of them. It now resolves the address from plugin props too and reports
+#   `addressSource`.
+# Tests 352 -> 377 (tests/test_device_props.py, 25 new).
 #
 # v2.12.2 (21-07-2026): shared plugin_utils.py refreshed to v1.3 — the
 # estate-wide propagation of the four Appliance Monitor deep-review fixes.

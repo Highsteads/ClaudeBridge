@@ -621,6 +621,7 @@ class HistoricalAnalysisHandler(BaseToolHandler):
                 'allowOnStateChange', 'supportsStatusRequest', 'buttonGroupCount',
                 'supportsAllOff', 'supportsAllLightsOnOff', 'folderId', 'subModel',
                 'subType', 'lastChanged', 'lastSuccessfulComm', 'ownerProps',
+                'pluginPropsSource', 'resolvedAddress',
                 'energyAccumBaseTime', 'energyAccumTimeDelta'
             }
             

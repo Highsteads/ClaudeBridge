@@ -17,6 +17,7 @@ KEYS_TO_KEEP_MINIMAL_DEVICES = [
     "protocol",
     "pluginId",
     "address",
+    "resolvedAddress",
     "enabled",
     "onState",
     "brightness",
