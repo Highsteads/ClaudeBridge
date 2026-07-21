@@ -1,12 +1,12 @@
 # Claude Bridge — Indigo Plugin
 
-**Claude Bridge** is an [Indigo](https://www.indigodomo.com) home automation plugin that lets [Claude](https://www.anthropic.com/claude) see and control your actual Indigo system — your real devices, your real variables, your real event log — from an ordinary conversation.
+**Claude Bridge** is an [Indigo](https://www.indigodomo.com) home automation plugin that lets [Claude](https://www.anthropic.com/claude) see and control your Indigo system — your own devices, your own variables, your own event log — from an ordinary conversation.
 
-Once it's installed you can simply ask. "Which lights are on?" "Turn the fan on for ten minutes." "Why didn't the bathroom light go off last night?" Claude looks at your system, does the thing, and checks its own work — no scripting, no copying device IDs about, no screenshots.
+Once it's installed you just ask. "Which lights are on?" "Turn the fan on for ten minutes." "Why didn't the bathroom light go off last night?" Claude looks at your system, does the thing, and checks its own work — no scripting, no copying device IDs about, no screenshots.
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.9.0
+**Version:** 2.12.1
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -14,7 +14,7 @@ Once it's installed you can simply ask. "Which lights are on?" "Turn the fan on 
 
 ## How it works
 
-Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a little go-between script — installed and wired up for you automatically — passes Claude's requests to Indigo's own built-in web server, where the plugin answers them. That gives Claude **166 tools** for reading and controlling your system.
+Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **166 tools** for reading and controlling your system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
@@ -25,14 +25,13 @@ Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://cla
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
-From your point of view all of that is invisible — you open a Claude Code session and the Indigo tools are just there. Everything stays on your own machine and goes through Indigo's existing web server, protected by the same access key Indigo already uses.
+None of that shows from where you sit — you open a Claude Code session and the Indigo tools are there. Everything stays on your own machine and goes through Indigo's existing web server, behind the same access key Indigo already uses.
 
 ### Why this matters
 
 Before Claude Bridge, asking AI to help with Indigo meant pasting
 screenshots, copying device IDs by hand, and hoping the AI remembered
-what state your Hall PIR was in three messages ago. Claude was writing
-into a vacuum.
+what state your Hall PIR was in three messages ago. Claude was guessing.
 
 With Claude Bridge, Claude can:
 
@@ -57,23 +56,23 @@ coined by Andrej Karpathy in early 2025 for a particular style of
 working with AI coding agents: you describe what you want in plain
 language, the AI writes the code, you describe what you want changed,
 the AI iterates. You guide by intent rather than by syntax. The "vibe"
-is the conversational, iterative feedback loop — fewer keystrokes, more
-back-and-forth. Done well, it produces working code in a fraction of
-the time it would take to write line-by-line; done carelessly, it
-produces plausible-looking code that doesn't run. The difference is
-having a feedback loop that lets the AI **verify** what it just wrote.
+is the back-and-forth itself — fewer keystrokes, more conversation.
+Done well it produces working code far quicker than writing it line by
+line, done carelessly it produces code that looks plausible and doesn't
+run. What separates the two is a feedback loop that lets the AI
+**verify** what it just wrote.
 
 Claude Bridge turns the Indigo system itself into that feedback loop.
 
-A confession that doubles as a credential: **this plugin was itself written by
-vibe coding.** Every version of Claude Bridge has been developed through a
+A confession, which I offer as the best evidence I have: **this plugin was
+itself written by vibe coding.** Every version of Claude Bridge came out of a
 conversation with Claude — described in plain English, written by Claude, and
 tested by Claude against the live Indigo server, using the previous version of
-this very plugin as its eyes and hands. The twenty-odd other plugins on this
-GitHub account were built and are maintained the same way, with Claude Bridge
-as the feedback loop — the git history backs every word of that, if you fancy
+this very plugin to see and act. The twenty-odd other plugins on this GitHub
+account were built and are maintained the same way, with Claude Bridge as the
+feedback loop, and the git history backs every word of that if you fancy
 checking. So the examples below aren't speculation about what you could do.
-They're a description of how the thing you're reading about came to exist.
+They describe how the thing you are reading about came to exist.
 
 Examples of how a session might go:
 
@@ -114,8 +113,8 @@ Claude Code:
 6. Asks you to trigger a setpoint change and watches the events via
    `subscribe` + `get_events` to verify the state updates flow
 
-When something fails, Claude sees the error in your log immediately and
-fixes it. The iteration loop is seconds, not minutes.
+When something fails, Claude sees the error in your log at once and
+fixes it. Each turn of the loop takes seconds, not minutes.
 
 ### Example 3 — debug something weird
 
@@ -132,45 +131,48 @@ Claude Code:
 5. Proposes the fix, you say yes, Claude `write_script`s the change
    and tells you it's done
 
-This kind of cross-referencing diagnostic would take a human 20-30
-minutes; Claude does it in a couple of round-trips.
+That kind of cross-referencing would take me 20-30 minutes, Claude does
+it in a couple of round-trips.
 
 ### What you get out of it
 
-- **Plugin development goes from days to hours.** Most of the
-  boilerplate (Devices.xml, action callbacks, MenuItems.xml, file
-  headers) is generated. Your input is the design and the review.
+- **Plugin work goes from days to hours.** Claude generates most of the
+  scaffolding (Devices.xml, action callbacks, MenuItems.xml, file
+  headers). You bring the design and the review.
 - **Scripts you'd put off get written.** A 50-line automation that
-  would take an evening of digging through Indigo's IOM docs becomes a
+  would cost you an evening digging through Indigo's IOM docs becomes a
   five-minute prompt.
-- **Debugging is faster.** Claude has the whole log, the whole device
-  tree, every script, and every plugin's state in scope at once. You
-  don't have to context-load it manually.
+- **Debugging is faster.** Claude holds the whole log, the whole device
+  tree, every script and every plugin's state at once, so you never
+  have to load that context by hand.
 - **You can be sloppy in your prompt.** "The hall light isn't doing
   the thing" works, because Claude can look at the hall light, see
-  what it's doing, and infer what "the thing" might be.
+  what it's doing, and work out what "the thing" might be.
 
 ### Honest limits
 
-- **Claude can't read Indigo Trigger conditions or Action Group
-  steps** — Indigo's API doesn't expose those. Claude can read what
-  scripts do, but for Trigger logic it has to work from the names and
-  ask you what they do.
-- **Claude can't enable/disable plugins or create Triggers
-  programmatically** — Indigo restricts those to the UI. You'll get a
-  scaffolded `.indigoPlugin` bundle and instructions; you do the
-  enable click.
-- **Vibe coding is a force multiplier, not a magic wand.** Review
-  what's been written. Test changes. The point of Claude Bridge is
-  that *verification is one tool call away* — use it.
+- **Claude can't create Triggers, and can't enable or disable a
+  plugin** — Indigo keeps those to the UI. You get a scaffolded
+  `.indigoPlugin` bundle and instructions, then you do the enable
+  click yourself.
+- **Claude reads your automations, it doesn't rewrite them blind.**
+  Trigger conditions and Action Group steps used to be invisible.
+  They aren't any more — `get_trigger_details`, `get_action_group_details`
+  and `find_automation_references` read them straight out of Indigo's
+  own database, embedded scripts included. Editing them still goes
+  through `update_trigger` and `update_schedule`, which cover the
+  firing configuration rather than every step.
+- **Vibe coding speeds you up, it doesn't think for you.** Read what
+  has been written. Test the changes. The point of Claude Bridge is
+  that checking is one tool call away — so use it.
 
 ---
 
 ## What it does
 
-Claude Bridge exposes **166 MCP tools** across **16 categories** that give Claude
-Code full read/write access to a running Indigo server. The capability surface
-falls into the following groups — the full per-tool listing is in
+Claude Bridge gives Claude Code **166 MCP tools** across **16 categories**, enough
+to read and change anything on a running Indigo server. They fall into the groups
+below, and every tool is listed by name in
 [Available Tools](#available-tools) further down.
 
 ### Devices
@@ -302,11 +304,11 @@ falls into the following groups — the full per-tool listing is in
 ### Scripting shell — ADMIN scope
 - **`execute_indigo_python`** — runs arbitrary Python in this plugin's
   Indigo context via in-process `exec()`. `mode='exec'` returns captured
-  stdout/stderr; `mode='eval'` returns the expression's repr. Used for
-  one-shot Indigo API calls not covered by a dedicated tool. Treat as
-  full code execution on the Indigo server.
+  stdout/stderr, `mode='eval'` returns the expression's repr. Use it for
+  one-shot Indigo API calls no dedicated tool covers. Treat it as full
+  code execution on the Indigo server.
 - **`execute_plugin_menu_item`** — clicks a plugin's `<MenuItem>` under the
-  Indigo client's Plugins menu via AppleScript GUI scripting; the only
+  Indigo client's Plugins menu via AppleScript GUI scripting — the only
   known way to fire a third-party plugin's menu callback from outside.
   Requires the Indigo GUI running plus System Events permission.
 
@@ -351,8 +353,8 @@ it.** The plugin can hold its own API key from
 [console.anthropic.com](https://console.anthropic.com), but it only uses it for
 one thing: writing AI summaries inside the historical-analysis tool, which also
 needs an InfluxDB database set up — a niche feature. **All 166 tools work
-perfectly without this key.** If you do set one up, it bills per use
-(typically pennies a month), entirely separately from your subscription.
+without this key.** If you do set one up, it bills per use (pennies a month,
+as a rule), separately from your subscription.
 
 In short: **pay for Claude Pro or Max, skip the API key**, and everything in
 this README works.
@@ -385,8 +387,8 @@ Then do these two final steps manually:
 2. **Restart Claude Code** — you should see 166 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
-> `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first; the
-> plugin's PluginConfig dialog is a fallback only. Keys this plugin reads:
+> `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and
+> the plugin's PluginConfig dialog is a fallback only. Keys this plugin reads:
 > `ANTHROPIC_API_KEY` (optional — see "What this costs" above),
 > `CLAUDEBRIDGE_BEARER_TOKEN`, and (optional) `INFLUXDB_HOST`,
 > `INFLUXDB_PORT`, `INFLUXDB_USERNAME`, `INFLUXDB_PASSWORD`, `INFLUXDB_DATABASE`.
@@ -493,7 +495,7 @@ pointing the user to either fill in the matching field or add the key to
 `IndigoSecrets.py`.
 
 **Keys read by this plugin**: `ANTHROPIC_API_KEY` (optional — used only for
-the AI summaries in the historical-analysis tool; every other tool works
+the AI summaries in the historical-analysis tool, every other tool works
 without it), `CLAUDEBRIDGE_BEARER_TOKEN` (fallback for the web-server access
 key — first preference is Indigo's own `Preferences/secrets.json`), and the
 optional `INFLUXDB_*` keys for the historical-analysis tools.
@@ -732,7 +734,7 @@ _Destructive / irreversible / code-execution / lifecycle / physical-security. Re
 
 ## Why is there a go-between script?
 
-Claude Code and Indigo's web server don't quite speak the same dialect out of the box, so a small script sits between them and smooths things over. It speaks to Claude Code the way Claude Code expects, attaches your Indigo access key to every request so you never have to think about it, keeps the connection alive and quietly repairs it if Indigo restarts, and tidies up the odd formatting difference between the two sides. It's installed and configured for you — the only time you'd ever look at it is if something in the Troubleshooting section below sends you there.
+Claude Code and Indigo's web server expect slightly different things of each other, so a small script sits between them and translates. It answers Claude Code in the form it expects, attaches your Indigo access key to every request so you never have to think about it, holds the connection open and rebuilds it quietly if Indigo restarts, and irons out the formatting differences between the two sides. It is installed and configured for you, and the only time you would ever open it is if something in Troubleshooting below sends you there.
 
 ---
 
@@ -766,7 +768,8 @@ the same target doesn't fix it — pip skips because the directory is "already
 present". The reliable recovery is to wipe and let Indigo re-install on the
 next start:
 ```bash
-DST="/Library/Application Support/Perceptive Automation/Indigo 2025.2/Plugins/Claude Bridge.indigoPlugin"
+# Finds your installed bundle whatever Indigo version you are on
+DST=$(ls -d "/Library/Application Support/Perceptive Automation/Indigo "*/Plugins/"Claude Bridge.indigoPlugin" | tail -1)
 rm -rf "$DST/Contents/Packages"
 mkdir -p "$DST/Contents/Packages"
 # Then reload Claude Bridge via the Plugins menu (or the Indigo GUI), which
@@ -774,10 +777,10 @@ mkdir -p "$DST/Contents/Packages"
 ```
 Confirmed 2026-05-23 — every package directory in Packages/ was missing its
 `__init__.py` after a routine restart, and clearing the whole tree restored a
-fully-working install. This pattern can affect any plugin that ships a
-`requirements.txt`; treat it as the standard recovery if a restart suddenly
-starts logging `module 'X' has no attribute 'Y'` for previously-working
-imports.
+fully-working install. This can happen to any plugin that ships a
+`requirements.txt`, so treat it as the standard recovery if a restart suddenly
+starts logging `module 'X' has no attribute 'Y'` for imports that worked
+yesterday.
 
 ---
 
@@ -850,6 +853,24 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.12.1 (2026-07-17)
+A small fix with sharp teeth. If a client sent a tool an argument it didn't recognise, the plugin used to ignore it and carry on with the default. That bit here: `enable_device` called with `enable=false` quietly re-enabled the device. Unknown arguments are now refused outright, with an error naming the ones the tool does accept, and `enable_device` takes `enable` as an alias for `value`.
+
+349 → 352 tests.
+
+### 2.12.0 (2026-07-03)
+The big one — Claude can now read your automations, not just your devices.
+
+Until this release a Trigger was barely more than a name. Claude could see one existed and what it was called, and that was all. Three new tools — `get_trigger_details`, `get_schedule_details` and `get_action_group_details` — now return the whole thing: the event settings, the conditions, and every action step in order, embedded scripts included. Where a step runs a linked script file, the path comes back decoded as well.
+
+Two more build on that. `find_automation_references` answers "what actually uses this device?" by cross-checking Indigo's own dependency list against a scan of the automations themselves, and labels where each answer came from. `investigate_event` takes a device that changed and ranks what probably caused it, weighing how close each candidate was in time against whether it genuinely acts on that device. It gives you evidence and an order of likelihood, never a verdict.
+
+You can make limited changes too. `update_trigger` edits a trigger's name, description and device or variable event settings, and `update_schedule` and `update_action_group` cover name and description. Schedule timing turns out to be read-only on Indigo 2025.2, so the tool tells you that instead of failing quietly. Enabling or disabling a trigger or schedule now takes an optional delay and duration as well, so "silence the motion trigger for half an hour" is one call and Indigo reverts it on its own.
+
+All of it reads Indigo's own database file directly, read-only, and never writes to it. Parsing this house — 73 triggers, 38 schedules and 48 action groups — takes 32ms.
+
+158 → 166 tools. 309 → 349 tests.
 
 ### 2.11.1 (2026-07-03)
 A tidy-up pass that cleared the lower-priority items parked from the big reviews. All under-the-hood, nothing you need to do.
