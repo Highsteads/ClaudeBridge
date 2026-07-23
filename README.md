@@ -866,7 +866,7 @@ A new `list_uncataloged_devices` tool — the companion to v2.14.0's capability 
 167 tools. 413 → 414 tests.
 
 ### 2.14.0 (2026-07-23)
-Claude now knows what your devices can actually do — with a nod to Simon Clark's [Indigo MCP Lite](https://github.com/simons-plugins/indigo-mcp-lite), whose v2026.9.0 update inspired this.
+Claude now knows what your devices can actually do.
 
 Indigo's scripting API tells an assistant a device's type and states, but not its capabilities. Ask to set a plain on/off dimmer to "warm white" and the old behaviour was to fire the command and relay a cryptic failure. Now Claude Bridge carries a capability catalogue — generated from your own estate — and two things follow. Asking about a device includes what it supports (colour, white, white temperature, setpoints). And a command the catalogue says can't work is refused up front with a plain-English reason: ask for RGB on a Fibaro dimmer and you get back "it supports on/off, status requests" instead of a mystery error. The refusal only ever fires when the catalogue positively knows a device lacks a capability — an uncatalogued device is never blocked, so control is never taken away, only made more honest.
 
