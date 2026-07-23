@@ -138,6 +138,19 @@ def render_action_steps(
             if step.get("AutoComplement"):
                 entry["auto_complement_seconds"] = step.get("ComplementCountdown")
 
+        elif step_class == schema.ACTION_CLASS_THERMOSTAT:
+            entry["device"] = _named(name_lookup, "device", step.get("DeviceID"))
+            entry["action"] = schema.label(schema.THERMOSTAT_ACTION_CODES,
+                                           step.get("HVACAction"))
+            raw_value = step.get("HVACActionValue")
+            if raw_value not in (None, ""):
+                entry["value"] = raw_value
+
+        elif step_class == schema.ACTION_CLASS_UNIVERSAL:
+            entry["device"] = _named(name_lookup, "device", step.get("DeviceID"))
+            entry["action"] = schema.label(schema.UNIVERSAL_ACTION_CODES,
+                                           step.get("DeviceAction"))
+
         elif step_class == schema.ACTION_CLASS_EXEC_GROUP:
             entry["action_group"] = _named(name_lookup, "action_group",
                                            step.get("ActionGroupID"))

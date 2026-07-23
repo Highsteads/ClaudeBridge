@@ -67,13 +67,20 @@ TIME_DATE_OPERATORS: Dict[int, str] = {
 }
 
 # Logic code inside a Type 100 compound condition.
+# Live-verified 23-Jul-2026 by semantics: a trigger with two DISJOINT time
+# windows (21:00-24:00 / 00:00-06:00) stores Logic 0 — only OR can satisfy
+# that — while "var A false AND var B false" pairs store Logic 1. The
+# previous {0: AND} assignment was inverted (mis-inferred from a survey
+# where every sampled compound happened to be single-condition or AND).
 CONDITION_LOGIC: Dict[int, str] = {
-    0: "AND",
-    1: "OR (unverified)",
+    0: "OR (any)",
+    1: "AND (all)",
 }
 
 # ── Action step Class codes (<Action> entries in ActionSteps) ────────────────
 ACTION_CLASS_DEVICE       = 1
+ACTION_CLASS_THERMOSTAT   = 3
+ACTION_CLASS_UNIVERSAL    = 9
 ACTION_CLASS_EXEC_GROUP   = 100
 ACTION_CLASS_SCRIPT       = 101
 ACTION_CLASS_VARIABLE     = 201
@@ -81,14 +88,22 @@ ACTION_CLASS_PLUGIN       = 999
 
 ACTION_CLASSES: Dict[int, str] = {
     ACTION_CLASS_DEVICE:     "device action",
+    ACTION_CLASS_THERMOSTAT: "thermostat action",
+    ACTION_CLASS_UNIVERSAL:  "device utility action",
     ACTION_CLASS_EXEC_GROUP: "execute action group",
     ACTION_CLASS_SCRIPT:     "execute script",
     ACTION_CLASS_VARIABLE:   "set variable",
     ACTION_CLASS_PLUGIN:     "plugin action",
 }
 
-# DeviceAction codes (kDeviceAction as stored in the database).
+# DeviceAction codes — verified 23-Jul-2026 against the live runtime enum
+# (indigo.kDeviceAction dump). NB Lock=28/Unlock=29: the earlier 29=lock
+# claim came from misreading LockManager trigger NAMES ("Lock <person>
+# Front Door Unlock Code") — those PIN triggers unlock, and store 29.
 DEVICE_ACTION_CODES: Dict[int, str] = {
+    0:  "all off",
+    1:  "all lights on",
+    2:  "all lights off",
     4:  "turn on",
     5:  "turn off",
     6:  "toggle",
@@ -97,8 +112,39 @@ DEVICE_ACTION_CODES: Dict[int, str] = {
     9:  "dim by",
     10: "set colour levels",
     11: "request status",
-    29: "lock",
-    30: "unlock (unverified)",
+    28: "lock",
+    29: "unlock",
+    30: "open",
+    31: "close",
+}
+
+# HVACAction codes on Class 3 steps (indigo.kThermostatAction, runtime dump
+# 23-Jul-2026).
+THERMOSTAT_ACTION_CODES: Dict[int, str] = {
+    0:   "set heat setpoint",
+    1:   "set cool setpoint",
+    2:   "increase heat setpoint",
+    3:   "increase cool setpoint",
+    4:   "decrease heat setpoint",
+    5:   "decrease cool setpoint",
+    7:   "request status (all)",
+    8:   "request mode",
+    9:   "request equipment state",
+    10:  "request temperatures",
+    11:  "request humidities",
+    12:  "request deadbands",
+    13:  "request setpoints",
+    100: "set HVAC mode",
+    101: "set fan mode",
+}
+
+# DeviceAction codes on Class 9 steps (indigo.kUniversalAction, runtime dump
+# 23-Jul-2026).
+UNIVERSAL_ACTION_CODES: Dict[int, str] = {
+    11:  "request status",
+    30:  "beep",
+    100: "energy usage update",
+    101: "energy accumulator reset",
 }
 
 # VarAction codes (action Class 201).

@@ -21,6 +21,7 @@ from mcp_server.adapters.indidb.store import IndiDbStructureStore
 # MIN_HEURISTIC_ID floor so the heuristics can see them).
 DEV_LAMP     = 111222333
 DEV_SENSOR   = 444555666
+DEV_TRV      = 555666777
 VAR_MODE     = 777888999
 AG_INNER     = 121212121
 AG_OUTER     = 343434343
@@ -40,6 +41,10 @@ SYNTHETIC_DB = textwrap.dedent(f"""\
             <Device type="dict">
                 <ID type="integer">{DEV_SENSOR}</ID>
                 <Name type="string">Test Motion Sensor</Name>
+            </Device>
+            <Device type="dict">
+                <ID type="integer">{DEV_TRV}</ID>
+                <Name type="string">Test Radiator TRV</Name>
             </Device>
         </DeviceList>
         <VariableList type="vector">
@@ -61,7 +66,7 @@ SYNTHETIC_DB = textwrap.dedent(f"""\
                 <Condition type="dict">
                     <Type type="integer">100</Type>
                     <ConditionList type="dict">
-                        <Logic type="integer">0</Logic>
+                        <Logic type="integer">1</Logic>
                         <Conditions type="vector">
                             <Condition type="dict">
                                 <Type type="integer">3</Type>
@@ -127,6 +132,17 @@ SYNTHETIC_DB = textwrap.dedent(f"""\
                             <ScriptSource type="string">import indigo
     indigo.device.turnOff({DEV_LAMP})</ScriptSource>
                             <ScriptType type="integer">0</ScriptType>
+                        </Action>
+                        <Action type="dict">
+                            <Class type="integer">3</Class>
+                            <DeviceID type="integer">{DEV_TRV}</DeviceID>
+                            <HVACAction type="integer">0</HVACAction>
+                            <HVACActionValue type="string">18.5</HVACActionValue>
+                        </Action>
+                        <Action type="dict">
+                            <Class type="integer">9</Class>
+                            <DeviceID type="integer">{DEV_SENSOR}</DeviceID>
+                            <DeviceAction type="integer">30</DeviceAction>
                         </Action>
                     </ActionSteps>
                 </ActionGroup>
@@ -252,6 +268,35 @@ def test_embedded_script_heuristic(index):
     roles = _roles_for(index, "device", DEV_LAMP, SCHED_NIGHT)
     assert "script_reference" in roles
     assert "acts_on" in roles
+
+
+def test_thermostat_and_universal_steps_index_acts_on(index):
+    # Class 3 (HVAC) step on the TRV and Class 9 (universal beep) on the
+    # sensor must both surface as acts_on — they were invisible pre-2.12.1.
+    trv_refs = [r for r in index.references_to("device", DEV_TRV)
+                if r["id"] == SCHED_NIGHT]
+    assert any(r["role"] == "acts_on" and "set heat setpoint" in r.get("detail", "")
+               for r in trv_refs), trv_refs
+    sensor_refs = [r for r in index.references_to("device", DEV_SENSOR)
+                   if r["id"] == SCHED_NIGHT]
+    assert any(r["role"] == "acts_on" and "beep" in r.get("detail", "")
+               for r in sensor_refs), sensor_refs
+
+
+def test_lock_unlock_codes_match_runtime_enum():
+    from mcp_server.adapters.indidb import schema
+    # Runtime-dump verified 23-Jul-2026: Lock=28, Unlock=29, Open=30, Close=31.
+    assert schema.DEVICE_ACTION_CODES[28] == "lock"
+    assert schema.DEVICE_ACTION_CODES[29] == "unlock"
+    assert schema.DEVICE_ACTION_CODES[30] == "open"
+    assert schema.DEVICE_ACTION_CODES[31] == "close"
+
+
+def test_condition_logic_orientation():
+    from mcp_server.adapters.indidb import schema
+    # Live-verified: 1=AND(all), 0=OR(any) — previously inverted.
+    assert schema.CONDITION_LOGIC[1].startswith("AND")
+    assert schema.CONDITION_LOGIC[0].startswith("OR")
 
 
 def test_plugin_config_heuristic(index):

@@ -4,8 +4,23 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
-# Date:        21-07-2026
-# Version:     2.12.3
+# Date:        23-07-2026
+# Version:     2.12.4
+#
+# v2.12.4 (23-07-2026): decode-table corrections found comparing against
+# Simon's indigo-mcp-lite v2026.8.0 and settled by LIVE RUNTIME ENUM DUMPS:
+# (1) indidb CONDITION_LOGIC was INVERTED — 1=AND(all), 0=OR(any); every
+# compound condition since v2.12.0 rendered with the wrong logic word
+# (proven by a trigger with two disjoint time windows storing Logic 0).
+# (2) kDeviceAction Lock=28/Unlock=29 (was 29=lock — misread from
+# LockManager trigger NAMES "Lock <person> Front Door Unlock Code"; those
+# PIN triggers unlock); added 0/1/2 all-off/lights-on/lights-off + 30 open/
+# 31 close. (3) NEW decoders for action Class 3 (kThermostatAction —
+# setpoints/modes, 15 codes) and Class 9 (kUniversalAction — beep/status/
+# energy, 4 codes): these steps previously rendered "unknown" AND were
+# invisible to the reverse index, so a trigger whose only action was a
+# setpoint change showed no acts_on link in find_automation_references /
+# investigate_event. Suite 380 green.
 #
 # v2.12.3 (21-07-2026): FOREIGN DEVICE PROPS — `dev.pluginProps` is EMPTY for
 # devices owned by another plugin when read from this plugin's host. Measured

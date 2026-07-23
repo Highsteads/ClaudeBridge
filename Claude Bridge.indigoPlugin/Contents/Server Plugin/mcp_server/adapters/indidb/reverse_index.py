@@ -236,6 +236,18 @@ def _index_action_steps(
             index.add(("device", step["DeviceID"]),
                       Reference(container_kind, container_id, "acts_on", detail=detail))
 
+        elif step_class == schema.ACTION_CLASS_THERMOSTAT and isinstance(
+                step.get("DeviceID"), int):
+            detail = schema.label(schema.THERMOSTAT_ACTION_CODES, step.get("HVACAction"))
+            index.add(("device", step["DeviceID"]),
+                      Reference(container_kind, container_id, "acts_on", detail=detail))
+
+        elif step_class == schema.ACTION_CLASS_UNIVERSAL and isinstance(
+                step.get("DeviceID"), int):
+            detail = schema.label(schema.UNIVERSAL_ACTION_CODES, step.get("DeviceAction"))
+            index.add(("device", step["DeviceID"]),
+                      Reference(container_kind, container_id, "acts_on", detail=detail))
+
         elif step_class == schema.ACTION_CLASS_VARIABLE and isinstance(step.get("VarID"), int):
             index.add(("variable", step["VarID"]),
                       Reference(container_kind, container_id, "sets"))
