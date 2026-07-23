@@ -855,6 +855,11 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.13.2 (2026-07-23)
+Battery readings that were never percentages are no longer read as percentages. Ecowitt sensors and the Universal Z-Wave Sensor report battery as a simple OK/LOW flag, and USB-powered presence sensors report a bare zero — the low-battery tools took all of these at face value and cried wolf about five healthy devices while the genuinely dying ones queued behind them. The tools now honour the OK/LOW flag and ignore a bare zero, so a low-battery alert once again means what it says.
+
+396 → 401 tests.
+
 ### 2.13.1 (2026-07-23)
 A one-line kindness. The `device_history` tool now warns you up front that SQL Logger column names are stored lowercase (`batterysoc`, not `batterySoc`) and that rows are sparse, so the first query lands right instead of returning a wall of bare timestamps.
 

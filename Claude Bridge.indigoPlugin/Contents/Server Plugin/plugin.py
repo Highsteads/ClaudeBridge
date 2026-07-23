@@ -5,7 +5,15 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        23-07-2026
-# Version:     2.13.1
+# Version:     2.13.2
+#
+# v2.13.2 (23-07-2026): battery_pct (common/battery.py) no longer misreads
+# binary battery conventions as percentages. Ecowitt and UniversalZWaveSensor
+# publish `battery` as a 0/1 OK/LOW flag with a batteryLow companion state —
+# a reading of 0/1 now defers to batteryLow (LOW -> flags as 1%, OK -> no
+# battery %). A bare 0 with no batteryLow means unknown/USB-powered (z2m
+# FP300s) and is ignored. find_low_battery/home_status/audit_home dropped
+# from 8 false-positive-laden entries to the 3 genuine lows, live-verified.
 #
 # v2.13.1 (23-07-2026): device_history tool DESCRIPTION now teaches the two
 # SQL Logger traps up front — columns are stored lowercase (batterysoc, not
