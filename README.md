@@ -558,7 +558,7 @@ _Pure queries — no state change. Require the `read` scope._
 | `calculate_sunset` | Sunset for today (default) or YYYY-MM-DD date_iso. |
 | `check_plugin_updates` | Sweep every installed plugin and report which have a compatible update available. Single call replaces N get_plugin_status calls. |
 | `dependency_map` | Show everything that references a given device or variable. Returns which Python scripts reference it by ID, plus a full list of all triggers and action groups (Indigo's API does not expose their internal conditions, so content filtering is not possible — the full list is returned for manual review). |
-| `device_history` | Read recent SQL Logger history for one device. Returns timestamp + non-null state columns. Far cheaper than analyze_historical_data for a focused trend query. |
+| `device_history` | Read recent SQL Logger history for one device. Returns timestamp + non-null state columns. Far cheaper than analyze_historical_data for a focused trend query. Column names are stored LOWERCASE (batterysoc, not batterySoc); an unknown name is an error listing the valid columns. Rows are sparse — only changed values are written, so forward-fill before deriving trends. |
 | `energy_compare` | Compare two energy periods. Default: this week vs last week. Returns kWh deltas and % changes for PV, import, export, home consumption, and self-sufficiency. |
 | `energy_daily_summary` | Parse SigenEnergyManager daily log files into per-day kWh totals: PV generated, grid imported, grid exported, home consumption, max/min SOC, and overall self-sufficiency percentage. |
 | `energy_log_days` | Return raw SigenEnergyManager log lines for the last N days (max 14). Useful for asking Claude to reason about specific events, decisions, or anomalies. |
@@ -854,6 +854,31 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.13.1 (2026-07-23)
+A one-line kindness. The `device_history` tool now warns you up front that SQL Logger column names are stored lowercase (`batterysoc`, not `batterySoc`) and that rows are sparse, so the first query lands right instead of returning a wall of bare timestamps.
+
+### 2.13.0 (2026-07-23)
+Search that speaks human, with a tip of the hat to Simon Clark's [Indigo MCP Lite](https://github.com/simons-plugins/indigo-mcp-lite) — two of these ideas are adapted from his rewrite.
+
+Search now understands everyday words: "telly" finds the TV plug, "lounge" finds Living Room devices, "rad" finds the radiator TRVs, "socket" finds the plugs. Around thirty word groups, matched locally with no cloud service and nothing extra installed, and a device literally matching what you typed always still comes top.
+
+`device_history` grew up too. Asking for a column that doesn't exist is now a clear error listing the real column names, where before it silently dropped them and handed back rows of bare timestamps. Under the bonnet the queries now range on the table's primary key instead of scanning an un-indexed timestamp column — the old way held a read lock for the whole scan and could stall the SQL Logger on the big tables. And if any records in Indigo's database file fail to parse, the automation tools now say how many were skipped instead of quietly under-reporting.
+
+380 → 396 tests.
+
+### 2.12.4 (2026-07-23)
+Corrections to the automation decoder, found by comparing notes with MCP Lite and settled by dumping Indigo's own runtime enums.
+
+The word shown for a compound condition was inverted — what Indigo stores as 1 means "all must match" and 0 means "any may match", and the tool had them the other way round. Lock and unlock codes were also swapped (a trigger named "Lock … Front Door Unlock Code" turns out to unlock, which in hindsight the name was trying to tell us). And thermostat setpoint steps and utility steps (beep, energy reset) now decode properly — before this they showed as "unknown" and a trigger whose only job was a setpoint change looked like it touched nothing at all.
+
+### 2.12.3 (2026-07-21)
+A subtle one with wide reach. Read from inside this plugin, `dev.pluginProps` comes back empty for devices owned by *other* plugins — 197 of the 221 devices in this house. Every tool that serialised a device inherited that hole, and an empty read looks identical to "no properties set". Device serialisation now reads through `globalProps` first and says where the answer came from, and `find_conflicts` is no longer blind to the 137 devices whose address lives in plugin properties rather than the native field.
+
+352 → 377 tests.
+
+### 2.12.2 (2026-07-21)
+Housekeeping to the shared `plugin_utils.py` (v1.3), refreshed across the estate: calling the timestamp filter twice no longer double-stamps every log line, the module imports cleanly outside Indigo, and a new shared `as_bool()` stops the string `"false"` counting as true.
 
 ### 2.12.1 (2026-07-17)
 A small fix with sharp teeth. If a client sent a tool an argument it didn't recognise, the plugin used to ignore it and carry on with the default. That bit here: `enable_device` called with `enable=false` quietly re-enabled the device. Unknown arguments are now refused outright, with an error naming the ones the tool does accept, and `enable_device` takes `enable` as an alias for `value`.

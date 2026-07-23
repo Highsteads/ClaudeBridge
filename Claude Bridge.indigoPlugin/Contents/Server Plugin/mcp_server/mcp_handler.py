@@ -3676,7 +3676,11 @@ class MCPHandler:
         self._tools["device_history"] = {
             "description": ("Read recent SQL Logger history for one device. Returns "
                             "timestamp + non-null state columns. Far cheaper than "
-                            "analyze_historical_data for a focused trend query."),
+                            "analyze_historical_data for a focused trend query. "
+                            "Column names are stored LOWERCASE (batterysoc, not "
+                            "batterySoc); an unknown name is an error listing the "
+                            "valid columns. Rows are sparse — only changed values "
+                            "are written, so forward-fill before deriving trends."),
             "inputSchema": {
                 "type": "object",
                 "properties": {

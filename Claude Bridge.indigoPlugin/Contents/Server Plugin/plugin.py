@@ -5,7 +5,13 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        23-07-2026
-# Version:     2.13.0
+# Version:     2.13.1
+#
+# v2.13.1 (23-07-2026): device_history tool DESCRIPTION now teaches the two
+# SQL Logger traps up front — columns are stored lowercase (batterysoc, not
+# batterySoc; unknown names error listing the valid set) and rows are sparse
+# (only changed values written — forward-fill before deriving trends). Saves
+# every client the 300-wasted-rows first hit. Description-only change.
 #
 # v2.13.0 (23-07-2026): mcp-lite v2026.8.0 BORROW BATCH (patterns harvested
 # from Simon's rewrite, clean-room). (1) SEARCH SYNONYM LAYER — new
