@@ -883,7 +883,7 @@ Battery readings that were never percentages are no longer read as percentages. 
 A one-line kindness. The `device_history` tool now warns you up front that SQL Logger column names are stored lowercase (`batterysoc`, not `batterySoc`) and that rows are sparse, so the first query lands right instead of returning a wall of bare timestamps.
 
 ### 2.13.0 (2026-07-23)
-Search that speaks human, with a tip of the hat to Simon Clark's [Indigo MCP Lite](https://github.com/simons-plugins/indigo-mcp-lite) — two of these ideas are adapted from his rewrite.
+Search that speaks human.
 
 Search now understands everyday words: "telly" finds the TV plug, "lounge" finds Living Room devices, "rad" finds the radiator TRVs, "socket" finds the plugs. Around thirty word groups, matched locally with no cloud service and nothing extra installed, and a device literally matching what you typed always still comes top.
 
@@ -892,7 +892,7 @@ Search now understands everyday words: "telly" finds the TV plug, "lounge" finds
 380 → 396 tests.
 
 ### 2.12.4 (2026-07-23)
-Corrections to the automation decoder, found by comparing notes with MCP Lite and settled by dumping Indigo's own runtime enums.
+Corrections to the automation decoder, settled by dumping Indigo's own runtime enums.
 
 The word shown for a compound condition was inverted — what Indigo stores as 1 means "all must match" and 0 means "any may match", and the tool had them the other way round. Lock and unlock codes were also swapped (a trigger named "Lock … Front Door Unlock Code" turns out to unlock, which in hindsight the name was trying to tell us). And thermostat setpoint steps and utility steps (beep, energy reset) now decode properly — before this they showed as "unknown" and a trigger whose only job was a setpoint change looked like it touched nothing at all.
 
