@@ -5,7 +5,28 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        23-07-2026
-# Version:     2.13.2
+# Version:     2.14.0
+#
+# v2.14.0 (23-07-2026): DEVICE-CATALOGUE CAPABILITY AWARENESS. Claude Bridge
+# now knows what a device can actually DO, from CliveS's own
+# indigo-device-catalogue (our data, no external dependency, vendored as a
+# no-I/O snapshot). New common/device_catalog: profile_for by (pluginId,
+# deviceTypeId) over a DENSE capability map (explicit True AND False per
+# flag). Two effects: (1) advisory REFUSALS — set_color refuses RGB/white/
+# white-temperature, and set_heat/cool_setpoint refuse a setpoint, when the
+# catalogue says the device can't do it, with a message naming what it DOES
+# support (e.g. an FGD212 dimmer refuses RGB: "it supports on/off, status
+# requests") instead of firing and relaying a cryptic failure; (2) device
+# detail (get_device_by_id / get_device_by_name) gains a
+# catalog_capabilities block. DISCIPLINE: refuse ONLY on an explicit
+# catalogue False — uncataloged/unreadable devices and unpinned flags pass
+# straight through; the catalogue only ever adds knowledge, never blocks
+# control it lacks data for. Also fixed the catalogue generator: the merged
+# catalog.json stripped False flags (only-true, for the Dashboards renderer);
+# the vendored snapshot now reads the DENSE by-class files so refusals can
+# fire. Regenerated live against the estate (52 current profiles). Concept
+# borrowed from Simon's indigo-mcp-lite v2026.9.0; data and code our own.
+# Suite 396->413. No new tools (rides existing control + detail tools).
 #
 # v2.13.2 (23-07-2026): battery_pct (common/battery.py) no longer misreads
 # binary battery conventions as percentages. Ecowitt and UniversalZWaveSensor

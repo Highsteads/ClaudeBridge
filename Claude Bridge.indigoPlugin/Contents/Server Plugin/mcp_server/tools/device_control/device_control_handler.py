@@ -5,12 +5,45 @@ Device control handler for MCP server.
 import logging
 from typing import Dict, Any, Optional
 
+try:
+    import indigo
+except ImportError:
+    indigo = None
+
 from ...adapters.data_provider import DataProvider
+from ...common import device_catalog
 from ..base_handler import BaseToolHandler
 
 
 class DeviceControlHandler(BaseToolHandler):
     """Handler for device control operations."""
+
+    def _capability_refusal(
+        self, device_id: int, flag: str, action_label: str
+    ) -> Optional[Dict[str, Any]]:
+        """Advisory device-catalogue pre-check.
+
+        Returns an error dict to return immediately when the catalogue says
+        this device cannot do ``action_label`` (a profile exists AND carries
+        ``flag`` explicitly False) — with a message naming what it DOES
+        support, so the caller corrects course instead of firing a command
+        that would fail cryptically. Returns None (proceed) for every other
+        case: uncataloged device, unresolvable device, or a flag the profile
+        doesn't pin False. The catalogue only ever adds knowledge; it never
+        blocks control it lacks data for.
+        """
+        if indigo is None:
+            return None
+        try:
+            dev = indigo.devices[device_id]
+        except Exception:
+            return None  # can't resolve the device → never block
+        message = device_catalog.refusal(dev, flag, action_label)
+        if message is None:
+            return None
+        self.info_log(f"⛔ {message}")
+        return {"error": message, "success": False,
+                "unsupported_capability": flag}
     
     def __init__(
         self,
@@ -174,6 +207,10 @@ class DeviceControlHandler(BaseToolHandler):
             device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
+            refusal = self._capability_refusal(
+                device_id, "supportsHeatSetpoint", "a heat setpoint")
+            if refusal:
+                return refusal
             result = self.data_provider.set_heat_setpoint(device_id, setpoint)
             if "error" in result:
                 self.info_log(f"❌ Heat setpoint error: {result['error']}")
@@ -189,6 +226,10 @@ class DeviceControlHandler(BaseToolHandler):
             device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
+            refusal = self._capability_refusal(
+                device_id, "supportsCoolSetpoint", "a cool setpoint")
+            if refusal:
+                return refusal
             result = self.data_provider.set_cool_setpoint(device_id, setpoint)
             if "error" in result:
                 self.info_log(f"❌ Cool setpoint error: {result['error']}")
@@ -250,6 +291,22 @@ class DeviceControlHandler(BaseToolHandler):
             device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
+            # Advisory capability pre-checks — refuse a colour/white command the
+            # catalogue says can't work, per argument supplied. Uncataloged
+            # devices pass straight through (never block on missing data).
+            refusal = self._capability_refusal(device_id, "supportsRGB", "RGB colour")
+            if refusal:
+                return refusal
+            if white is not None:
+                refusal = self._capability_refusal(
+                    device_id, "supportsWhite", "a white level")
+                if refusal:
+                    return refusal
+            if white_temperature is not None:
+                refusal = self._capability_refusal(
+                    device_id, "supportsWhiteTemperature", "white temperature")
+                if refusal:
+                    return refusal
             result = self.data_provider.set_color(device_id, red, green, blue,
                                                    white=white,
                                                    white_temperature=white_temperature)

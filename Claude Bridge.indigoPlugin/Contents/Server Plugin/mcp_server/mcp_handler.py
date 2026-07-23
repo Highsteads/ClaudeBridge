@@ -41,6 +41,20 @@ from .tools.extended_tools import ExtendedToolsHandler
 from .tools.plugin_dev_tools import PluginDevToolsHandler
 from .tools.automation_detail import AutomationDetailHandler
 from .adapters.indidb import IndiDbStructureStore
+from .common import device_catalog
+
+
+def _enrich_device_capabilities(device):
+    """Attach a catalogue capabilities block to a serialised device dict, in
+    place, when the device type is catalogued. Advisory metadata — absent for
+    uncataloged devices, never fabricated. Returns the same dict for chaining.
+    """
+    if not isinstance(device, dict):
+        return device
+    caps = device_catalog.capabilities(device)
+    if caps:
+        device["catalog_capabilities"] = caps
+    return device
 
 
 class MCPHandler:
@@ -4776,7 +4790,8 @@ class MCPHandler:
             if result is None:
                 return safe_json_dumps({"error": f"No device found matching '{name}'",
                                         "success": False})
-            return safe_json_dumps({"success": True, "device": result})
+            return safe_json_dumps({"success": True,
+                                    "device": _enrich_device_capabilities(result)})
         except Exception as e:
             self.logger.error(f"Get device by name error: {e}")
             return safe_json_dumps({"error": str(e), "success": False})
@@ -5022,7 +5037,7 @@ class MCPHandler:
                 return safe_json_dumps({
                     "error": f"Device {device_id} not found"
                 })
-            return safe_json_dumps(device)
+            return safe_json_dumps(_enrich_device_capabilities(device))
         except Exception as e:
             self.logger.error(f"Get device by ID error: {e}")
             return safe_json_dumps({"error": str(e)})

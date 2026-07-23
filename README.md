@@ -855,6 +855,15 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.14.0 (2026-07-23)
+Claude now knows what your devices can actually do — with a nod to Simon Clark's [Indigo MCP Lite](https://github.com/simons-plugins/indigo-mcp-lite), whose v2026.9.0 update inspired this.
+
+Indigo's scripting API tells an assistant a device's type and states, but not its capabilities. Ask to set a plain on/off dimmer to "warm white" and the old behaviour was to fire the command and relay a cryptic failure. Now Claude Bridge carries a capability catalogue — generated from your own estate — and two things follow. Asking about a device includes what it supports (colour, white, white temperature, setpoints). And a command the catalogue says can't work is refused up front with a plain-English reason: ask for RGB on a Fibaro dimmer and you get back "it supports on/off, status requests" instead of a mystery error. The refusal only ever fires when the catalogue positively knows a device lacks a capability — an uncatalogued device is never blocked, so control is never taken away, only made more honest.
+
+Nothing to install and nothing leaves your Mac — the catalogue rides along inside the plugin as plain data.
+
+396 → 413 tests.
+
 ### 2.13.2 (2026-07-23)
 Battery readings that were never percentages are no longer read as percentages. Ecowitt sensors and the Universal Z-Wave Sensor report battery as a simple OK/LOW flag, and USB-powered presence sensors report a bare zero — the low-battery tools took all of these at face value and cried wolf about five healthy devices while the genuinely dying ones queued behind them. The tools now honour the OK/LOW flag and ignore a bare zero, so a low-battery alert once again means what it says.
 
