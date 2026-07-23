@@ -5,7 +5,24 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        23-07-2026
-# Version:     2.15.0
+# Version:     2.16.0
+#
+# v2.16.0 (23-07-2026): SIMPLIFICATION — capability awareness now reads the
+# device's LIVE supports* attributes instead of a vendored catalogue. Indigo
+# exposes what a device can do as live booleans on the device object
+# (dev.supportsRGB etc.); the v2.14.0 vendored catalogue was a cache of
+# exactly those flags — redundant, staler, and only covered CliveS's own
+# estate. Reading live works on ANY install, for ANY device, always current,
+# with zero data to maintain. Same behaviour kept: set_color / setpoint
+# REFUSALS (refuse only on an explicit live False) + a capabilities block on
+# get_device_by_id/by_name. REMOVED: common/device_catalog (module +
+# vendored snapshot), scripts/generate_catalog_snapshot.py, and the
+# list_uncataloged_devices tool (167->166 — it existed only to find gaps in
+# the now-removed catalogue). New common/device_capabilities.py. The separate
+# indigo-device-catalogue repo + Dashboards (which serves a catalogue to the
+# browser, a consumer that CAN'T read live attributes) are UNTOUCHED — a
+# served catalogue still earns its keep there, just not inside a plugin that
+# can read live. Suite 414->408.
 #
 # v2.15.0 (23-07-2026): NEW list_uncataloged_devices tool (READ) — the gap
 # report for the capability catalogue: plugin-owned device TYPES with no

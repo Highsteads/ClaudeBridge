@@ -11,7 +11,7 @@ except ImportError:
     indigo = None
 
 from ...adapters.data_provider import DataProvider
-from ...common import device_catalog
+from ...common import device_capabilities
 from ..base_handler import BaseToolHandler
 
 
@@ -21,16 +21,15 @@ class DeviceControlHandler(BaseToolHandler):
     def _capability_refusal(
         self, device_id: int, flag: str, action_label: str
     ) -> Optional[Dict[str, Any]]:
-        """Advisory device-catalogue pre-check.
+        """Advisory capability pre-check, read live off the device.
 
-        Returns an error dict to return immediately when the catalogue says
-        this device cannot do ``action_label`` (a profile exists AND carries
-        ``flag`` explicitly False) — with a message naming what it DOES
-        support, so the caller corrects course instead of firing a command
-        that would fail cryptically. Returns None (proceed) for every other
-        case: uncataloged device, unresolvable device, or a flag the profile
-        doesn't pin False. The catalogue only ever adds knowledge; it never
-        blocks control it lacks data for.
+        Returns an error dict to return immediately when the device's live
+        ``flag`` attribute is explicitly False — with a message naming what
+        it DOES support, so the caller corrects course instead of firing a
+        command that would fail cryptically. Returns None (proceed) for every
+        other case: an unresolvable device, or a flag the device does not
+        expose or reports True. Awareness only ever adds a helpful refusal;
+        it never blocks control on missing information.
         """
         if indigo is None:
             return None
@@ -38,7 +37,7 @@ class DeviceControlHandler(BaseToolHandler):
             dev = indigo.devices[device_id]
         except Exception:
             return None  # can't resolve the device → never block
-        message = device_catalog.refusal(dev, flag, action_label)
+        message = device_capabilities.refusal(dev, flag, action_label)
         if message is None:
             return None
         self.info_log(f"⛔ {message}")
