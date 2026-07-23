@@ -102,12 +102,19 @@ class IndiDbStructureStore:
             return {"available": False,
                     "note": "Indigo database file not readable — action steps "
                             "and conditions unavailable."}
-        return {
+        result = {
             "available": True,
             "file_modified": datetime.datetime.fromtimestamp(snapshot.mtime).isoformat(),
             "counts": snapshot.counts(),
             "note": FRESHNESS_NOTE,
         }
+        if snapshot.skipped_records:
+            result["skipped_records"] = snapshot.skipped_records
+            result["note"] = (
+                f"{FRESHNESS_NOTE} WARNING: {snapshot.skipped_records} "
+                "automation record(s) were skipped during parsing "
+                "(missing/unparseable ID) — results may be incomplete.")
+        return result
 
     # ── Cache management ─────────────────────────────────────────────────────
 
@@ -133,7 +140,10 @@ class IndiDbStructureStore:
                 self.logger.debug(f"[indidb] stat failed: {exc}")
                 return self._snapshot
 
+            # Path is part of the key: a server database SWITCH (same-ish
+            # mtime/size on a different file) must invalidate the snapshot.
             if (self._snapshot is not None
+                    and path == self._snapshot.path
                     and stat.st_mtime == self._snapshot.mtime
                     and stat.st_size == self._snapshot.size):
                 return self._snapshot
@@ -141,6 +151,7 @@ class IndiDbStructureStore:
             try:
                 started = time.monotonic()
                 parsed = parse_indidb(path)
+                parsed.path = path
                 parsed.mtime = stat.st_mtime
                 parsed.size = stat.st_size
                 parsed.reverse_index = build_reverse_index(parsed)
@@ -148,6 +159,11 @@ class IndiDbStructureStore:
                 elapsed_ms = (time.monotonic() - started) * 1000
                 self.logger.debug(
                     f"[indidb] parsed in {elapsed_ms:.0f}ms: {parsed.counts()}")
+                if parsed.skipped_records:
+                    self.logger.warning(
+                        f"[indidb] {parsed.skipped_records} automation "
+                        f"record(s) skipped during parse (missing/unparseable "
+                        f"ID) — automation tools may under-report")
             except Exception as exc:
                 # A mid-rewrite read can hand us a torn file. Keep the last
                 # good snapshot; the next access retries.

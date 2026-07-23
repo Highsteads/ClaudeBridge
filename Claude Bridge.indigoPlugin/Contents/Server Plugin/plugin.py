@@ -5,7 +5,26 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        23-07-2026
-# Version:     2.12.4
+# Version:     2.13.0
+#
+# v2.13.0 (23-07-2026): mcp-lite v2026.8.0 BORROW BATCH (patterns harvested
+# from Simon's rewrite, clean-room). (1) SEARCH SYNONYM LAYER — new
+# vector_store/synonyms.py: ~30 UK-flavoured word groups expanded at QUERY
+# time ("telly"->tv/television, "lounge"->living room, "rad"->radiator/trv);
+# variants score at 0.9x so a literal match always outranks an expansion.
+# Complements type_aliases (deviceTypeId bridge) with word-level recall — no
+# embeddings, no dependencies. (2) device_history HARDENING: unknown columns
+# now a hard ERROR naming the valid (lowercase) set — silently dropping them
+# used to return walls of bare ts rows; PRAGMA query_only=ON second
+# read-only layer; and the ts-filtered window (+ per-column probe loop) is
+# now PK-RANGED via rowid binary search — the un-indexed ts scans were the
+# same full-table-scan-holding-the-read-lock pattern that wedged the server
+# on 15-Jul (Dashboards), just latent at smaller scale. (3) indidb parser
+# ANOMALY COUNTER: records skipped for missing/unparseable IDs are counted,
+# logged, and surfaced as skipped_records in structure_source — a degraded
+# parse is visible, never silent. (4) indidb cache key now includes the DB
+# PATH so a server database switch invalidates without a plugin restart.
+# Suite 380->396 (test_v2130_borrows.py).
 #
 # v2.12.4 (23-07-2026): decode-table corrections found comparing against
 # Simon's indigo-mcp-lite v2026.8.0 and settled by LIVE RUNTIME ENUM DUMPS:

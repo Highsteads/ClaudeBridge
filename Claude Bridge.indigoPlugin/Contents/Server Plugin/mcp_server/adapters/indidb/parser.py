@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 class ParsedDb:
     """One decoded snapshot of the database file's automation structures."""
 
+    path: str = ""
     mtime: float = 0.0
     size: int = 0
     triggers: Dict[int, dict] = field(default_factory=dict)
@@ -30,6 +31,10 @@ class ParsedDb:
     action_groups: Dict[int, dict] = field(default_factory=dict)
     device_names: Dict[int, str] = field(default_factory=dict)
     variable_names: Dict[int, str] = field(default_factory=dict)
+    # Records dropped during parsing (missing/unparseable ID). Surfaced in
+    # freshness() so a degraded parse is visible in tool responses rather
+    # than silently under-reporting automations.
+    skipped_records: int = 0
     reverse_index: Optional[Any] = None  # attached by the store after parsing
 
     def counts(self) -> Dict[str, int]:
@@ -110,6 +115,11 @@ def parse_indidb(path: str) -> ParsedDb:
                 record_id = record.get("ID") if isinstance(record, dict) else None
                 if isinstance(record_id, int):
                     getattr(parsed, _FULL_LISTS[active_list])[record_id] = record
+                else:
+                    # Missing/unparseable ID on a top-level automation record
+                    # is corruption or schema drift worth surfacing — count it
+                    # so tool responses can report the degraded parse.
+                    parsed.skipped_records += 1
             else:
                 # Name lists: pull ID/Name without decoding the whole record
                 # (device records are by far the bulk of the file).

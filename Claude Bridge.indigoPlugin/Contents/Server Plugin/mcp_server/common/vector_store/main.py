@@ -9,7 +9,13 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...adapters.vector_store_interface import VectorStoreInterface
+from .synonyms import variants_for_query
 from .type_aliases import aliases_for
+
+# A synonym-variant match scores this fraction of the direct-query score, so
+# a literal hit on what the user actually typed always outranks an expansion
+# ("telly" scoring the TV Plug just below a device literally named telly).
+_SYNONYM_DISCOUNT = 0.9
 
 
 class VectorStore(VectorStoreInterface):
@@ -121,12 +127,23 @@ class VectorStore(VectorStoreInterface):
         if entity_types is None:
             entity_types = ["devices", "variables", "actions"]
 
+        # Query-time synonym expansion: "telly" also tries "tv"/"television",
+        # "lounge" also tries "living room". Computed ONCE per search; each
+        # variant scores with a small discount so literal matches win.
+        variants = variants_for_query(query)
+
         results = []
         for et in entity_types:
             if et not in self._store:
                 continue
             for entity in self._store[et]:
                 score = self._score(query, entity)
+                for variant in variants:
+                    if score >= 1.0:
+                        break  # already a perfect literal hit
+                    variant_score = self._score(variant, entity) * _SYNONYM_DISCOUNT
+                    if variant_score > score:
+                        score = variant_score
                 if score >= similarity_threshold:
                     item = dict(entity)
                     item["_similarity_score"] = score

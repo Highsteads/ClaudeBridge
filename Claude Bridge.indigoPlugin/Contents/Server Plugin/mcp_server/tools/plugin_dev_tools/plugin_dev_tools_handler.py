@@ -758,6 +758,49 @@ class PluginDevToolsHandler(BaseToolHandler):
     # device_history — focused SQL Logger query
     # ════════════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _rowid_floor_for_ts(cur, table: str, cutoff: str) -> int:
+        """Smallest `id` whose `ts` >= cutoff, by binary search on the PK.
+
+        The SQL Logger appends chronologically so ts is monotone in the
+        INTEGER PRIMARY KEY; each probe is a PK point-lookup (instant,
+        microscopic lock) instead of the ts full-scan this replaces. Rowid
+        gaps are fine — the returned bound is valid for `id >= ?` range use
+        even when it is not a real row id. Falls back to 0 (whole table) if
+        the table is empty or the probes fail, which only costs performance,
+        never correctness.
+        """
+        try:
+            cur.execute(f"SELECT MIN(id), MAX(id) FROM {table}")
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return 0
+            lo, hi = row[0], row[1]
+            cur.execute(f"SELECT ts FROM {table} WHERE id = ?", (lo,))
+            first = cur.fetchone()
+            if first and first[0] is not None and str(first[0]) >= cutoff:
+                return lo  # whole table is inside the window
+            cur.execute(f"SELECT ts FROM {table} WHERE id = ?", (hi,))
+            newest = cur.fetchone()
+            if not newest or newest[0] is None or str(newest[0]) < cutoff:
+                return hi + 1  # even the newest row predates the window: empty
+            # Invariants: every real row ≤ lo is older than cutoff; hi is a
+            # real row with ts >= cutoff. Narrow to the boundary.
+            while lo + 1 < hi:
+                mid = (lo + hi) // 2
+                # Nearest real row at-or-below mid (rowid gaps possible).
+                cur.execute(
+                    f"SELECT id, ts FROM {table} WHERE id <= ? "
+                    f"ORDER BY id DESC LIMIT 1", (mid,))
+                row = cur.fetchone()
+                if row[1] is not None and str(row[1]) >= cutoff:
+                    hi = row[0]
+                else:
+                    lo = mid
+            return hi
+        except sqlite3.OperationalError:
+            return 0
+
     def device_history(self, device_id, hours: int = 24,
                        limit: int = 500,
                        columns: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -807,6 +850,9 @@ class PluginDevToolsHandler(BaseToolHandler):
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
             try:
                 cur = conn.cursor()
+                # Second read-only layer under the ro-URI: the connection
+                # itself refuses any write statement.
+                cur.execute("PRAGMA query_only = ON")
 
                 # Confirm table exists
                 cur.execute(
@@ -824,25 +870,42 @@ class PluginDevToolsHandler(BaseToolHandler):
                 if not all_cols:
                     return {"success": False, "error": f"Could not read columns of {table}"}
 
-                # Pick columns to return
+                # Pick columns to return. Unknown names are a hard error
+                # naming the valid set — silently dropping them used to
+                # return walls of bare `ts` rows when a caller passed the
+                # state's camelCase name against the lowercase columns.
                 if columns:
-                    cols = [c for c in columns if c in all_cols]
+                    unknown = [c for c in columns if c not in all_cols]
+                    if unknown:
+                        return {"success": False,
+                                "error": f"Column(s) not in {table}: "
+                                         f"{', '.join(unknown)}. Valid columns "
+                                         f"(note: stored lowercase): "
+                                         f"{', '.join(c for c in all_cols if c != 'id')}"}
+                    cols = [c for c in columns]
                     if "ts" not in cols:
                         cols = ["ts"] + cols
-                    if not cols:
-                        return {"success": False,
-                                "error": f"None of the requested columns exist in {table}"}
-                else:
-                    # Probe: which columns have at least one non-null value in the window?
+
+                # The ts column has NO index and the DB is journal_mode=delete,
+                # so any ts-filtered query full-scans while holding the read
+                # lock and can stall the SQL Logger's writes (live-confirmed
+                # 15-Jul-2026). The logger appends chronologically, so ts is
+                # monotone in the INTEGER PRIMARY KEY — binary-search the
+                # boundary rowid for the cutoff (~30 instant point-probes),
+                # then range on `id`, which uses the PK index.
+                floor_id = self._rowid_floor_for_ts(cur, table, cutoff)
+
+                if not columns:
+                    # Probe: which columns have a non-null value in the window?
                     keep = []
                     for c in all_cols:
                         if c in ("id",):
                             continue
                         try:
                             cur.execute(
-                                f"SELECT 1 FROM {table} WHERE {c} IS NOT NULL "
-                                f"AND ts >= ? LIMIT 1",
-                                (cutoff,),
+                                f"SELECT 1 FROM {table} WHERE id >= ? "
+                                f"AND {c} IS NOT NULL LIMIT 1",
+                                (floor_id,),
                             )
                             if cur.fetchone():
                                 keep.append(c)
@@ -856,16 +919,16 @@ class PluginDevToolsHandler(BaseToolHandler):
                 # SQL Logger stores ts in UTC. Convert it to LOCAL time on the
                 # way out so returned timestamps match device.lastChanged /
                 # indigo.server.getTime() (DST-aware via the OS timezone). The
-                # WHERE/ORDER BY still operate on the raw UTC column, so the
-                # time-window filter and ordering are unaffected.
+                # WHERE/ORDER BY operate on the PK range, so the time-window
+                # filter and ordering are unaffected.
                 col_list = ", ".join(
                     "datetime(ts, 'localtime') AS ts" if c == "ts" else c
                     for c in cols
                 )
                 cur.execute(
                     f"SELECT {col_list} FROM {table} "
-                    f"WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
-                    (cutoff, limit),
+                    f"WHERE id >= ? ORDER BY id DESC LIMIT ?",
+                    (floor_id, limit),
                 )
                 rows = []
                 for row in cur.fetchall():
