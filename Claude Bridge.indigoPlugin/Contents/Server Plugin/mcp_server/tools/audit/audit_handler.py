@@ -25,6 +25,7 @@ from ..base_handler import BaseToolHandler
 from ...common.device_props import device_address
 from ...adapters.data_provider import DataProvider
 from ...common.battery import battery_pct as _battery_pct
+from ...common import device_catalog
 
 
 def _scripts_dirs() -> List[str]:
@@ -302,6 +303,73 @@ class AuditHandler(BaseToolHandler):
             return result
         except Exception as exc:
             return self.handle_exception(exc, "find_stale_devices")
+
+    def list_uncataloged_devices(self, limit: int = 200,
+                                 offset: int = 0) -> Dict[str, Any]:
+        """
+        Plugin-owned devices with no profile in the vendored device catalogue
+        — the gap report for keeping our own catalogue current (and, if ever
+        wanted, for contributing profiles upstream). Built-in / interface
+        devices (no pluginId) are excluded: the catalogue only profiles
+        plugin device types, so listing them would be noise.
+        """
+        self.log_incoming_request("list_uncataloged_devices",
+                                  {"limit": limit, "offset": offset})
+        try:
+            try:
+                limit = max(1, min(int(limit), 500))
+            except (ValueError, TypeError):
+                limit = 200
+            try:
+                offset = max(0, int(offset))
+            except (ValueError, TypeError):
+                offset = 0
+
+            # Distinct (pluginId, deviceTypeId) is what a catalogue profile
+            # keys on — collapse duplicates so 19 Shelly plugs report as one
+            # uncatalogued TYPE with an example, not 19 rows.
+            seen_types: Dict[tuple, Dict[str, Any]] = {}
+            for did in indigo.devices:
+                dev = indigo.devices[did]
+                plugin_id = getattr(dev, "pluginId", "") or ""
+                type_id = getattr(dev, "deviceTypeId", "") or ""
+                if not plugin_id or not type_id:
+                    continue  # built-in / interface device
+                if device_catalog.profile_for(dev) is not None:
+                    continue  # already catalogued
+                key = (plugin_id, type_id)
+                entry = seen_types.get(key)
+                if entry is None:
+                    seen_types[key] = {
+                        "plugin_id": plugin_id,
+                        "device_type_id": type_id,
+                        "base_class": type(dev).__name__,
+                        "device_count": 1,
+                        "example_device": {"id": dev.id, "name": dev.name},
+                    }
+                else:
+                    entry["device_count"] += 1
+
+            uncataloged = sorted(
+                seen_types.values(),
+                key=lambda e: (e["plugin_id"], e["device_type_id"]))
+            total = len(uncataloged)
+            page = uncataloged[offset:offset + limit]
+
+            result = {
+                "success": True,
+                "count": len(page),
+                "total_uncataloged_types": total,
+                "offset": offset,
+                "has_more": offset + len(page) < total,
+                "uncataloged": page,
+                "catalog": device_catalog.meta(),
+            }
+            self.log_tool_outcome("list_uncataloged_devices", True,
+                                  f"{total} uncatalogued device types")
+            return result
+        except Exception as exc:
+            return self.handle_exception(exc, "list_uncataloged_devices")
 
     def _collect_stale_devices(self, days: int = 7) -> List[Dict[str, Any]]:
         stale = []

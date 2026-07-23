@@ -5,7 +5,14 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 4.8
 # Date:        23-07-2026
-# Version:     2.14.0
+# Version:     2.15.0
+#
+# v2.15.0 (23-07-2026): NEW list_uncataloged_devices tool (READ) — the gap
+# report for the capability catalogue: plugin-owned device TYPES with no
+# vendored profile, duplicates collapsed (19 Shelly plugs of one type = one
+# uncatalogued type + device_count + example), built-in/interface devices
+# excluded. Helps keep our catalogue current. Concept from Simon's
+# indigo-mcp-lite. 166->167 tools. Suite 413->414.
 #
 # v2.14.0 (23-07-2026): DEVICE-CATALOGUE CAPABILITY AWARENESS. Claude Bridge
 # now knows what a device can actually DO, from CliveS's own

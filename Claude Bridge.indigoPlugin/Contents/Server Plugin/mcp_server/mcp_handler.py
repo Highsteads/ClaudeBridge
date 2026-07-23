@@ -2399,6 +2399,26 @@ class MCPHandler:
             },
             "function": self._tool_find_stale_devices
         }
+        self._tools["list_uncataloged_devices"] = {
+            "description": (
+                "List plugin-owned device TYPES that have no profile in the "
+                "vendored device catalogue — the gap report for keeping the "
+                "capability catalogue current. Collapses duplicates: 19 Shelly "
+                "plugs of one type report as a single uncatalogued type with a "
+                "device_count and an example device. Built-in / interface "
+                "devices (no pluginId) are excluded."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "number",
+                              "description": "Max types to return (default 200, max 500)"},
+                    "offset": {"type": "number",
+                               "description": "Pagination offset (default 0)"}
+                }
+            },
+            "function": self._tool_list_uncataloged_devices
+        }
         self._tools["audit_variables"] = {
             "description": (
                 "Report variables not referenced in any Python script (potentially "
@@ -4279,6 +4299,14 @@ class MCPHandler:
             return safe_json_dumps(self.audit_handler.find_stale_devices(days))
         except Exception as e:
             self.logger.error(f"find_stale_devices error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_list_uncataloged_devices(self, limit: int = 200, offset: int = 0) -> str:
+        try:
+            return safe_json_dumps(
+                self.audit_handler.list_uncataloged_devices(limit=limit, offset=offset))
+        except Exception as e:
+            self.logger.error(f"list_uncataloged_devices error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     def _tool_audit_variables(self) -> str:

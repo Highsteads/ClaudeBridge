@@ -167,3 +167,43 @@ def test_set_color_allowed_on_colour_bulb(handler):
 def test_set_color_passes_uncataloged(handler):
     result = handler.set_color(3, 255, 0, 0)
     assert result.get("changed") is True
+
+
+# ── list_uncataloged_devices ─────────────────────────────────────────────────
+
+def test_list_uncataloged_devices(monkeypatch):
+    import sys
+    from mcp_server.tools.audit import audit_handler as ah
+
+    class D:
+        def __init__(self, did, name, pid, tid):
+            self.id, self.name, self.pluginId, self.deviceTypeId = did, name, pid, tid
+
+    devs = {
+        1: D(1, "Cat Bulb", "com.test.dimmer", "colourBulb"),   # cataloged → excluded
+        2: D(2, "Gap A #1", "com.test.gap", "gadget"),          # uncataloged type X
+        3: D(3, "Gap A #2", "com.test.gap", "gadget"),          # same type → collapse
+        4: D(4, "Gap B", "com.test.gap", "widget"),             # uncataloged type Y
+        5: D(5, "Builtin", "", "zwDimmerType"),                 # no pluginId → excluded
+    }
+
+    class FakeDevices:
+        def __iter__(self):
+            return iter(devs.keys())
+
+        def __getitem__(self, k):
+            return devs[k]
+
+    ind = sys.modules["indigo"]
+    monkeypatch.setattr(ind, "devices", FakeDevices(), raising=False)
+    monkeypatch.setattr(ah, "indigo", ind, raising=False)
+
+    h = ah.AuditHandler(data_provider=None)
+    out = h.list_uncataloged_devices()
+    assert out["success"] is True
+    assert out["total_uncataloged_types"] == 2  # gadget + widget, builtin/cataloged excluded
+    by_type = {e["device_type_id"]: e for e in out["uncataloged"]}
+    assert by_type["gadget"]["device_count"] == 2  # collapsed
+    assert by_type["gadget"]["example_device"]["id"] == 2
+    assert "widget" in by_type
+    assert "colourBulb" not in by_type
