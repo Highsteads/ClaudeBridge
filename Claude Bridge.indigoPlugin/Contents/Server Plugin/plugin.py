@@ -5,7 +5,19 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        25-07-2026
-# Version:     2.16.1
+# Version:     2.16.2
+#
+# v2.16.2 (25-07-2026): BUG FIX to 2.16.1 — the new hw.memsize read never ran
+# inside the plugin host. `_run(["sysctl", ...])` used the BARE binary name, and
+# Indigo's plugin-host PATH omits /usr/sbin, so it raised FileNotFoundError,
+# _run() swallowed it to "", and the total silently degraded to the fallback
+# estimate: system_health still read 7.5 GB on an 8 GB Mac after 2.16.1. This is
+# the documented absolute-path gotcha (Dashboards v2.21.0 hit it on the same two
+# binaries) and 2.16.1 simply failed to apply it. vm_stat / sysctl / uptime now
+# resolve through a module-level `_bin()` that prefers the absolute path and
+# falls back to the bare name only if that path is missing. Caught because the
+# 2.16.1 "live verification" ran under plain python3, where PATH is normal — the
+# wrong context. +2 tests pinning that every binary is absolute; 422 -> 424.
 #
 # v2.16.1 (25-07-2026): BUG FIX — system_health reported RAM wrongly. Total was
 # derived by summing vm_stat's free/active/inactive/wired buckets, which omits

@@ -78,6 +78,19 @@ def _all_scripts_dirs() -> list:
 
 # ── System helpers ───────────────────────────────────────────────────────────
 
+# Absolute paths — Indigo's plugin-host PATH omits /usr/sbin, so a bare name
+# raises FileNotFoundError, _run() logs it at debug and returns "", and the
+# caller silently degrades. Resolve here, once, and fall back to the bare name
+# only if the expected location is missing.
+def _bin(path: str) -> str:
+    return path if os.path.exists(path) else os.path.basename(path)
+
+
+_VM_STAT = _bin("/usr/bin/vm_stat")
+_SYSCTL  = _bin("/usr/sbin/sysctl")
+_UPTIME  = _bin("/usr/bin/uptime")
+
+
 def _run(cmd: List[str], timeout: int = 5) -> str:
     try:
         return subprocess.run(cmd, capture_output=True, text=True,
@@ -104,8 +117,13 @@ def _parse_ram() -> Dict[str, Any]:
     and free is whatever is left of the installed total. Reporting "Pages free"
     as free memory (the old behaviour) reports the free list, not what is
     actually available, so a healthy Mac looked like it had 0.1 GB left.
+
+    Both binaries are called by ABSOLUTE path. Indigo's plugin-host PATH omits
+    /usr/sbin, so a bare "sysctl" raises FileNotFoundError, _run() swallows it,
+    and the total silently drops to the fallback estimate — which is exactly
+    what shipped in 2.16.1 and read 7.5 GB on an 8 GB Mac.
     """
-    out = _run(["vm_stat"])
+    out = _run([_VM_STAT])
     page_size = 4096
     for line in out.splitlines():
         if "page size of" in line:
@@ -132,7 +150,7 @@ def _parse_ram() -> Dict[str, Any]:
 
     total_bytes = 0
     try:
-        total_bytes = int(_run(["sysctl", "-n", "hw.memsize"]) or 0)
+        total_bytes = int(_run([_SYSCTL, "-n", "hw.memsize"]) or 0)
     except ValueError:
         total_bytes = 0
 
@@ -228,7 +246,7 @@ class SystemToolsHandler(BaseToolHandler):
                     "used_pct": round(disk.used / disk.total * 100, 1),
                 },
                 "ram": ram,
-                "uptime": _run(["uptime"]) or "unavailable",
+                "uptime": _run([_UPTIME]) or "unavailable",
             }
             self.log_tool_outcome("system_health", True, "Health snapshot retrieved")
             return result

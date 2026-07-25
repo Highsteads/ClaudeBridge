@@ -855,6 +855,11 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.16.2 (2026-07-25)
+A fix for the fix below. The new reading of the machine's installed memory never actually ran inside Indigo, because the plugin runs with a trimmed-down PATH that doesn't include the folder `sysctl` lives in — so the call failed, was quietly swallowed, and the figure fell back to the estimate. `system_health` still read 7.5 GB on an 8 GB Mac. The three system commands are now called by full path. The reason it slipped through is worth recording: the 2.16.1 check was run outside the plugin, where the PATH is normal, so it passed while the shipped code did not.
+
+166 tools. 424 tests.
+
 ### 2.16.1 (2026-07-25)
 A fix for `system_health`, which had been getting memory wrong. It worked out total RAM by adding up some of the buckets `vm_stat` prints, and that sum leaves out compressed memory, so an 8 GB Mac was reported as 4.7 GB — and the gap widened the busier the machine got, because macOS compresses more under pressure. Wrong at exactly the moment you want the number. Free memory was off in its own way, reporting the free list rather than what is actually available, which made a healthy Mac look like it had 0.1 GB left and nowhere to go.
 

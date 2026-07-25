@@ -11,6 +11,8 @@
 # On an 8 GB Mac under load that reported 4.4 GB, and it drifted further the
 # busier the machine got. Total now comes from hw.memsize.
 
+import os
+
 import pytest
 
 from mcp_server.tools.system_tools import system_tools_handler as sth
@@ -50,9 +52,11 @@ def fake_run(monkeypatch):
     taking (vm_stat_output, memsize_output)."""
     def _install(vm_stat=VM_STAT, memsize=str(MEMSIZE)):
         def _fake(cmd, timeout=5):
-            if cmd and cmd[0] == "vm_stat":
+            # Match on the basename — the module calls these by absolute path.
+            name = os.path.basename(cmd[0]) if cmd else ""
+            if name == "vm_stat":
                 return vm_stat
-            if cmd and cmd[0] == "sysctl":
+            if name == "sysctl":
                 return memsize
             return ""
         monkeypatch.setattr(sth, "_run", _fake)
@@ -118,6 +122,34 @@ def test_page_size_read_from_header_not_assumed(fake_run):
     fake_run(memsize="")
     large = sth._parse_ram()
     assert large["total_gb"] == pytest.approx(small["total_gb"] * 4, abs=0.2)
+
+
+# ── Binary resolution ────────────────────────────────────────────────────────
+
+def test_binaries_are_called_by_absolute_path(monkeypatch):
+    """Indigo's plugin-host PATH omits /usr/sbin, so a bare "sysctl" raises
+    FileNotFoundError, _run() swallows it, and the total silently falls back to
+    the estimate. That shipped in 2.16.1 and read 7.5 GB on an 8 GB Mac. Pin
+    every binary this module shells out to."""
+    seen = []
+
+    def _fake(cmd, timeout=5):
+        seen.append(cmd[0])
+        return VM_STAT if cmd[0].endswith("vm_stat") else str(MEMSIZE)
+
+    monkeypatch.setattr(sth, "_run", _fake)
+    sth._parse_ram()
+
+    assert seen, "no binary was invoked"
+    for path in seen:
+        assert path.startswith("/"), f"{path!r} is a bare name — will fail in the plugin host"
+
+
+def test_bin_falls_back_to_bare_name_when_path_missing():
+    """A future macOS that moves a binary should degrade to PATH lookup, not
+    hand subprocess a path that certainly does not exist."""
+    assert sth._bin("/usr/bin/vm_stat") == "/usr/bin/vm_stat"
+    assert sth._bin("/nowhere/at/all/sysctl") == "sysctl"
 
 
 # ── Degradation ──────────────────────────────────────────────────────────────
