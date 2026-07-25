@@ -62,6 +62,12 @@ class VectorStoreManager:
         # mutations triggers at most one in-flight rebuild.
         self._refresh_lock = threading.Lock()
         self._refresh_pending = False
+        # Handles for out-of-band refreshes, so stop() can join them before
+        # closing the store rather than pulling it out from under them.
+        self._refresh_threads = []
+        # Set when a structural change lands during warmup, when there is no
+        # store to refresh yet. Honoured once warmup completes.
+        self._refresh_requested_during_warmup = False
     
     def start(self) -> None:
         """Start the vector store manager."""
@@ -152,6 +158,14 @@ class VectorStoreManager:
                     self._start_background_updates()
                 self._running = True
                 self.logger.info("\t📊 Vector store: initial warmup complete")
+                # A structural change landed while we were warming up — the
+                # index we just built is already behind. Rebuild once now
+                # rather than leaving search wrong until the next interval.
+                if self._refresh_requested_during_warmup:
+                    self._refresh_requested_during_warmup = False
+                    self.logger.debug("\t📊 Vector store: replaying a refresh "
+                                      "requested during warmup")
+                    self.refresh_async()
             except Exception as exc:
                 self.logger.error(f"\t❌ Vector store warmup failed: {exc}")
             finally:
@@ -202,6 +216,21 @@ class VectorStoreManager:
 
             # Stop the periodic background update thread.
             self._stop_background_updates()
+
+            # Join any in-flight out-of-band refresh BEFORE closing the store —
+            # otherwise vector_store is set to None underneath a thread that is
+            # still inside update_now().
+            with self._refresh_lock:
+                refreshers = list(getattr(self, "_refresh_threads", []))
+                self._refresh_threads = []
+                self._refresh_pending = False
+            for t in refreshers:
+                if t.is_alive():
+                    t.join(timeout=3.0)
+                    if t.is_alive():
+                        self.logger.warning(
+                            "VectorStore refresh did not stop within 3s during shutdown"
+                        )
 
             # Close vector store.
             if self.vector_store:
@@ -271,7 +300,14 @@ class VectorStoreManager:
         store refresh is the simple, correct alternative. Coalesced: a burst of
         mutations spawns at most one in-flight rebuild.
         """
+        # A refresh requested DURING warmup used to be dropped outright
+        # (_running only goes True after warmup completes), so a device created
+        # in that window stayed invisible to search until the next periodic
+        # rebuild. Remember it instead and let warmup pick it up.
+        if self._stop_updates.is_set():
+            return
         if not self._running or not self.vector_store:
+            self._refresh_requested_during_warmup = True
             return
         with self._refresh_lock:
             if self._refresh_pending:
@@ -280,6 +316,8 @@ class VectorStoreManager:
 
         def _run():
             try:
+                if self._stop_updates.is_set():
+                    return
                 self.update_now()
             except Exception:
                 self.logger.exception("async search refresh failed (contained)")
@@ -287,7 +325,16 @@ class VectorStoreManager:
                 with self._refresh_lock:
                     self._refresh_pending = False
 
-        threading.Thread(target=_run, daemon=True, name="VectorStore-Refresh").start()
+        # Track the handle. It used to be discarded, so stop() could set
+        # vector_store = None while this thread was still inside update_now().
+        # Harmless with the current in-memory store, a use-after-close the
+        # moment a persistent backend returns.
+        t = threading.Thread(target=_run, daemon=True, name="VectorStore-Refresh")
+        with self._refresh_lock:
+            self._refresh_threads = [x for x in getattr(self, "_refresh_threads", [])
+                                     if x.is_alive()]
+            self._refresh_threads.append(t)
+        t.start()
 
     def _start_background_updates(self) -> None:
         """Start background update thread."""

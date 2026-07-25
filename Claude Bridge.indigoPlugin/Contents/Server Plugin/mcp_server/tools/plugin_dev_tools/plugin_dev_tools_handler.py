@@ -27,6 +27,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,6 +39,21 @@ except ImportError:
 
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
+
+
+# ── Bounds ──────────────────────────────────────────────────────────────────
+# plugin_node_check_html spawns one `node --check` subprocess per inline
+# <script> block, each with its own 10s timeout, all on the single dispatch
+# thread — so an unbounded sweep of a script-heavy bundle froze the whole plugin
+# for minutes. Cap the sweep and label a partial result rather than implying a
+# clean bill of health.
+_NODE_CHECK_MAX_BLOCKS      = 40
+_NODE_CHECK_BUDGET_SECONDS  = 60
+
+# device_history: the biggest window a single call will scan. The SQL Logger DB
+# has no index on ts, so an over-wide window turns the per-column non-null probe
+# into a full table scan while holding a read lock the logger's writes queue on.
+_HISTORY_MAX_HOURS = 24 * 31
 
 
 # ── Path helpers ────────────────────────────────────────────────────────────
@@ -551,7 +567,14 @@ class PluginDevToolsHandler(BaseToolHandler):
 
             findings = []
             total_blocks = 0
+            # Each block is a separate node subprocess at up to 10s, run on the
+            # single dispatch thread — a plugin with 30 inline blocks was a
+            # 5-minute freeze of everything. Budget the whole sweep.
+            deadline     = time.time() + _NODE_CHECK_BUDGET_SECONDS
+            check_capped = False
             for path in html_files:
+                if check_capped:
+                    break
                 rel = os.path.relpath(path, installed)
                 try:
                     with open(path, encoding="utf-8") as f:
@@ -561,6 +584,9 @@ class PluginDevToolsHandler(BaseToolHandler):
                     continue
                 blocks = list(script_re.finditer(content))
                 for idx, m in enumerate(blocks):
+                    if total_blocks >= _NODE_CHECK_MAX_BLOCKS or time.time() > deadline:
+                        check_capped = True
+                        break
                     if src_re.search(m.group("attrs") or ""):
                         continue  # external script ref — nothing to lint inline
                     body = (m.group("body") or "").strip()
@@ -598,7 +624,7 @@ class PluginDevToolsHandler(BaseToolHandler):
                             "error":     err,
                         })
 
-            return {
+            result = {
                 "success":          True,
                 "installed_bundle": installed,
                 "node_version":     node_version,
@@ -606,7 +632,16 @@ class PluginDevToolsHandler(BaseToolHandler):
                 "scripts_checked":  total_blocks,
                 "issues_count":     len(findings),
                 "findings":         findings,
+                "capped":           check_capped,
             }
+            if check_capped:
+                # A partial sweep that reports "0 issues" would be read as a pass.
+                result["note"] = (
+                    f"Stopped after {total_blocks} blocks / "
+                    f"{_NODE_CHECK_BUDGET_SECONDS}s — NOT every inline script was "
+                    f"checked, so a clean result here does not mean the bundle is clean."
+                )
+            return result
         except Exception as exc:
             return self.handle_exception(exc, "plugin_node_check_html")
 
@@ -836,6 +871,8 @@ class PluginDevToolsHandler(BaseToolHandler):
                 hours = max(1, int(hours or 24))
             except (TypeError, ValueError):
                 hours = 24
+            hours_capped = hours > _HISTORY_MAX_HOURS
+            hours = min(hours, _HISTORY_MAX_HOURS)
 
             # Compute the window cutoff once (used by both column branches below).
             cutoff = (datetime.now(timezone.utc).replace(tzinfo=None)
@@ -934,16 +971,41 @@ class PluginDevToolsHandler(BaseToolHandler):
                 for row in cur.fetchall():
                     rows.append(dict(zip(cols, row)))
 
-                return {
-                    "success":      True,
-                    "table":        table,
-                    "device_id":    did,
-                    "hours":        hours,
-                    "row_count":    len(rows),
-                    "columns":      cols,
-                    "ts_timezone":  "local",
-                    "rows":         rows,
+                # `hours` describes the window ASKED FOR; `limit` caps rows from
+                # the newest end. On a chatty device those disagree wildly —
+                # hours=24, limit=500 can return the last ten minutes — and the
+                # old reply advertised "hours": 24 with nothing to say otherwise,
+                # so "what happened 20 hours ago" got a confidently wrong answer.
+                # Report the span actually covered and flag the truncation.
+                truncated = len(rows) == limit
+                ts_values = [r.get("ts") for r in rows if r.get("ts")]
+                result = {
+                    "success":       True,
+                    "table":         table,
+                    "device_id":     did,
+                    "hours":         hours,
+                    "hours_capped":  hours_capped,
+                    "row_count":     len(rows),
+                    "truncated":     truncated,
+                    "columns":       cols,
+                    "ts_timezone":   "local",
+                    "ts_newest":     ts_values[0]  if ts_values else None,
+                    "ts_oldest":     ts_values[-1] if ts_values else None,
+                    "rows":          rows,
                 }
+                if truncated:
+                    result["note"] = (
+                        f"Hit the {limit}-row limit, so these are the NEWEST {limit} rows "
+                        f"only — they cover {result['ts_oldest']} to {result['ts_newest']}, "
+                        f"not the full {hours}h asked for. Raise limit or narrow hours to "
+                        f"see earlier data."
+                    )
+                if hours_capped:
+                    result["hours_note"] = (
+                        f"hours was capped to {_HISTORY_MAX_HOURS} "
+                        f"({_HISTORY_MAX_HOURS // 24} days)."
+                    )
+                return result
             finally:
                 conn.close()
         except Exception as exc:

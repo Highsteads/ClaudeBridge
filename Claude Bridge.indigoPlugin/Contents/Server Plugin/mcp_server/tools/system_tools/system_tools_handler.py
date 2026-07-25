@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import platform
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -89,6 +90,12 @@ def _bin(path: str) -> str:
 _VM_STAT = _bin("/usr/bin/vm_stat")
 _SYSCTL  = _bin("/usr/sbin/sysctl")
 _UPTIME  = _bin("/usr/bin/uptime")
+
+# Wall-clock budget for find_large_files' directory walk. Every plugin callback
+# and every other MCP tool call is blocked while it runs (Indigo dispatches them
+# all on one thread), so a deep tree must degrade to a partial, clearly-labelled
+# answer rather than freezing the plugin.
+_WALK_BUDGET_SECONDS = 10
 
 
 def _run(cmd: List[str], timeout: int = 5) -> str:
@@ -498,8 +505,23 @@ class SystemToolsHandler(BaseToolHandler):
             min_bytes = min_mb * 1_048_576
             found: List[Dict[str, Any]] = []
 
-            for dirpath, _, filenames in os.walk(scan_path):
+            # Budget the walk. Each file costs only a stat, so a big FILE is
+            # cheap (and finding the 1.5GB history DB is the point of this tool)
+            # — it is a big COUNT that hurts: Packages trees and Backups can run
+            # to tens of thousands of entries, and this walk runs on the single
+            # dispatch thread, blocking every other tool call while it goes.
+            deadline    = time.time() + _WALK_BUDGET_SECONDS
+            scanned     = 0
+            walk_capped = False
+
+            for dirpath, dirnames, filenames in os.walk(scan_path):
+                # Skip caches that are pure noise in a "what's using disk" answer.
+                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
                 for fname in filenames:
+                    scanned += 1
+                    if scanned % 2000 == 0 and time.time() > deadline:
+                        walk_capped = True
+                        break
                     fpath = os.path.join(dirpath, fname)
                     try:
                         size = os.path.getsize(fpath)
@@ -510,19 +532,33 @@ class SystemToolsHandler(BaseToolHandler):
                             })
                     except OSError:
                         pass
+                if walk_capped:
+                    break
 
             found.sort(key=lambda x: x["size_mb"], reverse=True)
             truncated = len(found) > max_results
             found = found[:max_results]
 
             result = {
-                "success":    True,
-                "scan_path":  scan_path,
-                "min_mb":     min_mb,
-                "count":      len(found),
-                "truncated":  truncated,
-                "files":      found,
+                "success":       True,
+                "scan_path":     scan_path,
+                "min_mb":        min_mb,
+                "count":         len(found),
+                "truncated":     truncated,
+                "files":         found,
+                "files_scanned": scanned,
+                "walk_capped":   walk_capped,
             }
+            if walk_capped:
+                # Never let a partial sweep read as a complete one.
+                result["note"] = (
+                    f"Stopped after {_WALK_BUDGET_SECONDS}s and {scanned} files — the tree was "
+                    f"not fully scanned, so this is NOT the complete set of large files. "
+                    f"Re-run against a narrower path."
+                )
+                self.logger.warning(f"[system_tools]: find_large_files hit its "
+                                    f"{_WALK_BUDGET_SECONDS}s budget after {scanned} files "
+                                    f"under {scan_path}")
             self.log_tool_outcome("find_large_files", True,
                                   f"{len(found)} files >= {min_mb} MB")
             return result

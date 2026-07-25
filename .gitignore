@@ -1,5 +1,10 @@
-# Bundled Python packages (installed by Indigo via requirements.txt)
-Contents/Packages/
+# Bundled Python packages (installed by Indigo via requirements.txt).
+# Must be **/ — a pattern containing a mid-string slash is anchored to this
+# file's directory, so plain "Contents/Packages/" matched only a top-level
+# Contents/, NOT the real location inside the .indigoPlugin bundle. The next
+# plugin-sync after a dependency install would have committed the whole
+# vendored package tree.
+**/Contents/Packages/
 
 # Python
 __pycache__/

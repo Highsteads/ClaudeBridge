@@ -50,7 +50,9 @@ class FakeLogQuery:
         self.entries = entries
 
     def _read_log_range(self, after_dt, before_dt, line_count):
-        return self.entries
+        # Matches the real (entries, meta) return added in v2.17.0.
+        return self.entries, {"scanned_from": "", "scanned_to": "",
+                              "span_days": 1, "span_clamped": False}
 
 
 @pytest.fixture()

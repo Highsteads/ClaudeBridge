@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ...adapters.data_provider import DataProvider
 from ..base_handler import BaseToolHandler
@@ -24,6 +24,17 @@ _LOG_ROOT = os.path.normpath(os.path.join(_HERE, *([".."] * 7), "Logs"))
 _LOG_LINE_RE = re.compile(
     r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)\t([^\t]*)\t(.*)$'
 )
+
+# Most days of on-disk log this tool will scan in one call.
+#
+# Two reasons for the cap. First, "everything before <date>" has no natural
+# lower bound, and the old code defaulted the start to TODAY — so asking for
+# entries before a past date produced start > end, the day loop never ran, and
+# the tool returned an empty list that read as "nothing happened". Second, every
+# matching entry is buffered as a dict before line_count truncation, so an open
+# range walks hundreds of files and holds the lot in memory. Both are fixed by
+# anchoring the window to the END of the range and capping its width.
+_MAX_SPAN_DAYS = 14
 
 
 def _parse_time_param(value: str, today: date) -> Optional[datetime]:
@@ -75,7 +86,7 @@ class LogQueryHandler(BaseToolHandler):
         after_dt:   Optional[datetime],
         before_dt:  Optional[datetime],
         line_count: Optional[int],
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Read log file(s) from disk and return entries in the time range.
 
         Entries are returned as dicts matching the format from
@@ -83,9 +94,37 @@ class LogQueryHandler(BaseToolHandler):
           {"TimeStamp": str, "TypeStr": str, "Message": str}
 
         line_count limits the LAST N matching entries (most recent first).
+
+        Returns (entries, meta). ``meta`` reports the day window actually
+        scanned and whether it was clamped, so a caller can tell a genuine
+        "nothing matched" from a truncated search.
         """
-        start_date = (after_dt  or datetime.now()).date()
+        # Anchor on the END of the range, then derive the start. An absent
+        # `before` means "up to now"; an absent `after` means "the _MAX_SPAN_DAYS
+        # leading up to `before`" — NOT "from today", which used to invert the
+        # window and silently return nothing whenever `before` was in the past.
         end_date   = (before_dt or datetime.now()).date()
+        start_date = after_dt.date() if after_dt else (
+            end_date - timedelta(days=_MAX_SPAN_DAYS - 1)
+        )
+
+        span_clamped = False
+        if (end_date - start_date).days > _MAX_SPAN_DAYS - 1:
+            start_date   = end_date - timedelta(days=_MAX_SPAN_DAYS - 1)
+            span_clamped = True
+
+        meta = {
+            "scanned_from": start_date.isoformat(),
+            "scanned_to":   end_date.isoformat(),
+            "span_days":    (end_date - start_date).days + 1,
+            "span_clamped": span_clamped,
+        }
+        if span_clamped:
+            meta["span_note"] = (
+                f"Range wider than the {_MAX_SPAN_DAYS}-day scan limit — searched the "
+                f"{_MAX_SPAN_DAYS} days ending {end_date.isoformat()}. Narrow 'after'/"
+                f"'before' to search an earlier window."
+            )
 
         results: List[Dict[str, Any]] = []
         current = start_date
@@ -136,9 +175,11 @@ class LogQueryHandler(BaseToolHandler):
                     self.logger.warning(f"Could not read log file {log_file}: {exc}")
             current += timedelta(days=1)
 
+        meta["matched_before_limit"] = len(results)
         if line_count and len(results) > line_count:
             results = results[-line_count:]
-        return results
+            meta["truncated"] = True
+        return results, meta
 
     # ── Public tool method ────────────────────────────────────────────────────
 
@@ -191,15 +232,31 @@ class LogQueryHandler(BaseToolHandler):
                         "success": False,
                     }
 
-                entries = self._read_log_range(after_dt, before_dt, line_count)
+                # An inverted range is a caller mistake, not an empty result —
+                # say so rather than returning a confident "count": 0.
+                if after_dt and before_dt and after_dt >= before_dt:
+                    self.log_tool_outcome("query", False, "Inverted time range")
+                    return {
+                        "error": (
+                            f"'after' ({after_dt.isoformat()}) is not earlier than "
+                            f"'before' ({before_dt.isoformat()}) — the range is inverted "
+                            f"or empty, so no entry could ever match."
+                        ),
+                        "success": False,
+                    }
+
+                entries, range_meta = self._read_log_range(after_dt, before_dt, line_count)
                 result = {
                     "success":    True,
                     "count":      len(entries),
                     "entries":    entries,
                     "parameters": params,
+                    "range":      range_meta,
                 }
                 self.log_tool_outcome(
-                    "query", True, f"Retrieved {len(entries)} log entries (file scan)"
+                    "query", True,
+                    f"Retrieved {len(entries)} log entries (file scan, "
+                    f"{range_meta['span_days']}d from {range_meta['scanned_from']})"
                 )
                 return result
 

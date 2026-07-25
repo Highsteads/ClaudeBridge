@@ -48,6 +48,24 @@ def _coerce_bool(value) -> bool:
     return str(value).strip().lower() in ("true", "1", "yes", "on")
 
 
+def _readback(collection, elem_id, attr: str, expected):
+    """Re-fetch an element and return (actual_value, matched_expected).
+
+    Writes to an object owned by ANOTHER plugin can fail WITHOUT raising —
+    replacePluginPropsOnServer is silently ignored, and replaceOnServer can be
+    rejected or overridden by the owning plugin. So the requested value is never
+    evidence that the write landed; only a re-read is. On a fetch failure this
+    returns (None, False) rather than assuming success.
+
+    Mirrors the pattern already used by schedule_control_handler.update_*.
+    """
+    try:
+        actual = getattr(collection[elem_id], attr)
+    except Exception:
+        return None, False
+    return actual, actual == expected
+
+
 def _deps_to_plain(deps) -> Dict[str, Any]:
     """Deep-convert an indigo.Dict of dependents to plain JSON-friendly types.
 
@@ -142,9 +160,19 @@ class ExtendedToolsHandler(BaseToolHandler):
             enable = value if isinstance(value, bool) else \
                 str(value).strip().lower() not in ("false", "0", "no", "off", "")
             indigo.device.enable(did, value=enable)
+            # Read the value back rather than echoing the request. This is the
+            # tool that once reported success while doing the opposite, and a
+            # write that the owning plugin rejects or overrides does not raise —
+            # so an unverified "success" is indistinguishable from a real one.
+            actual, confirmed = _readback(indigo.devices, did, "enabled", enable)
             msg = f"{'Enabled' if enable else 'Disabled'} device '{dev.name}'"
-            self.log_tool_outcome("enable_device", True, msg)
-            return {"success": True, "device_id": did, "enabled": enable, "message": msg}
+            if not confirmed:
+                msg += f" — but the server still reports enabled={actual!r}"
+                self.logger.warning(f"enable_device {did}: requested {enable}, "
+                                    f"server reports {actual!r}")
+            self.log_tool_outcome("enable_device", confirmed, msg)
+            return {"success": True, "device_id": did, "enabled": actual,
+                    "requested": enable, "confirmed": confirmed, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "enable_device")
 
@@ -161,10 +189,18 @@ class ExtendedToolsHandler(BaseToolHandler):
             old_name = dev.name
             dev.name = new_name
             dev.replaceOnServer()
-            msg = f"Renamed device {did}: '{old_name}' → '{new_name}'"
-            self.log_tool_outcome("rename_device", True, msg)
-            return {"success": True, "device_id": did,
-                    "old_name": old_name, "new_name": new_name, "message": msg}
+            # Re-read: replaceOnServer on a device owned by another plugin can
+            # fail without raising, so the requested name is not evidence.
+            actual, confirmed = _readback(indigo.devices, did, "name", new_name)
+            msg = f"Renamed device {did}: '{old_name}' → '{actual}'"
+            if not confirmed:
+                msg = (f"Rename of device {did} did NOT take effect — asked for "
+                       f"'{new_name}', server still reports '{actual}'")
+                self.logger.warning(msg)
+            self.log_tool_outcome("rename_device", confirmed, msg)
+            return {"success": confirmed, "device_id": did,
+                    "old_name": old_name, "new_name": actual,
+                    "requested": new_name, "confirmed": confirmed, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "rename_device")
 
@@ -480,8 +516,30 @@ class ExtendedToolsHandler(BaseToolHandler):
             else:
                 did = _coerce_id(device_id)
                 dev = indigo.devices[did]
-                node = getattr(dev, "address", None)
-                indigo.zwave.startNetworkOptimize(nodeId=node)
+                # The native dev.address is EMPTY on a large share of the estate
+                # (many plugins keep the address in a plugin prop instead), and
+                # startNetworkOptimize(nodeId=None) is the WHOLE-NETWORK form —
+                # so an unvalidated address silently turns "optimise this node"
+                # into a full mesh heal, reported as "node None".
+                node = (str(getattr(dev, "address", "") or "")).strip()
+                if not node:
+                    return {
+                        "success": False,
+                        "error": (
+                            f"Device {did} ('{dev.name}') has no Z-Wave node address, so it "
+                            f"cannot be optimised individually. Omit device_id to optimise "
+                            f"the whole network, or check this is a Z-Wave device."
+                        ),
+                    }
+                if not node.isdigit():
+                    return {
+                        "success": False,
+                        "error": (
+                            f"Device {did} ('{dev.name}') has address {node!r}, which is not a "
+                            f"Z-Wave node id. This tool only accepts Z-Wave devices."
+                        ),
+                    }
+                indigo.zwave.startNetworkOptimize(nodeId=int(node))
                 target = f"node {node} ('{dev.name}')"
             msg = f"Started Z-Wave network optimisation ({target})"
             self.log_tool_outcome("zwave_start_network_optimize", True, msg)
@@ -922,11 +980,27 @@ class ExtendedToolsHandler(BaseToolHandler):
             did = _coerce_id(device_id)
             dev = indigo.devices[did]
             previous = getattr(dev, "energyAccumTotal", None)
+            if previous is None:
+                return {
+                    "success": False, "device_id": did,
+                    "error": (f"Device '{dev.name}' reports no energy accumulator "
+                              f"(energyAccumTotal is absent), so there is nothing to reset."),
+                }
             indigo.device.resetEnergyAccumTotal(did)
+            # Re-read rather than assume: the reset is a request to the owning
+            # plugin, which may not honour it.
+            actual, confirmed = _readback(indigo.devices, did, "energyAccumTotal", 0.0)
+            if not confirmed and actual == 0:
+                confirmed = True          # int 0 vs float 0.0 is still a reset
             msg = f"Energy total reset on '{dev.name}' (was {previous} kWh)"
-            self.log_tool_outcome("reset_energy_accumulator", True, msg)
-            return {"success": True, "device_id": did,
-                    "previous_kwh": previous, "message": msg}
+            if not confirmed:
+                msg = (f"Energy reset on '{dev.name}' did NOT take effect — still "
+                       f"reports {actual} kWh (was {previous})")
+                self.logger.warning(msg)
+            self.log_tool_outcome("reset_energy_accumulator", confirmed, msg)
+            return {"success": confirmed, "device_id": did,
+                    "previous_kwh": previous, "current_kwh": actual,
+                    "confirmed": confirmed, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "reset_energy_accumulator")
 

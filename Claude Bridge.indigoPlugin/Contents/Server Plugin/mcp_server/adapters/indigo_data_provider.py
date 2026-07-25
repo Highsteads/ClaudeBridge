@@ -15,17 +15,6 @@ from .data_provider import DataProvider
 from ..common.device_props import device_dict
 from ..common.json_encoder import filter_json, KEYS_TO_KEEP_MINIMAL_DEVICES
 
-# indigo.server.log(level=...) wants a Python logging int — a string is silently
-# ignored and logs as Info. Map the tool's string level to the real int.
-_LOG_LEVELS = {
-    "DEBUG":    logging.DEBUG,
-    "INFO":     logging.INFO,
-    "WARNING":  logging.WARNING,
-    "WARN":     logging.WARNING,
-    "ERROR":    logging.ERROR,
-    "CRITICAL": logging.CRITICAL,
-}
-
 
 class IndigoDataProvider(DataProvider):
     """Data provider implementation for accessing Indigo entities."""
@@ -947,25 +936,6 @@ class IndigoDataProvider(DataProvider):
         except Exception as e:
             self.logger.error(f"Error finding device by name '{name}': {e}")
             return None
-
-    def log_message(self, message: str, level: str = "INFO") -> Dict[str, Any]:
-        """Write a message to the Indigo on-screen event log."""
-        try:
-            level_upper = (level or "INFO").upper()
-            # indigo.server.log(level=...) expects a Python logging INT. Passing a
-            # STRING (e.g. "WARNING") is silently ignored and the line logs as Info
-            # — so a WARNING/DEBUG request used to be echoed back as honoured while
-            # the log line was actually Info. Map to the real level int; use
-            # isError=True for ERROR so it renders red.
-            level_int = _LOG_LEVELS.get(level_upper, logging.INFO)
-            if level_upper == "ERROR":
-                indigo.server.log(message, level=level_int, isError=True)
-            else:
-                indigo.server.log(message, level=level_int)
-            return {"success": True, "message": message, "level": level_upper}
-        except Exception as e:
-            self.logger.error(f"Error writing to Indigo log: {e}")
-            return {"error": str(e), "success": False}
 
     def send_notification(
         self,

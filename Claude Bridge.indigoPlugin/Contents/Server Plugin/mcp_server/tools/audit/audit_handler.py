@@ -352,6 +352,13 @@ class AuditHandler(BaseToolHandler):
             id_map      = _scan_scripts_for_ids(script_dirs)
             # One corpus for name-based detection (read each file once).
             corpus = "\n".join(content for _name, content in _iter_script_files(script_dirs))
+            # ...and one token set over it. The per-variable `\b<name>\b` regex
+            # rescanned the ENTIRE corpus once per variable — O(variables ×
+            # corpus), seconds of frozen dispatch thread on a large estate. Indigo
+            # variable names carry no spaces, so a whole-word match on a \w+ name
+            # is exactly a token-set membership test. Names with any non-word
+            # character still take the regex path, so behaviour is unchanged.
+            corpus_tokens = set(re.findall(r"\w+", corpus))
 
             unused      = []
             problematic = []
@@ -361,9 +368,14 @@ class AuditHandler(BaseToolHandler):
                 val = str(v.value).strip().lower()
 
                 in_scripts = id_map.get(v.id, [])
-                name_ref = bool(v.name) and re.search(
-                    r"\b" + re.escape(v.name) + r"\b", corpus
-                ) is not None
+                if not v.name:
+                    name_ref = False
+                elif re.fullmatch(r"\w+", v.name):
+                    name_ref = v.name in corpus_tokens
+                else:
+                    name_ref = re.search(
+                        r"\b" + re.escape(v.name) + r"\b", corpus
+                    ) is not None
 
                 # Authoritative reverse-dependency check (the data behind Indigo's
                 # own "used by…" delete warning).
@@ -509,7 +521,14 @@ class AuditHandler(BaseToolHandler):
             ref_pat_method = re.compile(
                 r"indigo\.(?:device|variable)\.\w+\(\s*(\d{6,12})\b"
             )
+            # Write conflicts: multiple scripts calling updateValue(SAME_VAR_ID)
+            write_pat = re.compile(r"updateValue\s*\(\s*(\d{8,12})\s*[,)]")
+
             ctx_id_map: Dict[int, List[str]] = {}
+            write_map: Dict[int, List[str]] = {}
+            # ONE pass over the script folders. This used to walk and re-read
+            # every .py in both folders twice — once here, once for the write
+            # scan below — on the single dispatch thread, for no benefit.
             for name, content in _iter_script_files(script_dirs):
                 for pat in (ref_pat, ref_pat_method):
                     for m in pat.findall(content):
@@ -517,6 +536,12 @@ class AuditHandler(BaseToolHandler):
                         ctx_id_map.setdefault(iid, [])
                         if name not in ctx_id_map[iid]:
                             ctx_id_map[iid].append(name)
+                for m in write_pat.findall(content):
+                    iid = int(m)
+                    if iid in all_var_ids:
+                        write_map.setdefault(iid, [])
+                        if name not in write_map[iid]:
+                            write_map[iid].append(name)
 
             # Orphaned: context-qualified IDs in scripts that aren't any device
             # or variable.
@@ -527,17 +552,6 @@ class AuditHandler(BaseToolHandler):
                 for iid, scripts in ctx_id_map.items()
                 if iid not in all_known
             ]
-
-            # Write conflicts: multiple scripts calling updateValue(SAME_VAR_ID)
-            write_map: Dict[int, List[str]] = {}
-            write_pat = re.compile(r"updateValue\s*\(\s*(\d{8,12})\s*[,)]")
-            for name, content in _iter_script_files(script_dirs):
-                for m in write_pat.findall(content):
-                    iid = int(m)
-                    if iid in all_var_ids:
-                        write_map.setdefault(iid, [])
-                        if name not in write_map[iid]:
-                            write_map[iid].append(name)
 
             write_conflicts = []
             for var_id, scripts in write_map.items():

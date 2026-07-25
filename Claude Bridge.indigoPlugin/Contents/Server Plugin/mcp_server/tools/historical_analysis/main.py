@@ -19,10 +19,29 @@ from ...common.openai_client.main import perform_completion
 _ALTERNATIVE_FIELDS = [
     "onState", "onOffState", "isPoweredOn",
     "brightness", "brightnessLevel",
-    "temperature", "temperatureInput1", 
+    "temperature", "temperatureInput1",
     "humidity", "humidityInput1",
     "sensorValue", "energyAccumTotal", "state"
 ]
+
+# ── Bounds ───────────────────────────────────────────────────────────────────
+# This tool is the plugin's most expensive by a wide margin, and it runs
+# synchronously on the single dispatch thread — so while it works, EVERY other
+# MCP tool call and every device callback is blocked.
+#
+# Unbounded, one device cost: one Anthropic completion (30s timeout + a retry)
+# plus up to 15 InfluxDB attempts, each opening a fresh client and running
+# test_connection() + execute_query() at 30s apiece — roughly 900s. Multiplied
+# by an entity list that had no maxItems. A firewalled or black-holed Influx
+# host hits the timeout every time rather than failing fast.
+#
+# The deadline is checked between attempts, so a single in-flight socket can
+# still overshoot it by one timeout; it bounds the multiplication, not one call.
+_TOOL_DEADLINE_SECONDS  = 120
+_MAX_FALLBACK_FIELDS    = 5
+
+# Sentinel: no Influx session resolved yet for the current call.
+_UNSET = object()
 
 
 class HistoricalAnalysisHandler(BaseToolHandler):
@@ -42,7 +61,40 @@ class HistoricalAnalysisHandler(BaseToolHandler):
         """
         super().__init__(tool_name="historical_analysis", logger=logger)
         self.data_provider = data_provider
-    
+        # Per-call Influx session (client, connection-tested) — see _influx_session().
+        # Dispatch is single-threaded, so per-instance call state is safe here.
+        self._influx_session = _UNSET
+        self._deadline = None
+
+    def _out_of_time(self) -> bool:
+        """True once this call has used its wall-clock budget."""
+        return self._deadline is not None and time.time() >= self._deadline
+
+    def _influx_session_client(self):
+        """Return a connection-tested InfluxDB client for THIS call, or None.
+
+        The old code built a fresh client and re-ran test_connection() for every
+        property attempt — up to 15 per device. test_connection() opens a socket
+        and runs get_list_database() at a 30s timeout, so an unreachable-but-not-
+        refusing host paid that cost on every single attempt. Resolve once per
+        call instead; the verdict cannot meaningfully change mid-call.
+        """
+        if self._influx_session is not _UNSET:
+            return self._influx_session
+
+        session = None
+        try:
+            client = InfluxDBClient(logger=self.logger)
+            if client.is_enabled() and client.test_connection():
+                session = client
+            else:
+                self.debug_log("InfluxDB not enabled or not reachable — "
+                               "skipping history queries for this call")
+        except Exception as exc:
+            self.warning_log(f"InfluxDB connection test failed: {exc}")
+        self._influx_session = session
+        return session
+
     def analyze_historical_data(
         self,
         query: str,
@@ -131,20 +183,31 @@ class HistoricalAnalysisHandler(BaseToolHandler):
             # Get historical data for all entities
             all_results = []
             entities_analyzed = []
-            
+            skipped_for_time = []
+
+            # Everything below runs on the single dispatch thread, so give the
+            # whole call one wall-clock budget and start a fresh Influx session.
+            self._deadline       = time.time() + _TOOL_DEADLINE_SECONDS
+            self._influx_session = _UNSET
+
             # Process devices
             for device_name in devices:
+                if self._out_of_time():
+                    skipped_for_time.append(device_name)
+                    continue
                 self.debug_log(f"Querying historical data for device: {device_name}")
-                
+
                 # Use LLM to intelligently select device properties based on query
                 device_results = []
                 recommended_properties = self._get_recommended_properties(device_name, query)
-                
+
                 if recommended_properties:
                     self.info_log(f"LLM recommended properties for {device_name}: {recommended_properties}")
                     
                     # Try recommended properties in order
                     for device_property in recommended_properties:
+                        if self._out_of_time():
+                            break
                         try:
                             self.debug_log(f"Querying InfluxDB for {device_name}.{device_property}")
                             property_results = self._get_historical_device_data(
@@ -162,8 +225,13 @@ class HistoricalAnalysisHandler(BaseToolHandler):
                 
                 # Fallback to predefined fields if LLM recommendations didn't work
                 if not device_results:
-                    self.debug_log(f"LLM recommendations failed, falling back to predefined properties: {_ALTERNATIVE_FIELDS}")
-                    for device_property in _ALTERNATIVE_FIELDS:
+                    # Capped: the full 12-field sweep multiplied by a slow Influx
+                    # host was the bulk of the old worst case.
+                    fallback_fields = _ALTERNATIVE_FIELDS[:_MAX_FALLBACK_FIELDS]
+                    self.debug_log(f"LLM recommendations failed, falling back to predefined properties: {fallback_fields}")
+                    for device_property in fallback_fields:
+                        if self._out_of_time():
+                            break
                         try:
                             self.debug_log(f"Trying fallback property: {device_name}.{device_property}")
                             property_results = self._get_historical_device_data(
@@ -185,8 +253,11 @@ class HistoricalAnalysisHandler(BaseToolHandler):
             
             # Process variables (simpler - only 'value' field)
             for variable_name in variables:
+                if self._out_of_time():
+                    skipped_for_time.append(variable_name)
+                    continue
                 self.debug_log(f"Querying historical data for variable: {variable_name}")
-                
+
                 try:
                     variable_results = self._get_historical_variable_data(
                         variable_name, time_range_days
@@ -203,11 +274,31 @@ class HistoricalAnalysisHandler(BaseToolHandler):
             
             # Calculate analysis duration
             analysis_duration = time.time() - start_time
-            
+            self._influx_session = _UNSET     # don't hold a client between calls
+            self._deadline       = None
+
+            # Never let a budget cut look like "there was no data" — say it out
+            # loud, in the log and in the payload.
+            if skipped_for_time:
+                self.warning_log(
+                    f"Analysis hit the {_TOOL_DEADLINE_SECONDS}s budget — "
+                    f"{len(skipped_for_time)} entit{'y' if len(skipped_for_time) == 1 else 'ies'} "
+                    f"not queried: {', '.join(skipped_for_time)}"
+                )
+
             # Create enhanced summary statistics
             summary_stats = self._calculate_summary_statistics(
                 all_results, entities_analyzed, time_range_days, analysis_duration
             )
+            if skipped_for_time:
+                summary_stats["skipped_for_time"] = skipped_for_time
+                summary_stats["deadline_seconds"] = _TOOL_DEADLINE_SECONDS
+                summary_stats["note"] = (
+                    f"Stopped after {_TOOL_DEADLINE_SECONDS}s. These entities were NOT "
+                    f"queried and their absence from the report is not evidence of no "
+                    f"data: {', '.join(skipped_for_time)}. Re-run with a shorter "
+                    f"entity_names list."
+                )
             
             # Format report with better organization
             if all_results:
@@ -259,12 +350,11 @@ class HistoricalAnalysisHandler(BaseToolHandler):
             List of formatted messages describing device state changes
         """
         try:
-            client = InfluxDBClient(logger=self.logger)
-            query_builder = InfluxDBQueryBuilder(logger=self.logger)
-            
-            if not client.is_enabled() or not client.test_connection():
+            client = self._influx_session_client()
+            if client is None:
                 return []
-            
+            query_builder = InfluxDBQueryBuilder(logger=self.logger)
+
             # Build and execute query
             query = query_builder.build_device_history_query(
                 device_name=device_name,
@@ -290,6 +380,8 @@ class HistoricalAnalysisHandler(BaseToolHandler):
                     continue
                 
                 timestamp_local = self._convert_to_local_timezone(record_time_str)
+                if timestamp_local is None:
+                    continue        # unparseable timestamp — drop, never invent one
                 field_value = data_record.get(device_property)
                 
                 if saved_state is None:
@@ -456,8 +548,11 @@ class HistoricalAnalysisHandler(BaseToolHandler):
             return local_datetime
         except Exception as e:
             self.error_log(f"Failed to parse datetime '{datetime_str}': {e}")
-            # Return current time as fallback
-            return datetime.now().astimezone()
+            # Return None, NOT datetime.now(). Falling back to "now" rendered a
+            # malformed historical row as a present-moment event — the analysis
+            # then reported a state change that never happened, at a time it
+            # certainly did not happen. Callers drop the row instead.
+            return None
     
     def _format_state_value(self, value, property_name: str = None) -> str:
         """
@@ -1037,12 +1132,11 @@ Recommend 1-3 most relevant properties:"""
             List of formatted messages describing variable value changes
         """
         try:
-            client = InfluxDBClient(logger=self.logger)
-            query_builder = InfluxDBQueryBuilder(logger=self.logger)
-            
-            if not client.is_enabled() or not client.test_connection():
+            client = self._influx_session_client()
+            if client is None:
                 return []
-            
+            query_builder = InfluxDBQueryBuilder(logger=self.logger)
+
             # Build and execute query for variable changes
             query = query_builder.build_variable_history_query(
                 variable_name=variable_name,
@@ -1067,6 +1161,8 @@ Recommend 1-3 most relevant properties:"""
                     continue
                 
                 timestamp_local = self._convert_to_local_timezone(record_time_str)
+                if timestamp_local is None:
+                    continue        # unparseable timestamp — drop, never invent one
                 field_value = data_record.get("value")
                 
                 if saved_value is None:

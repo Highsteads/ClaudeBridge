@@ -5,7 +5,69 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        25-07-2026
-# Version:     2.16.2
+# Version:     2.17.0
+#
+# v2.17.0 (25-07-2026): FULL-SWEEP FIX BATCH from a systematic three-agent audit
+# (no reported symptom — the sweep found these). Three clusters.
+#
+# SILENT WRONG ANSWERS. log_message never actually worked: it passed the level
+# as a STRING, which Indigo silently ignores and logs as Info, so every
+# WARNING/DEBUG was an Info line while the tool returned {"level": "WARNING"}.
+# The v2.10.1 changelog claims this was fixed — it wasn't: that fix landed in
+# indigo_data_provider.log_message, which has ZERO callers, and the regression
+# test only asserted the dead module's dict. Level mapping now has ONE home
+# (common/log_levels.py), the dead duplicate is gone (including its abstract
+# declaration, which is what allowed two implementations to drift), and the test
+# asserts what indigo.server.log actually receives — verified failing against the
+# 2.16.2 code before the fix. scaffold_automation_script emitted that SAME broken
+# helper into every script it generated, with level="ERROR" on the top-level
+# exception handler, so a scaffolded script logged its own traceback at Info;
+# it now emits the corrected estate-standard helper. query_event_log defaulted
+# the range start to TODAY when only `before` was given, so "everything before a
+# past date" returned an empty list that read as "nothing happened" — the window
+# is now anchored on the END of the range, capped at 14 days, reports the span
+# actually scanned, and rejects an inverted range instead of answering it.
+# rename_device / enable_device / reset_energy_accumulator echoed the request as
+# truth; they now re-read and report the ACTUAL value plus a `confirmed` flag
+# (a write to a device owned by another plugin can fail without raising).
+# zwave_start_network_optimize passed an unvalidated dev.address as nodeId —
+# empty on most of the estate, and nodeId=None is the WHOLE-NETWORK form, so
+# "optimise this node" silently became a full mesh heal reported as "node None".
+#
+# WHOLE-PLUGIN FREEZES. Indigo dispatches every callback and every IWS handler
+# on ONE thread, so a slow tool call freezes everything, not just its request.
+# The exec lock was the worst: the worker acquired it and released it in a
+# finally, so an abandoned runaway script held it forever — every later exec call
+# then blocked for its full 60s/120s budget and returned a misleading "your
+# script exceeded the limit" about a script that never ran. The caller now
+# acquires with a short timeout and fails fast with an honest message naming the
+# stuck run; the worker restores stdout only if it is still its own, so a
+# late-finishing worker can't clobber a healthy stream; the wedge is reported by
+# /health (status: degraded). Also capped: execute_plugin_menu_item's
+# caller-supplied timeout (uncapped = a one-hour freeze), analyze_historical_data
+# (one Anthropic call plus up to 15 Influx attempts per device, each rebuilding
+# the client and re-running a 30s connection test — ~900s/device; now one
+# memoised session, a capped fallback sweep, maxItems 10, and a 120s deadline
+# that NAMES what it skipped), plugin_node_check_html and find_large_files.
+# device_history reported "hours": 24 while `limit` had cut the window to the
+# last few minutes — it now returns truncated + the ts span actually covered.
+# osascript was still called by bare name: the 2.16.2 absolute-path sweep
+# covered vm_stat/sysctl/uptime/node but missed it.
+#
+# STALENESS. The tool cache was invalidated only by ClaudeBridge's OWN mutating
+# tools, so a light switched at the wall, by a Z-Wave association, by a trigger
+# or by another plugin kept reading as its old state for up to the full TTL —
+# even though deviceUpdated had the change in hand. Device/variable callbacks now
+# bump per-domain counters (O(1), safe under a sensor storm) and a cached entry
+# whose stamp is behind is a miss. VectorStore-Refresh threads are tracked and
+# joined before the store closes, and a refresh requested during warmup is
+# replayed rather than dropped. Plus: the two bare `except Exception: pass` on
+# the events-queue path now log, the hardcoded Perceptive Automation/Scripts path
+# is derived, .gitignore's Contents/Packages/ rule was root-anchored and did NOT
+# match inside the bundle, an unparseable Influx timestamp returned datetime.now()
+# (rendering a malformed row as a present-moment event) and now drops the row,
+# Phase-2 prefs coerce all three values before applying any, and find_conflicts
+# stopped walking every script file twice. Suite 424 -> 439.
 #
 # v2.16.2 (25-07-2026): BUG FIX to 2.16.1 — the new hw.memsize read never ran
 # inside the plugin host. `_run(["sysctl", ...])` used the BARE binary name, and
@@ -239,7 +301,16 @@
 # 55 battery devices (all the z2m sensors). Config gates webhooks_enabled +
 # auto_configure_claude_code use _as_bool not bool() (bool("false") is True →
 # fail-open). log_message maps its level string to a real logging int (a string
-# was silently ignored → WARNING/DEBUG logged as Info). update_variable writes ""
+# was silently ignored → WARNING/DEBUG logged as Info).
+#   *** CORRECTION (v2.17.0, 25-07-2026): that log_message claim was WRONG. The
+#   mapping was added to indigo_data_provider.log_message, which has NO callers —
+#   the live tool path (mcp_handler -> ScriptToolsHandler.log_message) went on
+#   passing the raw string for another six versions, and the accompanying test
+#   only asserted the dead module's dict, so the suite stayed green. Genuinely
+#   fixed in 2.17.0. Left here rather than rewritten: a changelog entry that
+#   quietly claims a fix it never shipped is exactly what cost this investigation
+#   its time, and the correction is worth more than a tidy line. ***
+# update_variable writes ""
 # for JSON null, not "None". execute_schedule_now coerces ignore_conditions
 # properly (string "false" no longer bypasses conditions). action_execute_group
 # rejects a delay honestly (Indigo's actionGroup.execute has no delay param — it
@@ -1054,8 +1125,13 @@ class Plugin(indigo.PluginBase):
         import shutil as _shutil
         from pathlib import Path as _Path
 
-        # Standard Indigo scripts directory — created if it doesn't exist
-        scripts_dir = _Path("/Library/Application Support/Perceptive Automation/Scripts")
+        # Standard Indigo scripts directory — created if it doesn't exist.
+        # Derived, not hardcoded: getInstallFolderPath() returns the VERSIONED
+        # folder, and the two script folders sit at its parent. The old literal
+        # path silently created a bogus Scripts folder on a non-default install
+        # root, deployed the proxy (carrying the live bearer token) into it,
+        # pointed ~/.mcp.json at that dead path, and logged success.
+        scripts_dir = _Path(os.path.dirname(indigo.server.getInstallFolderPath())) / "Scripts"
 
         bundle_proxy  = _Path(os.getcwd()) / "indigo_mcp_proxy.py"
         dest_proxy    = scripts_dir / "indigo_mcp_proxy.py"
@@ -1899,12 +1975,33 @@ class Plugin(indigo.PluginBase):
         """
         return oldDevice.pluginProps.get("serverName") != newDevice.pluginProps.get("serverName")
 
+    def _note_cache_change(self, domain: str) -> None:
+        """Mark a tool-cache domain dirty after a real-world change.
+
+        Wrapped because it runs on the hottest callback path in the plugin: it
+        must never raise (a cache bookkeeping failure must not break device
+        event handling) and must never be expensive.
+        """
+        try:
+            handler = self.mcp_handler
+            if handler is not None and getattr(handler, "tool_cache", None) is not None:
+                handler.tool_cache.note_external_change(domain)
+        except Exception:
+            pass   # deliberately silent: worst case is a stale read, not a fault
+
     def variableUpdated(self, origVar: indigo.Variable, newVar: indigo.Variable) -> None:
         """
         Called when an Indigo variable value changes.
         Queues the event for any active Claude subscriptions.
         """
         super().variableUpdated(origVar, newVar)
+        if origVar.value != newVar.value:
+            # Tell the tool cache the world moved. Without this, list_variables /
+            # get_variable_by_id kept serving the pre-change value for a full TTL
+            # even though we had the change in hand right here. O(1) — a counter
+            # bump, not a store walk — because this fires constantly.
+            self._note_cache_change("variable")
+
         if (
             self.mcp_handler
             and hasattr(self.mcp_handler, "events_handler")
@@ -1918,8 +2015,11 @@ class Plugin(indigo.PluginBase):
                     "old_value": origVar.value,
                     "new_value": newVar.value,
                 })
-            except Exception:
-                pass
+            except Exception as exc:
+                # Was a bare pass: a persistent queue_event failure disabled every
+                # subscription with nothing in the log to show for it.
+                self.logger.warning(f"Could not queue variable_updated event for "
+                                    f"'{newVar.name}': {exc}")
         # Outbound webhooks (own try/except inside; gated on the enabled flag)
         self._webhook_on_variable_change(origVar, newVar)
 
@@ -1945,6 +2045,14 @@ class Plugin(indigo.PluginBase):
                 self._handle_mcp_server_device_update(origDev, newDev)
             return
 
+        # Tell the tool cache the world moved — a light switched at the wall, by
+        # a Z-Wave association, by a trigger, or by another plugin. Nothing else
+        # invalidates on real-world change, so without this home_status /
+        # get_device_by_id / list_devices served the pre-change value for up to
+        # the full TTL and presented it as current. O(1), because this callback
+        # fires on every sensor event on the estate.
+        self._note_cache_change("device")
+
         # Queue event for the events system (all non-plugin devices)
         if (
             self.mcp_handler
@@ -1964,8 +2072,10 @@ class Plugin(indigo.PluginBase):
                         "name":           newDev.name,
                         "changed_states": changed_states,
                     })
-            except Exception:
-                pass
+            except Exception as exc:
+                # Was a bare pass — see variableUpdated.
+                self.logger.warning(f"Could not queue device_updated event for "
+                                    f"'{newDev.name}': {exc}")
 
         # Outbound webhooks (all non-plugin devices; own try/except; gated)
         self._webhook_on_device_change(origDev, newDev)
@@ -2087,11 +2197,24 @@ class Plugin(indigo.PluginBase):
             self.influx_password   = INFLUXDB_PASSWORD or values_dict.get("influx_password", "")
             self.influx_database   = INFLUXDB_DATABASE or values_dict.get("influx_database", "indigo")
 
-            # Phase 2 — apply rate-limit / cache changes live (no restart needed)
+            # Phase 2 — apply rate-limit / cache changes live (no restart needed).
+            # Coerce ALL three before assigning any: a single try around both the
+            # coercions and the live push meant a bad cache_ttl_seconds left the
+            # two rate-limit fields already reassigned while the running limiter
+            # kept the old values — plugin state and behaviour diverged silently
+            # until the next restart.
             try:
-                self.rate_limit_per_minute = max(1, int(values_dict.get("rate_limit_per_minute", 120)))
-                self.rate_limit_per_day    = max(1, int(values_dict.get("rate_limit_per_day", 5000)))
-                self.cache_ttl_seconds     = max(0, min(300, int(values_dict.get("cache_ttl_seconds", 60))))
+                _per_minute = max(1, int(values_dict.get("rate_limit_per_minute", 120)))
+                _per_day    = max(1, int(values_dict.get("rate_limit_per_day", 5000)))
+                _cache_ttl  = max(0, min(300, int(values_dict.get("cache_ttl_seconds", 60))))
+            except (TypeError, ValueError) as _e:
+                self.logger.warning(f"\t⚠️  Could not parse Phase 2 settings, keeping "
+                                    f"the current values: {_e}")
+            else:
+                self.rate_limit_per_minute = _per_minute
+                self.rate_limit_per_day    = _per_day
+                self.cache_ttl_seconds     = _cache_ttl
+            try:
                 if self.mcp_handler:
                     self.mcp_handler.rate_limiter.per_minute = self.rate_limit_per_minute
                     self.mcp_handler.rate_limiter.per_day    = self.rate_limit_per_day
@@ -2101,7 +2224,8 @@ class Plugin(indigo.PluginBase):
                         f"{self.rate_limit_per_day}/day; cache TTL {self.cache_ttl_seconds}s"
                     )
             except Exception as _e:
-                self.logger.warning(f"\t⚠️  Could not apply Phase 2 settings: {_e}")
+                self.logger.warning(f"\t⚠️  Could not apply Phase 2 settings to the "
+                                    f"running handler: {_e}")
 
             # Apply webhook config live (enable/disable + allow-list) — no restart needed
             try:

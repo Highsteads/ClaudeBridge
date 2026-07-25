@@ -35,6 +35,7 @@ except ImportError:
 
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
+from ...common.log_levels import resolve as resolve_level
 
 BACKUP_DIR_NAME = "_backups"
 MAX_BACKUPS_PER_SCRIPT = 5
@@ -447,13 +448,27 @@ class ScriptToolsHandler(BaseToolHandler):
 # Version:     1.0
 
 # ── Imports ───────────────────────────────────────────────────────────────────
+import logging
 from datetime import datetime
 import indigo  # noqa
 
 {ids_block}
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+_LOG_LEVELS = {{
+    "DEBUG":   logging.DEBUG,
+    "INFO":    logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR":   logging.ERROR,
+}}
+
+
 def log(message, level="INFO"):
+    # Indigo's level= wants a Python logging INT. A STRING is silently ignored
+    # and the line logs as plain Info — so map the name first, or every WARNING
+    # and ERROR this script raises will render as an ordinary Info line.
+    if not isinstance(level, int):
+        level = _LOG_LEVELS.get(str(level).upper(), logging.INFO)
     indigo.server.log(f"[{{datetime.now().strftime('%H:%M:%S.%f')[:-3]}}] {{message}}",
                       level=level)
 
@@ -472,7 +487,7 @@ def main():
 
         log("Script complete")
     except Exception as exc:
-        indigo.server.log(f"ERROR in {stem}: {{exc}}", level="ERROR")
+        log(f"ERROR in {stem}: {{exc}}", "ERROR")
         raise
 
 
@@ -533,18 +548,25 @@ if __name__ == "__main__":
             import sys as _sys
             import threading as _threading
 
-            from ...common.exec_lock import STDOUT_SWAP_LOCK
+            from ...common import exec_lock
+
+            # Caller-side acquire with a short timeout — see the rationale in
+            # common/exec_lock.py. Waiting the full 120s for an abandoned worker
+            # would freeze the whole plugin and then blame this script for it.
+            if not exec_lock.acquire_for_exec():
+                self.log_tool_outcome("run_script", False,
+                                      "refused — previous exec still holds the stdout lock")
+                return exec_lock.busy_error("run_script")
 
             captured_out = io.StringIO()
             captured_err = io.StringIO()
             _res = {"error_msg": None}
 
             # Run the script in a worker thread with a join timeout so a runaway
-            # script can't wedge the IWS request thread forever (see the same
-            # pattern + rationale in execute_indigo_python). The stdout/stderr
-            # swap is serialised via STDOUT_SWAP_LOCK inside the worker.
+            # script can't wedge the request thread forever (same pattern and
+            # rationale as execute_indigo_python). The worker does not touch the
+            # lock, and restores each stream only if it is still its own.
             def _worker():
-                STDOUT_SWAP_LOCK.acquire()
                 old_stdout = _sys.stdout
                 old_stderr = _sys.stderr
                 _sys.stdout = captured_out
@@ -564,21 +586,33 @@ if __name__ == "__main__":
                     except Exception as exc:
                         _res["error_msg"] = str(exc)
                 finally:
-                    _sys.stdout = old_stdout
-                    _sys.stderr = old_stderr
-                    STDOUT_SWAP_LOCK.release()
+                    if _sys.stdout is captured_out:
+                        _sys.stdout = old_stdout
+                    if _sys.stderr is captured_err:
+                        _sys.stderr = old_stderr
 
             _t = _threading.Thread(target=_worker, daemon=True, name="mcp-run-script")
-            _t.start()
+            try:
+                _t.start()
+            except Exception:
+                exec_lock.release_after_exec()
+                raise
             _t.join(timeout=_RUN_SCRIPT_TIMEOUT_SECONDS)
             if _t.is_alive():
+                # Hold the lock deliberately; record the wedge so later calls
+                # fail fast and name THIS script rather than the next caller's.
+                exec_lock.mark_wedged("run_script", f"'{os.path.basename(path)}' "
+                                                    f"exceeded {_RUN_SCRIPT_TIMEOUT_SECONDS}s")
                 return {
                     "success": False, "name": os.path.basename(path), "timed_out": True,
                     "error": (f"Script exceeded the {_RUN_SCRIPT_TIMEOUT_SECONDS}s limit and was left "
-                              "running in the background so the request thread could be freed. A "
-                              "genuinely infinite script needs a plugin reload to clear."),
+                              "running in the background so the request thread could be freed. "
+                              "Until it finishes, further run_script / execute_indigo_python calls "
+                              "are refused immediately rather than queued. A genuinely infinite "
+                              "script needs a plugin reload from the Indigo Plugins menu."),
                     "stdout": captured_out.getvalue()[:4000],
                 }
+            exec_lock.release_after_exec()
 
             error_msg = _res["error_msg"]
             out = captured_out.getvalue()
@@ -616,10 +650,15 @@ if __name__ == "__main__":
         self.log_incoming_request("log_message", {"message": message, "level": level})
         try:
             level_upper = (level or "INFO").upper()
-            if level_upper == "ERROR":
-                indigo.server.log(message, level=level_upper, isError=True)
+            # indigo.server.log(level=...) wants a Python logging INT. A STRING is
+            # silently ignored and the line logs as plain Info — so passing
+            # level_upper straight through meant every WARNING/DEBUG request was
+            # echoed back as honoured while the log line was actually Info.
+            level_int = resolve_level(level_upper)
+            if level_int >= logging.ERROR:
+                indigo.server.log(message, level=level_int, isError=True)
             else:
-                indigo.server.log(message, level=level_upper)
+                indigo.server.log(message, level=level_int)
             result = {"success": True, "message": message, "level": level_upper}
             self.log_tool_outcome("log_message", True, f"Logged [{level_upper}] {message[:60]}")
             return result

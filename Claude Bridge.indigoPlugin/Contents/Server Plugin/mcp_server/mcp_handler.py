@@ -378,10 +378,24 @@ class MCPHandler:
         except Exception as e:
             vs_status["error"] = str(e)
 
+        # Exec path: set when a runaway script was abandoned and still holds the
+        # stdout-swap lock. While this is present every execute_indigo_python /
+        # run_script call is refused immediately, so surface it here rather than
+        # leaving the operator to infer it from repeated "busy" errors.
+        exec_status = {"wedged": False}
+        try:
+            from .common import exec_lock
+            wedge = exec_lock.wedged_info()
+            if wedge:
+                exec_status = {"wedged": True, **wedge}
+        except Exception as e:
+            exec_status["error"] = str(e)
+
         return {
-            "status":           "ok",
+            "status":           "degraded" if exec_status["wedged"] else "ok",
             "plugin":           "Claude Bridge",
             "protocol_version": self.PROTOCOL_VERSION,
+            "exec":             exec_status,
             "uptime_seconds":   round(now - plugin_start_time, 1) if plugin_start_time else None,
             "sessions":         session_count,
             "tools":            len(self._tools),
@@ -1707,7 +1721,7 @@ class MCPHandler:
         
         # Historical analysis
         self._tools["analyze_historical_data"] = {
-            "description": "Analyze historical data patterns and trends for specific devices using AI-powered insights. IMPORTANT: Requires EXACT device names - use 'search_entities' or 'list_devices' first to find correct device names. Only works if InfluxDB historical data logging is enabled.",
+            "description": "Analyze historical data patterns and trends for specific devices using AI-powered insights. IMPORTANT: Requires EXACT device names - use 'search_entities' or 'list_devices' first to find correct device names. Only works if InfluxDB historical data logging is enabled. This is the plugin's slowest tool (one Claude completion plus InfluxDB queries per device) and it blocks all other tool calls while it runs, so it stops after 120s: any entity it did not reach is listed in summary_stats.skipped_for_time — treat that as 'not queried', NOT as 'no data'.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1718,7 +1732,8 @@ class MCPHandler:
                     "device_names": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "EXACT device names to analyze (case-sensitive). Must match device names exactly as they appear in Indigo. Use 'search_entities' or 'list_devices' first to find correct names. Examples: ['Living Room Lamp', 'Front Door Sensor', 'Master Bedroom Thermostat']"
+                        "maxItems": 10,
+                        "description": "EXACT device names to analyze (case-sensitive), max 10. Must match device names exactly as they appear in Indigo. Use 'search_entities' or 'list_devices' first to find correct names. Examples: ['Living Room Lamp', 'Front Door Sensor', 'Master Bedroom Thermostat']"
                     },
                     "time_range_days": {
                         "type": "number",
@@ -1851,7 +1866,13 @@ class MCPHandler:
                 "Without after/before returns the most recent line_count entries. "
                 "With after/before reads from the on-disk log files and returns "
                 "all entries in that time window (useful for investigating past events). "
-                "Time formats: 'HH:MM:SS' (today assumed), 'YYYY-MM-DDTHH:MM:SS' (full)."
+                "Time formats: 'HH:MM:SS' (today assumed), 'YYYY-MM-DDTHH:MM:SS' (full). "
+                "The file scan covers at most 14 days, anchored on the END of the range: "
+                "'before' with no 'after' searches the 14 days leading up to it. The "
+                "'range' block in the reply reports the window actually scanned and sets "
+                "span_clamped when the request was wider — so an empty result is never "
+                "ambiguous. An inverted range (after >= before) is rejected, not answered "
+                "with an empty list."
             ),
             "inputSchema": {
                 "type": "object",
@@ -3700,7 +3721,11 @@ class MCPHandler:
                             "Column names are stored LOWERCASE (batterysoc, not "
                             "batterySoc); an unknown name is an error listing the "
                             "valid columns. Rows are sparse — only changed values "
-                            "are written, so forward-fill before deriving trends."),
+                            "are written, so forward-fill before deriving trends. "
+                            "`limit` caps rows from the NEWEST end, so on a chatty "
+                            "device it can cut the window far shorter than `hours` — "
+                            "check `truncated` and the `ts_oldest`/`ts_newest` span "
+                            "before concluding anything about earlier events."),
             "inputSchema": {
                 "type": "object",
                 "properties": {

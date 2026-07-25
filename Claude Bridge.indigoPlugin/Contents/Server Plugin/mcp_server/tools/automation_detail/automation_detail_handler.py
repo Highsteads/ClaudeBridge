@@ -364,7 +364,11 @@ class AutomationDetailHandler(BaseToolHandler):
 
             now = datetime.datetime.now()
             window_start = now - datetime.timedelta(days=search_days)
-            entries = self.log_query_handler._read_log_range(
+            # _read_log_range returns (entries, meta) — meta reports the window
+            # actually scanned. search_days is already clamped to 14 above, which
+            # matches the reader's own span cap, so nothing is silently dropped
+            # here; the meta is ignored deliberately.
+            entries, _range_meta = self.log_query_handler._read_log_range(
                 window_start, None, None)
 
             around_dt = None

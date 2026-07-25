@@ -82,6 +82,33 @@ _CLEAR_ALL_TOOLS: Set[str] = {
     "run_script",
 }
 
+# ─── Real-world change tracking ──────────────────────────────────────────────
+#
+# The invalidation map below only covers ClaudeBridge's OWN mutating tools. But
+# the world changes without asking us: a light switched at the wall, by a Z-Wave
+# association, by an Indigo trigger, or by any other plugin. Those never touched
+# the cache, so home_status / get_device_by_id / list_devices went on serving the
+# pre-change value for up to the full TTL — presented as current.
+#
+# The plugin already sees every one of those changes in deviceUpdated /
+# variableUpdated. Rather than drop entries eagerly on each (a presence-sensor
+# storm would thrash the store under a lock), each domain carries a counter that
+# those callbacks bump — O(1), no iteration. A cached entry records the counters
+# it was computed under, and a read whose stamp no longer matches is a miss.
+# Cost is paid once, on the next read, and only for the domain that changed.
+_DOMAIN_DEVICE   = "device"
+_DOMAIN_VARIABLE = "variable"
+
+_TOOL_DOMAINS: Dict[str, Set[str]] = {}
+for _t in _DEVICE_TOOLS:
+    _TOOL_DOMAINS.setdefault(_t, set()).add(_DOMAIN_DEVICE)
+for _t in _VARIABLE_TOOLS:
+    _TOOL_DOMAINS.setdefault(_t, set()).add(_DOMAIN_VARIABLE)
+# home_status and the audits read both domains.
+for _t in ("home_status", "home_status_report", "audit_home", "dependency_map"):
+    _TOOL_DOMAINS.setdefault(_t, set()).update({_DOMAIN_DEVICE, _DOMAIN_VARIABLE})
+
+
 # Map mutating tool → buckets to invalidate
 _INVALIDATION_MAP: Dict[str, Set[str]] = {
     # ── Device on/off/brightness/colour ─────────────────────────────────
@@ -212,10 +239,15 @@ class ToolCache:
         # _lock for creation/cleanup.
         self._inflight: Dict[Tuple[str, str], list] = {}
 
+        # Per-domain change counters, bumped by note_external_change() from the
+        # plugin's deviceUpdated / variableUpdated callbacks. See _TOOL_DOMAINS.
+        self._domain_gen: Dict[str, int] = {_DOMAIN_DEVICE: 0, _DOMAIN_VARIABLE: 0}
+
         # Lifetime stats — surfaced via /health
         self.hits   = 0
         self.misses = 0
         self.invalidations = 0
+        self.stale_drops   = 0   # entries dropped because the world moved on
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -229,13 +261,37 @@ class ToolCache:
         if now - self._last_sweep < max(self.default_ttl, 1):
             return
         self._last_sweep = now
-        expired = [k for k, (expires_at, _) in self._store.items() if expires_at <= now]
+        expired = [k for k, entry in self._store.items() if entry[0] <= now]
         for k in expired:
             del self._store[k]
 
     @staticmethod
     def is_cacheable(tool_name: str) -> bool:
         return tool_name in CACHEABLE_TOOLS
+
+    def _domain_stamp_locked(self, tool_name: str) -> Tuple:
+        """Snapshot the change counters this tool's answer depends on.
+
+        MUST be called with _lock held. A tool outside _TOOL_DOMAINS (system
+        health, script listings, memory recall) is unaffected by device or
+        variable traffic and gets an empty stamp, so it caches exactly as before.
+        """
+        domains = _TOOL_DOMAINS.get(tool_name)
+        if not domains:
+            return ()
+        return tuple(sorted((d, self._domain_gen.get(d, 0)) for d in domains))
+
+    def note_external_change(self, domain: str) -> None:
+        """Record that the real world changed under us.
+
+        Called from the plugin's deviceUpdated / variableUpdated callbacks for
+        changes this plugin did NOT make. Deliberately O(1): a busy estate fires
+        these constantly, so this must never walk the store.
+        """
+        if domain not in self._domain_gen:
+            return
+        with self._lock:
+            self._domain_gen[domain] += 1
 
     @staticmethod
     def make_key(tool_name: str, args: Dict[str, Any]) -> Tuple[str, str]:
@@ -275,11 +331,14 @@ class ToolCache:
             now = time.monotonic()
             self._sweep_expired_locked(now)
             entry = self._store.get(key)
-            if entry and entry[0] > now:
+            stamp = self._domain_stamp_locked(tool_name)
+            if entry and entry[0] > now and entry[2] == stamp:
                 self.hits += 1
                 return entry[1], True
             elif entry:
-                # expired
+                # Expired, or a device/variable changed since it was computed.
+                if entry[0] > now:
+                    self.stale_drops += 1
                 self._store.pop(key, None)
             # Reserve (or join) the per-key in-flight slot for this miss so
             # concurrent identical misses don't all run compute(). slot is
@@ -300,11 +359,12 @@ class ToolCache:
                 with self._lock:
                     entry = self._store.get(key)
                     now = time.monotonic()
-                    if entry and entry[0] > now:
+                    if entry and entry[0] > now and entry[2] == self._domain_stamp_locked(tool_name):
                         self.hits += 1
                         # We waited on another caller that already computed this.
                         return entry[1], True
                     gen_at_start = self._generation
+                    stamp_at_start = self._domain_stamp_locked(tool_name)
 
                 # Compute outside the store lock to avoid serialising callers
                 # for other keys.
@@ -316,10 +376,18 @@ class ToolCache:
                     # it would reinstate a stale entry the invalidation just dropped.
                     if self._generation != gen_at_start:
                         store_it = False
+                    # Same reasoning for real-world changes: if a device or
+                    # variable moved WHILE we were computing, the result is
+                    # already pre-change — storing it would serve known-stale
+                    # data for a full TTL.
+                    stamp_now = self._domain_stamp_locked(tool_name)
+                    if stamp_now != stamp_at_start:
+                        store_it = False
                     if store_it:
                         # Stamp expiry from AFTER compute() so a slow compute does
                         # not shorten the effective TTL.
-                        self._store[key] = (time.monotonic() + self.default_ttl, result)
+                        self._store[key] = (time.monotonic() + self.default_ttl,
+                                            result, stamp_now)
                     self.misses += 1
                 return result, False
         finally:
@@ -377,6 +445,8 @@ class ToolCache:
                 "hits":          self.hits,
                 "misses":        self.misses,
                 "invalidations": self.invalidations,
+                "stale_drops":   self.stale_drops,
+                "domain_gen":    dict(self._domain_gen),
                 "hit_rate": (
                     round(self.hits / (self.hits + self.misses), 3)
                     if (self.hits + self.misses) else 0

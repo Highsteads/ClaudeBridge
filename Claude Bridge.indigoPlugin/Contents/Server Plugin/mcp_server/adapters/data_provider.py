@@ -327,10 +327,11 @@ class DataProvider(ABC):
         """
         pass
 
-    @abstractmethod
-    def log_message(self, message: str, level: str = "INFO") -> Dict[str, Any]:
-        """Write a message to the Indigo on-screen event log."""
-        pass
+    # NB: log_message() deliberately does NOT live here. The tool path reaches
+    # ScriptToolsHandler.log_message via mcp_handler._tool_log_message; a second
+    # implementation on this interface was never called, which is how a fix for
+    # the string-level bug once landed in dead code while the live path stayed
+    # broken. Level mapping now has exactly one home: common/log_levels.py.
 
     @abstractmethod
     def send_notification(

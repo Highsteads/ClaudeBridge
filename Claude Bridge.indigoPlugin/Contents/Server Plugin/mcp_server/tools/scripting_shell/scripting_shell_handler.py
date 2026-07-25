@@ -21,6 +21,7 @@ Scope: ADMIN.
 
 import io
 import logging
+import os
 import subprocess
 import sys
 import traceback
@@ -39,6 +40,36 @@ from ...adapters.data_provider import DataProvider
 # orphaned — Python can't kill a thread — but the server keeps serving). Generous
 # so normal sub-second usage is never affected.
 _EXEC_TIMEOUT_SECONDS = 60
+
+# Ceiling for execute_plugin_menu_item's caller-supplied timeout. Dispatch is
+# single-threaded, so this subprocess.run blocks EVERY other tool call and every
+# device callback for its whole duration — an uncapped caller value (timeout=3600)
+# was a one-hour freeze of the entire plugin. The AppleScript also activates the
+# Indigo GUI, so a modal dialog or a permissions prompt holds it for the full
+# budget rather than erroring.
+_MENU_ITEM_TIMEOUT_MAX     = 60
+_MENU_ITEM_TIMEOUT_DEFAULT = 15
+
+# Absolute path — the plugin host's PATH is not the shell's, so a bare binary
+# name can raise FileNotFoundError. Fall back to the bare name only if the
+# expected location is missing. (Matches _bin() in system_tools_handler.)
+_OSASCRIPT = ("/usr/bin/osascript" if os.path.exists("/usr/bin/osascript")
+              else "osascript")
+
+
+# The name Claude Bridge shows under the Indigo client's Plugins menu
+# (CFBundleDisplayName), plus the spellings a caller might plausibly send.
+_SELF_MENU_NAMES = {"claude bridge", "claudebridge", "claude-bridge"}
+
+
+def _is_self_plugin_name(name: str) -> bool:
+    """True if this menu name refers to Claude Bridge itself.
+
+    Compared loosely on purpose: the caller types a display name rather than a
+    bundle id, so exact matching would let a near-miss through and a near-miss
+    still kills the session running the tool.
+    """
+    return (name or "").strip().lower() in _SELF_MENU_NAMES
 
 
 def _indigo_app_name() -> str:
@@ -94,7 +125,17 @@ class ScriptingShellHandler(BaseToolHandler):
                     "error": f"mode must be 'exec' or 'eval', got {mode!r}"}
 
         import threading
-        from ...common.exec_lock import STDOUT_SWAP_LOCK
+        from ...common import exec_lock
+
+        # Take the stdout-swap lock BEFORE spawning. If a previous run was
+        # abandoned mid-flight it still holds the lock, and waiting the full
+        # 60s budget for it would freeze the whole plugin (dispatch is
+        # single-threaded) only to return a misleading "your script timed out".
+        # Fail fast and say what is actually wrong instead.
+        if not exec_lock.acquire_for_exec():
+            self.log_tool_outcome("execute_indigo_python", False,
+                                  "refused — previous exec still holds the stdout lock")
+            return exec_lock.busy_error("execute_indigo_python")
 
         captured_out = io.StringIO()
         captured_err = io.StringIO()
@@ -107,13 +148,15 @@ class ScriptingShellHandler(BaseToolHandler):
         res: Dict[str, Any] = {"error_msg": None, "tb_text": None, "value_repr": None}
 
         # Run the exec in a worker thread and join with a timeout so a runaway
-        # script (e.g. an infinite loop) does NOT wedge the IWS request thread
+        # script (e.g. an infinite loop) does NOT wedge the request thread
         # forever — the handler returns a timeout error and frees the thread. The
-        # fast path (normal sub-second code) is unaffected. The stdout/stderr swap
-        # is serialised via STDOUT_SWAP_LOCK inside the worker so concurrent calls
-        # can't corrupt sys.stdout.
+        # fast path (normal sub-second code) is unaffected.
+        #
+        # The worker does NOT touch the lock — the caller already owns it (see
+        # common/exec_lock.py). Its finally restores the streams only if they are
+        # still the ones it installed, so a worker that finishes long after being
+        # abandoned cannot point stdout at its own dead buffer.
         def _worker():
-            STDOUT_SWAP_LOCK.acquire()
             old_stdout, old_stderr = sys.stdout, sys.stderr
             sys.stdout, sys.stderr = captured_out, captured_err
             try:
@@ -132,22 +175,39 @@ class ScriptingShellHandler(BaseToolHandler):
                     res["error_msg"] = f"{type(exc).__name__}: {exc}"
                     res["tb_text"]   = traceback.format_exc()
             finally:
-                sys.stdout, sys.stderr = old_stdout, old_stderr
-                STDOUT_SWAP_LOCK.release()
+                if sys.stdout is captured_out:
+                    sys.stdout = old_stdout
+                if sys.stderr is captured_err:
+                    sys.stderr = old_stderr
 
         _t = threading.Thread(target=_worker, daemon=True, name="mcp-exec")
-        _t.start()
+        try:
+            _t.start()
+        except Exception as exc:
+            # Never leak the lock on a failure to spawn — nothing is running, so
+            # the next call must not be told the exec path is wedged.
+            exec_lock.release_after_exec()
+            return self.handle_exception(exc, "execute_indigo_python")
         _t.join(timeout=_EXEC_TIMEOUT_SECONDS)
         if _t.is_alive():
+            # Deliberately do NOT release the lock: the worker is still writing
+            # to captured_out, and a later run must not swap stdout underneath
+            # it. Record the wedge so every later call fails fast with a message
+            # that names THIS run rather than blaming the next caller's script.
+            exec_lock.mark_wedged("execute_indigo_python",
+                                  f"exceeded {_EXEC_TIMEOUT_SECONDS}s")
             self.log_tool_outcome("execute_indigo_python", False,
                                   f"timed out after {_EXEC_TIMEOUT_SECONDS}s")
             return {
                 "success": False, "mode": mode, "timed_out": True,
                 "error": (f"Execution exceeded the {_EXEC_TIMEOUT_SECONDS}s limit and was left "
-                          "running in the background so the request thread could be freed. A "
-                          "genuinely infinite script needs a plugin reload to clear."),
+                          "running in the background so the request thread could be freed. "
+                          "Until it finishes, further execute_indigo_python / run_script calls "
+                          "are refused immediately rather than queued. A genuinely infinite "
+                          "script needs a plugin reload from the Indigo Plugins menu."),
                 "stdout": captured_out.getvalue()[:8000],
             }
+        exec_lock.release_after_exec()
 
         error_msg  = res["error_msg"]
         tb_text    = res["tb_text"]
@@ -207,6 +267,28 @@ class ScriptingShellHandler(BaseToolHandler):
             return {"success": False,
                     "error": "plugin_name and menu_item_name are required"}
 
+        # Self-restart guard. restart_plugin and plugin_refresh_deps both refuse
+        # to restart Claude Bridge from inside its own MCP session (a live
+        # attempt wedged it for 4m37s), but this tool could reach the same
+        # outcome by clicking Claude Bridge's own Reload item — the guard has to
+        # cover every route to the capability, not just the obvious two.
+        if _is_self_plugin_name(plugin_name):
+            return {
+                "success": False,
+                "error": (
+                    "Refusing to click a Claude Bridge menu item from within its own "
+                    "MCP session — reloading or reconfiguring the bridge kills the "
+                    "session running this tool. Use the Indigo Plugins menu directly."
+                ),
+            }
+
+        # Clamp the caller's timeout: this call blocks the whole plugin.
+        try:
+            timeout = int(timeout)
+        except (TypeError, ValueError):
+            timeout = _MENU_ITEM_TIMEOUT_DEFAULT
+        timeout = max(1, min(timeout, _MENU_ITEM_TIMEOUT_MAX))
+
         app = _indigo_app_name()
 
         # AppleScript escapes: double the embedded double-quotes.
@@ -225,7 +307,7 @@ class ScriptingShellHandler(BaseToolHandler):
 
         try:
             proc = subprocess.run(
-                ["osascript", "-e", script],
+                [_OSASCRIPT, "-e", script],
                 capture_output=True, text=True, timeout=timeout,
             )
         except subprocess.TimeoutExpired:
