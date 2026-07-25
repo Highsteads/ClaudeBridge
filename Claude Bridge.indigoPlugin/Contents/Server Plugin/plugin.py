@@ -3,9 +3,26 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Opus 4.8
-# Date:        23-07-2026
-# Version:     2.16.0
+# Author:      CliveS & Claude Opus 5
+# Date:        25-07-2026
+# Version:     2.16.1
+#
+# v2.16.1 (25-07-2026): BUG FIX — system_health reported RAM wrongly. Total was
+# derived by summing vm_stat's free/active/inactive/wired buckets, which omits
+# COMPRESSED memory: on the 8 GB Indigo Mac that read 4.7 GB, and it drifted
+# further the busier the machine got, because compression rises under pressure
+# — wrong exactly when you most want the truth. free_gb was wrong a second way,
+# reporting "Pages free" (the free list) rather than available memory, so a
+# healthy Mac looked like it had 0.1 GB left. Total now comes from hw.memsize,
+# and used follows macOS's own definition ((anonymous - purgeable) + wired +
+# compressed), so the figures match Activity Monitor. Added used_pct, mirroring
+# what the disk block already returns. If sysctl is unavailable the fallback
+# page sum now INCLUDES the compressor (lands at 7.5 of 8 GB rather than 4.7 —
+# vm_stat never accounts for the ~0.5 GB the kernel reserves, so it stays an
+# estimate). Found while diagnosing the 25-Jul PCIe kernel panic, where the
+# tool understated the machine by nearly half while feeding a hardware-sizing
+# decision. New tests/test_parse_ram.py — the first test cover for the system
+# tools. Suite 410->422.
 #
 # v2.16.0 (23-07-2026): SIMPLIFICATION — capability awareness now reads the
 # device's LIVE supports* attributes instead of a vendored catalogue. Indigo

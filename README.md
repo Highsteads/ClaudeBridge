@@ -855,6 +855,13 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.16.1 (2026-07-25)
+A fix for `system_health`, which had been getting memory wrong. It worked out total RAM by adding up some of the buckets `vm_stat` prints, and that sum leaves out compressed memory, so an 8 GB Mac was reported as 4.7 GB — and the gap widened the busier the machine got, because macOS compresses more under pressure. Wrong at exactly the moment you want the number. Free memory was off in its own way, reporting the free list rather than what is actually available, which made a healthy Mac look like it had 0.1 GB left and nowhere to go.
+
+Total now comes straight from the machine, and used memory follows the same formula Activity Monitor uses, so the two agree. There is a new `used_pct` to save you the division. All of this came to light while working out why the server had rebooted, with the tool understating the Mac by nearly half in the middle of a conversation about whether to buy a bigger one.
+
+166 tools. 422 tests.
+
 ### 2.16.0 (2026-07-23)
 A simplification of the capability awareness from 2.14.0/2.15.0. Indigo already tells us what a device can do as a live property of the device itself, so Claude Bridge now reads that directly instead of carrying a pre-built catalogue. Same helpful behaviour — a "warm white" command to a plain dimmer is still refused with a plain reason — but it now works on any server for any device, is always current, and needs no data to maintain. It's also more accurate: where one plugin uses a single device type for both colour and white bulbs, the live reading tells them apart per device, which a type-level catalogue couldn't. The `list_uncataloged_devices` tool is retired along with the catalogue it reported on.
 

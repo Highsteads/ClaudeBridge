@@ -91,7 +91,20 @@ def _run(cmd: List[str], timeout: int = 5) -> str:
         return ""
 
 def _parse_ram() -> Dict[str, Any]:
-    """Parse vm_stat output for a RAM summary."""
+    """Return a RAM summary matching what Activity Monitor shows.
+
+    Total comes from hw.memsize — the installed RAM, no arithmetic. Deriving it
+    by summing vm_stat buckets (the old approach) silently omitted compressed
+    memory, which understated an 8 GB Mac as 4.4 GB and got worse the busier the
+    machine became, because compression rises under pressure.
+
+    Used follows macOS's own definition:
+        app memory = anonymous - purgeable
+        used       = app memory + wired + compressed
+    and free is whatever is left of the installed total. Reporting "Pages free"
+    as free memory (the old behaviour) reports the free list, not what is
+    actually available, so a healthy Mac looked like it had 0.1 GB left.
+    """
     out = _run(["vm_stat"])
     page_size = 4096
     for line in out.splitlines():
@@ -110,19 +123,44 @@ def _parse_ram() -> Dict[str, Any]:
             except ValueError:
                 pass
 
-    free     = pages.get("Pages free",       0)
-    active   = pages.get("Pages active",     0)
-    inactive = pages.get("Pages inactive",   0)
-    wired    = pages.get("Pages wired down", 0)
-    total    = free + active + inactive + wired
+    wired      = pages.get("Pages wired down",             0)
+    compressed = pages.get("Pages occupied by compressor", 0)
+    anonymous  = pages.get("Anonymous pages",              0)
+    purgeable  = pages.get("Pages purgeable",              0)
+    app        = max(anonymous - purgeable, 0)
+    used_bytes = (app + wired + compressed) * page_size
 
-    def _gb(p: int) -> float:
-        return round(p * page_size / 1_073_741_824, 1)
+    total_bytes = 0
+    try:
+        total_bytes = int(_run(["sysctl", "-n", "hw.memsize"]) or 0)
+    except ValueError:
+        total_bytes = 0
+
+    if total_bytes <= 0:
+        # sysctl unavailable — fall back to the page sum, this time WITH the
+        # compressor and speculative buckets so the estimate lands close rather
+        # than silently short.
+        total_bytes = (
+            pages.get("Pages free",        0)
+            + pages.get("Pages active",    0)
+            + pages.get("Pages inactive",  0)
+            + pages.get("Pages speculative", 0)
+            + wired
+            + compressed
+        ) * page_size
+
+    # Never report more used than installed, and never a negative free.
+    used_bytes = min(used_bytes, total_bytes)
+    free_bytes = max(total_bytes - used_bytes, 0)
+
+    def _gb(b: int) -> float:
+        return round(b / 1_073_741_824, 1)
 
     return {
-        "total_gb": _gb(total),
-        "used_gb":  _gb(active + wired),
-        "free_gb":  _gb(free),
+        "total_gb": _gb(total_bytes),
+        "used_gb":  _gb(used_bytes),
+        "free_gb":  _gb(free_bytes),
+        "used_pct": round(used_bytes / total_bytes * 100, 1) if total_bytes else 0.0,
     }
 
 
