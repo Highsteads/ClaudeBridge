@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.12.1
+**Version:** 2.17.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -170,10 +170,9 @@ it in a couple of round-trips.
 
 ## What it does
 
-Claude Bridge gives Claude Code **166 MCP tools** across **16 categories**, enough
-to read and change anything on a running Indigo server. They fall into the groups
-below, and every tool is listed by name in
-[Available Tools](#available-tools) further down.
+Claude Bridge gives Claude Code **166 MCP tools**, enough to read and change
+anything on a running Indigo server. They fall into the groups below, and every
+tool is listed by name in [Available Tools](#available-tools) further down.
 
 ### Devices
 - **List, search, and inspect** every Indigo device — by ID, by name (exact or
@@ -845,7 +844,7 @@ Claude Bridge.indigoPlugin/
 │           │   └── vector_store/           # Text search store
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
-│           └── tools/                      # 19 tool handler modules (166 tools)
+│           └── tools/                      # 21 tool handler modules (166 tools)
 │       ├── indigo_mcp_proxy.py             # Claude Code go-between script
 │       └── install.py                      # one-shot installer
 └── README.md
@@ -985,6 +984,9 @@ Four tools that looked fine but never worked are now fixed or gone. Nudging a di
 
 A few more: firing a Claude Event now actually delivers its data to the trigger (and the setup notes give the correct way to read it), the "refresh dependencies" tool no longer offers to restart Claude Bridge from inside itself (which would cut its own line mid-sentence), running two bits of Python at once can no longer scramble the plugin's output, and the installer now finds your Indigo version on its own rather than assuming one, and refuses to run from a copy that would delete itself. 292 tests.
 
+### 2.9.1 (2026-06-15)
+- **History timestamps now come back in your own time.** Indigo's SQL Logger stores every history row in UTC, while everything else you see — a device's last-changed time, the server clock — is local. So through the summer a `device_history` row read an hour early, which is exactly the sort of quiet error that turns into a wrong answer about when something happened. The tool now converts each row's timestamp to local time on the way out (daylight saving included) and says so in the result with `"ts_timezone": "local"`. The time window you ask for is unaffected — that still filters on the stored column.
+
 ### 2.9.0 (2026-06-10)
 Ten new tools, all surfacing Indigo capabilities found by walking the live API namespace by namespace — plus the walker itself is now a tool, so the question "has an Indigo upgrade added anything we haven't bridged?" answers itself from now on (`audit_api_coverage` diffs the running server against a frozen baseline of 362 callables).
 
@@ -1070,6 +1072,36 @@ A thorough security and robustness pass off the back of a full multi-agent revie
 - **New test suite** — 75 tests covering the scope model, the proxy coercion, the state filters and the script-path safety, so these don't quietly regress.
 
 No action needed on your part — update the plugin and carry on as before.
+
+### 2.6.7 (2026-06-05)
+- **A malformed argument can no longer stop the go-between script.** The proxy turns numeric-looking arguments into real numbers before passing them on, and its check for "is this a number?" accepted a value like `--5`, which then failed on conversion and took the script down with it. Odd values now fall through and are passed on as they are.
+
+### 2.6.6 (2026-05-29)
+- **`check_plugin_updates` works again.** It was handing Indigo the wrong kind of thing when asking about each installed plugin, so the call failed and the plugin id came back empty. It now reads the plugin records Indigo actually gives it.
+
+### 2.6.5 (2026-05-29)
+- **Restarting the plugin is cleaner.** Stopping mid-warm-up used to leave the text-search index's background worker running on its own, because the stop check looked at a flag that is only set once warm-up has finished — and mid-warm-up is the usual moment a restart lands. The worker is now signalled and waited for whatever state it is in, and it gives up early if a stop has already been asked for.
+- **The Claude connection test at startup is now bounded.** It was an unlimited network call on the startup path, and could sit there for minutes. It gets ten seconds and no retries.
+
+### 2.6.4 (2026-05-28)
+- **`plugin_node_check_html` finds `node` again.** The plugin host runs with a short search path that doesn't include the folder Node is usually installed in, so the check couldn't start.
+
+### 2.6.3 (2026-05-28)
+- **Sleep and wake are noted in the log.** Claude Bridge answers requests one at a time and holds nothing open, so there is nothing to tear down when the Mac sleeps. The lines are there so a future "the tools went quiet between four and seven" can be matched against a sleep rather than hunted as a fault.
+
+### 2.6.2 (2026-05-27)
+Tool count 86 → 136. Three batches of work and one security fix, released together.
+
+- **43 new tools covering the gaps in what Indigo already offers.** You can now delete, duplicate, rename, enable and re-file a device, delete and re-file a variable, and do the same round of housekeeping on schedules, triggers and action groups — each with a dependency check, so you can see what would break before you break it. The full sprinkler set arrives too (run, stop, pause, resume, next zone, previous zone), along with thermostat fan mode and fan-speed control by index or by step. Then a run of server-level odds and ends: speak, sunrise and sunset times, your latitude and longitude, the web-server address, deprecated elements, and cancelling every pending delayed action at once. Control pages can now be listed and read, and other plugins can be checked for updates.
+- **7 plugin-development helpers.** Compare a plugin's installed copy against its source to catch a half-finished sync, force its dependencies to reinstall, read the versions of the libraries it bundles, check its XML against Indigo's naming rules, run `node --check` over the scripts inside its HTML, sweep its `plugin.py` for convention slips, and query the SQL Logger history for one device.
+- **Fewer false alarms from the convention sweep.** The missing-loop-guard rule read the parameter name literally, missed annotated signatures, and knew only one way of writing the guard. It now recognises three, and only complains when the callback actually writes something back — a read-only mirror can't loop, so it no longer gets flagged.
+- **A credential could reach the log.** Fixed.
+
+### 2.4.3 (2026-05-25)
+- **The plugin's own device no longer restarts for nothing.** It was re-establishing communication on any edit to the device, when the server name is the only field you can actually change.
+
+### 2.4.2 (2026-05-23)
+- **Every log line is stamped to the millisecond.** `[HH:MM:SS.mmm]` now leads each line, matching the rest of the CliveS plugins, which makes lining two plugins' logs up against each other far easier. There's a **Toggle Timestamps in Log** menu item if you would rather not have them, and Show Plugin Info tells you which way it is set.
 
 ### 2.4.1 (2026-05-23)
 - **Credentials no longer leaked to subprocesses (secrets-policy compliance).**
