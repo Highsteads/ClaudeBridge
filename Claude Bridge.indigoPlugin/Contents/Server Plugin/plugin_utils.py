@@ -4,8 +4,16 @@
 # Description: Shared utilities for all Indigo plugins (CliveS / Highsteads)
 #              Bundled in Contents/Server Plugin/ and imported via os.getcwd()
 # Author:      CliveS & Claude Opus 4.8
-# Date:        21-07-2026
-# Version:     1.3
+# Date:        02-08-2026
+# Version:     1.4
+#
+# v1.4 (02-08-2026): as_bool() returns the DEFAULT for a string it does not
+# recognise, rather than False. Returning False silently flipped every
+# default=True caller off whenever a pref held junk — the opposite of what the
+# helper exists to prevent. Shipped in the code on 31-07-2026 during the
+# Dashboards deep review but the header was never bumped, so the file claimed
+# to be 1.3 while behaving as 1.4; this corrects the record and propagates the
+# same file to every bundle.
 #
 # v1.3 (21-07-2026): Four fixes found by the Appliance Monitor deep review,
 # propagated to every CliveS plugin bundle on the same day.
@@ -147,7 +155,14 @@ def as_bool(value, default=False):
         return default
     if isinstance(value, (int, float)):
         return bool(value)
-    return str(value).strip().lower() in ("true", "1", "yes", "on")
+    s = str(value).strip().lower()
+    if s in ("true", "1", "yes", "on"):
+        return True
+    if s in ("false", "0", "no", "off"):
+        return False
+    # An UNRECOGNISED string is unknown, not False — returning False here
+    # silently flipped default=True callers off whenever a pref held junk.
+    return default
 
 
 def install_timestamp_filter(plugin, enabled=True):
