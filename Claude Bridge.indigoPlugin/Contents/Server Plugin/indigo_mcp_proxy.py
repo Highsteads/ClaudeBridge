@@ -2,9 +2,20 @@
 # -*- coding: utf-8 -*-
 # Filename:    indigo_mcp_proxy.py
 # Description: stdio-to-HTTP proxy for Indigo MCP Server plugin (no OAuth)
-# Author:      CliveS & Claude Opus 4.8
-# Date:        09-06-2026
-# Version:     1.4
+# Author:      CliveS & Claude Opus 5
+# Date:        04-08-2026
+# Version:     1.5
+#
+# v1.5 (04-08-2026): survive the boot race. An MCP client can start before
+#   Indigo's web server is listening — most obviously after a Mac reboot, where
+#   the app comes up seconds ahead of Indigo. The proxy's POST was refused, it
+#   answered the initialize handshake with JSON-RPC -32603, and the client gave
+#   up ("Could not attach to MCP server indigo-mcp"). The handshake now waits
+#   for IWS to appear, up to BOOT_RETRY_SECONDS, and only while the failure is
+#   "nothing is listening yet" — every other failure still surfaces at once.
+#   Measured here on 04-08-2026: the app attached at 20:26:44 and IWS answered
+#   at 20:27:07, a 23-second gap. Every occurrence of this error (09-07, 25-07,
+#   04-08) fell within a minute of a reboot.
 #
 # v1.4 (09-06-2026): make the proxy resilient to the two failure modes that
 #   survived v1.3 (broken pipe / connection reset / "Missing or invalid
@@ -32,6 +43,7 @@
 # intermittent "Connection error (not retried) [Errno 32] Broken pipe / [Errno 54]
 # reset" seen on the first MCP call after a long idle gap or a plugin reload.
 
+import errno
 import sys
 import json
 import time
@@ -56,6 +68,26 @@ INDIGO_PROTOCOL_VER    = "2025-06-18"
 # (IWS closes idle keep-alives), so we reconnect fresh before writing rather
 # than risk a write to a half-closed socket. Localhost reconnects are cheap.
 IDLE_RECONNECT_SECONDS = 10.0
+
+# How long the initialize handshake waits for IWS to start listening, and how
+# often it re-tries while it waits. Only the handshake waits: a tools/call must
+# never stall for the best part of a minute, and by then IWS is up anyway.
+# 45s comfortably covers the 23s measured here on a cold boot. Clients apply
+# their own attach timeout (Claude Code allows 30s), so the wait cannot hold an
+# attach open indefinitely — and a client that does give up is no worse off
+# than with the instant failure this replaces.
+BOOT_RETRY_SECONDS     = 45.0
+BOOT_RETRY_INTERVAL    = 2.0
+
+# errno values meaning "nothing is listening on that port YET", as opposed to a
+# request that reached IWS and failed there. Only these are worth waiting out.
+_BOOT_ERRNOS = {
+    errno.ECONNREFUSED,   # 61 — the ordinary "IWS is not up yet"
+    errno.ENETDOWN,       # 50 — network still coming up after a reboot
+    errno.ENETUNREACH,    # 51
+    errno.EHOSTDOWN,      # 64
+    errno.EHOSTUNREACH,   # 65
+}
 
 session_id     = None    # current Mcp-Session-Id (captured from responses)
 _connection    = None    # reused persistent HTTP connection
@@ -259,6 +291,48 @@ def _attempt(body: bytes, headers: dict, method, is_notification: bool):
         return result
 
 
+def _is_not_listening(exc) -> bool:
+    """True if the exception means nothing is accepting connections on the port
+    yet — the boot race — rather than a request that reached IWS and failed."""
+    if isinstance(exc, ConnectionRefusedError):
+        return True
+    return isinstance(exc, OSError) and exc.errno in _BOOT_ERRNOS
+
+
+def _attempt_initialize(body: bytes, headers: dict):
+    """
+    _attempt() for the handshake, tolerant of a client that started before
+    Indigo's web server. Waits only while the failure is "nothing is listening
+    yet" and only up to BOOT_RETRY_SECONDS; anything else (a bad token, an IWS
+    500, a hang that exhausts the socket timeout) is raised straight away, so a
+    genuine fault still fails fast instead of stalling the attach.
+    """
+    deadline = time.monotonic() + BOOT_RETRY_SECONDS
+    waited   = False
+    while True:
+        try:
+            result = _attempt(body, headers, "initialize", is_notification=False)
+        except Exception as e:
+            if not _is_not_listening(e) or time.monotonic() >= deadline:
+                raise
+            if not waited:
+                waited = True
+                # One line to the client's MCP log so the wait is diagnosable.
+                sys.stderr.write(
+                    f"indigo_mcp_proxy: nothing listening on "
+                    f"{INDIGO_HOST}:{INDIGO_PORT} — waiting up to "
+                    f"{BOOT_RETRY_SECONDS:.0f}s for Indigo's web server (boot race)\n"
+                )
+                sys.stderr.flush()
+            _drop_connection()
+            time.sleep(BOOT_RETRY_INTERVAL)
+            continue
+        if waited:
+            sys.stderr.write("indigo_mcp_proxy: Indigo's web server answered — attaching\n")
+            sys.stderr.flush()
+        return result
+
+
 def _is_session_error(messages) -> bool:
     """True if any message is a JSON-RPC -32600 about the session id (the
     'Missing or invalid Mcp-Session-Id' reply after an IWS reload). Other -32600s
@@ -332,7 +406,11 @@ def post_message(data: dict):
     body = json.dumps(data).encode("utf-8")
 
     try:
-        messages, emit_lines = _attempt(body, _build_headers(), method, is_notification)
+        if method == "initialize":
+            # The one method allowed to wait for IWS to come up (see v1.5).
+            messages, emit_lines = _attempt_initialize(body, _build_headers())
+        else:
+            messages, emit_lines = _attempt(body, _build_headers(), method, is_notification)
     except _SendFailed as e:
         if not is_notification:
             _write_error(data.get("id"), str(e))

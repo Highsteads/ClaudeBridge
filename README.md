@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.17.0
+**Version:** 2.17.1
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -853,6 +853,11 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.17.1 (2026-08-04)
+If you restart your Mac, there is a moment where Claude is running and Indigo is not, and until now Claude used that moment to decide the plugin was unreachable. It would knock on the door, find nobody in, and put up "Could not attach to MCP server indigo-mcp" — and there it stayed until you noticed and dismissed it, even though Indigo had come up perfectly well twenty seconds later. On this machine the gap was twenty-three seconds, which is a very small window in which to be permanently wrong about something.
+
+The proxy now waits. When it finds nothing listening it holds the door open for up to forty-five seconds, checking every couple of seconds, and connects the moment Indigo's web server appears. It only waits for that one thing — if the token is wrong, or Indigo answers with an error, or the connection hangs, it fails straight away as it always did, and an ordinary request never waits at all. A note goes into the log while it waits, so if it ever does give up you can see what it was waiting for.
 
 ### 2.17.0 (2026-07-25)
 Nothing was reported broken. This came out of a systematic sweep of the whole plugin, and it turned up rather more than expected, so it lands as one batch in three parts.

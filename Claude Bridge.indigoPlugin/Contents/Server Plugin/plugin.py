@@ -4,8 +4,18 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
-# Date:        25-07-2026
-# Version:     2.17.0
+# Date:        04-08-2026
+# Version:     2.17.1
+#
+# v2.17.1 (04-08-2026): the bundled MCP proxy (indigo_mcp_proxy.py v1.5) now
+# waits out a boot race instead of failing the attach. A client that starts
+# before Indigo's web server — the ordinary case after a Mac reboot, where the
+# app is up seconds ahead of Indigo — had its POST refused, got JSON-RPC -32603
+# back on the initialize handshake, and gave up with "Could not attach to MCP
+# server indigo-mcp". The handshake now waits up to 45s for IWS, and only while
+# the failure is "nothing is listening yet"; a bad token or an IWS error still
+# fails immediately, and a tools/call never waits at all. Measured here: a
+# 23-second gap between the app attaching and IWS answering.
 #
 # v2.17.0 (25-07-2026): FULL-SWEEP FIX BATCH from a systematic three-agent audit
 # (no reported symptom — the sweep found these). Three clusters.
