@@ -3,15 +3,26 @@
 # Filename:    test_parse_ram.py
 # Description: Tests for _parse_ram() — the RAM summary behind system_health.
 # Author:      CliveS & Claude Opus 5
-# Date:        25-07-2026
-# Version:     1.0
+# Date:        04-08-2026
+# Version:     1.1
 #
 # Regression cover for the 25-Jul-2026 bug: total RAM was derived by summing
 # vm_stat's free/active/inactive/wired buckets, which omits compressed memory.
 # On an 8 GB Mac under load that reported 4.4 GB, and it drifted further the
 # busier the machine got. Total now comes from hw.memsize.
+#
+# v1.1 (04-08-2026): the two binary-resolution tests asserted macOS-only facts
+# and so failed on every CI run from the day they were added (25-Jul) to 04-Aug
+# — six pushes, six "all jobs have failed" emails, and a suite that gated
+# nothing for ten days. /usr/bin/vm_stat does not exist on an ubuntu runner, so
+# _bin() correctly degraded to the bare name and the tests called that a bug.
+# The guarantee is now checked in the way that holds everywhere: the call sites
+# are read out of the source, and the resolved values are pinned on macOS only.
 
+import ast
 import os
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -126,11 +137,37 @@ def test_page_size_read_from_header_not_assumed(fake_run):
 
 # ── Binary resolution ────────────────────────────────────────────────────────
 
-def test_binaries_are_called_by_absolute_path(monkeypatch):
+def test_every_binary_is_declared_by_absolute_path():
     """Indigo's plugin-host PATH omits /usr/sbin, so a bare "sysctl" raises
     FileNotFoundError, _run() swallows it, and the total silently falls back to
-    the estimate. That shipped in 2.16.1 and read 7.5 GB on an 8 GB Mac. Pin
-    every binary this module shells out to."""
+    the estimate. That shipped in 2.16.1 and read 7.5 GB on an 8 GB Mac.
+
+    Read the DECLARATIONS rather than the resolved values. _bin() degrades to
+    the bare name when the absolute path is missing — right on a Mac that moved
+    a binary, and right on the Linux CI runner, which has no vm_stat at all. So
+    the runtime value proves nothing off macOS, while the source does: every
+    binary must be handed to _bin() as an absolute literal."""
+    source = Path(sth.__file__).read_text(encoding="utf-8")
+    declared = [
+        node.args[0].value
+        for node in ast.walk(ast.parse(source))
+        if (isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == "_bin"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str))
+    ]
+
+    assert declared, "no _bin() call sites found — has the module been restructured?"
+    for path in declared:
+        assert path.startswith("/"), f"{path!r} is a bare name — will fail in the plugin host"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the macOS binaries only exist on macOS")
+def test_binaries_resolve_absolute_on_macos(monkeypatch):
+    """On the machine that actually runs the plugin, the declarations above must
+    also RESOLVE to absolute paths — i.e. the expected locations really are where
+    the binaries live, so nothing silently degrades to a PATH lookup."""
     seen = []
 
     def _fake(cmd, timeout=5):
@@ -145,10 +182,11 @@ def test_binaries_are_called_by_absolute_path(monkeypatch):
         assert path.startswith("/"), f"{path!r} is a bare name — will fail in the plugin host"
 
 
-def test_bin_falls_back_to_bare_name_when_path_missing():
+def test_bin_keeps_a_path_that_exists_and_drops_one_that_does_not():
     """A future macOS that moves a binary should degrade to PATH lookup, not
-    hand subprocess a path that certainly does not exist."""
-    assert sth._bin("/usr/bin/vm_stat") == "/usr/bin/vm_stat"
+    hand subprocess a path that certainly does not exist. Probed with the
+    running interpreter, which exists on every platform the suite runs on."""
+    assert sth._bin(sys.executable) == sys.executable
     assert sth._bin("/nowhere/at/all/sysctl") == "sysctl"
 
 
