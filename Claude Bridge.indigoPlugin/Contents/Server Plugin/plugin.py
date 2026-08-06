@@ -5,7 +5,48 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        06-08-2026
-# Version:     2.18.0
+# Version:     2.19.0
+#
+# v2.19.0 (06-08-2026): get_control_page had been promising something it could
+# never deliver. It carried a branch reaching for `cp.controls` — "surface the
+# controls if the IOM exposes them on this version" — and no Indigo version has
+# ever exposed that attribute, so it returned an empty list every single time.
+# A user with a real control page got back a name, a folder and a description
+# while learning nothing whatever about what was on the page, and the empty
+# result was indistinguishable from a page with nothing on it.
+#
+# The reason is structural rather than a missing accessor: control pages are the
+# one part of Indigo the object model never covered. The scripting guide says so
+# outright — they "didn't make it into v1" — and indigo.ControlPage carries the
+# page's own properties and nothing else. The layout is reachable ONLY through
+# the raw server request added in 2.18.0, which is exactly what Perceptive
+# Automation's own utils.py uses to render a page.
+#
+# So the tool now returns the real layout: every element with its type,
+# position, size, caption, image, action class, live displayed value, and the
+# device / variable / action group it points at. Elements whose target no longer
+# exists are flagged and counted, which is the reason to read a page at all — a
+# control left behind by a deleted device still draws, and nothing in Indigo
+# tells you it is dead. Page width and height were missing too, and are back.
+#
+# NEW common/control_page.py holds the decoding. Its numeric codes are
+# transcribed from PA's own utils.py (which ships as readable source) rather
+# than inferred from observed data, and it is kept free of any indigo import so
+# the decoding is testable with no Indigo present. An unrecognised code reports
+# itself as unknown(N) rather than being labelled as something it is not.
+#
+# Scope stays READ despite the underlying call being ADMIN as raw_server_request.
+# That classification is about raw_server_request's open-ended surface — any
+# Get* name — whereas this is one fixed call against a validated page id
+# returning data the tool already claimed to return.
+#
+# Tests 452 → 469, against a REAL captured page rather than a hand-written
+# fixture. Mutation testing earned its keep: dropping the collection guard in
+# the reference check SURVIVED the first suite, because every test fed it
+# elements with no target at all. A video control has a target but no
+# addressable collection, and without that guard it reaches getattr(indigo,
+# None) and raises — a crash on any page containing a camera. Test added, mutant
+# killed.
 #
 # v2.18.0 (06-08-2026): the API-coverage audit had a blind spot, and it hid the
 # only part of the Indigo API this plugin had never reached. audit_api_coverage

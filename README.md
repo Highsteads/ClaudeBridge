@@ -572,7 +572,7 @@ _Pure queries — no state change. Require the `read` scope._
 | `find_stale_devices` | Return enabled devices whose state has not changed in more than N days (default 7). Helps identify dead or forgotten hardware. |
 | `get_action_group_by_id` | Get a specific action group by ID |
 | `get_action_group_details` | Full definition of one action group: conditions and action steps including embedded scripts. Read from Indigo's database file — very recent edits may lag by a few minutes. |
-| `get_control_page` | Return a control page's properties (and controls if available). |
+| `get_control_page` | Return a control page's properties AND its full layout: every element with its type, position, size, caption, and the device/variable/action group it points at. Elements whose target no longer exists are flagged, so this finds controls left behind by a deleted device. |
 | `get_deprecated_elements` | Scan for deprecated Indigo objects. include_warnings=True also surfaces warning-level items. |
 | `get_device_by_id` | Get a specific device by ID |
 | `get_device_by_name` | Find a device by name and return its full state in one round trip. Tries exact match, then case-insensitive, then partial match. Returns all device states, properties, and current values. |
@@ -854,6 +854,15 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.19.0 (2026-08-06)
+If you have control pages, Claude can now tell you what is on them. It could not before, and worse, it had been quietly implying it could — `get_control_page` carried a hopeful little branch that went looking for a page's controls "if this version of Indigo exposes them", and no version of Indigo ever has. So it returned an empty list every single time, and an empty list looks exactly like a page with nothing on it. You would have been told your page was bare and had no way of knowing you had been told nothing at all.
+
+The cause is not a missing accessor, it is that control pages are the one part of Indigo the object model never reached. Indigo's own scripting guide is refreshingly blunt about it, saying they "didn't make it into v1", and the page object has carried its name, size and background but nothing about its contents ever since. The layout only became reachable through the raw server request added in 2.18.0, which is exactly what Indigo's own code uses to draw a page in the first place.
+
+So the tool now returns the real thing: every element on the page with its type, position, size, caption, image, the live value it is displaying, and the device or variable or action group it points at. Anything pointing at something that no longer exists is flagged and counted, which is the genuinely useful part. A control left behind by a deleted device carries on drawing quite happily and nothing in Indigo will ever mention it to you. Page width and height had gone missing from the tool as well, and are back.
+
+None of this lets Claude *build* you a control page, and nothing will, because Indigo has no way to create page contents from a script. It reads them. If you maintain control pages by hand, being able to ask which devices a page uses, and what on it is now pointing at nothing, is the useful half.
 
 ### 2.18.0 (2026-08-06)
 There is a tool in here whose whole job is to notice when Indigo grows a bit of API we have not wrapped yet, and for months it has been reporting "nothing new, nothing missing" with total confidence. It was telling the truth about the places it looked. It simply never looked everywhere. Indigo keeps most of its commands inside namespaces, `indigo.device` and `indigo.server` and a couple of dozen more, and those are what the audit walked. Five functions sit outside all of them, right at the top, so they were never once counted. A clean report meant "nothing has changed in the namespaces", which is a far smaller claim than the one I had been cheerfully reading it as.

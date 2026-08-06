@@ -17,7 +17,7 @@
 # and log_tool_outcome on success — so logs match the rest of the plugin.
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import indigo
@@ -26,6 +26,7 @@ except ImportError:
 
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
+from ...common.control_page import FULL_PAGE_FLAGS, describe_element
 
 
 # ── ID coercion helper ──────────────────────────────────────────────────────
@@ -856,8 +857,65 @@ class ExtendedToolsHandler(BaseToolHandler):
         except Exception as exc:
             return self.handle_exception(exc, "list_control_pages")
 
+    def _control_page_elements(self, pid: int) -> Tuple[Optional[list], Optional[str]]:
+        """Fetch and decode a control page's layout. Returns (elements, note).
+
+        The IOM never covered control pages — indigo.ControlPage carries the
+        page's own properties and NOTHING about its contents, and the `controls`
+        attribute this method used to reach for has never existed on any Indigo
+        version, so it silently returned an empty list for years. The layout is
+        only reachable through indigo.rawServerRequest, the same undocumented
+        call Perceptive Automation's own utils.py uses to render a page.
+
+        Scope note: this stays a READ tool even though raw_server_request is
+        ADMIN. That classification is about raw_server_request's open-ended
+        surface — arbitrary Get* names — whereas this is one fixed call against a
+        validated page id, returning data this tool already claimed to return.
+        """
+        fn = getattr(indigo, "rawServerRequest", None)
+        if fn is None:
+            return None, ("Page contents unavailable: indigo.rawServerRequest is "
+                          "absent on this Indigo version.")
+        try:
+            raw = fn("GetControlPage", {"ID": pid, "GetPageFlags": FULL_PAGE_FLAGS})
+        except Exception as exc:
+            return None, f"Page contents unavailable: {exc}"
+
+        elements = []
+        for entry in (raw.get("PageElemList", []) or []):
+            try:
+                elements.append(describe_element(dict(entry)))
+            except Exception:
+                # One malformed element must not cost the whole layout.
+                elements.append({"type": "undecodable"})
+        return elements, None
+
+    @staticmethod
+    def _flag_missing_targets(elements: list) -> int:
+        """Mark elements pointing at objects that no longer exist.
+
+        This is the reason to read a page at all: a control left behind by a
+        deleted device still draws, and nothing in Indigo tells you it is dead.
+        """
+        missing = 0
+        for el in elements:
+            target = el.get("target")
+            if not target or not target.get("collection"):
+                continue
+            coll = getattr(indigo, target["collection"], None)
+            if coll is None:
+                continue
+            try:
+                exists = target["id"] in coll
+            except Exception:
+                continue
+            target["exists"] = exists
+            if not exists:
+                missing += 1
+        return missing
+
     def get_control_page(self, page_id) -> Dict[str, Any]:
-        """Return a control page's properties as a dict."""
+        """Return a control page's properties AND its layout."""
         self.log_incoming_request("get_control_page", {"page_id": page_id})
         try:
             pid = _coerce_id(page_id)
@@ -869,19 +927,20 @@ class ExtendedToolsHandler(BaseToolHandler):
                 "hideTabBar":    getattr(cp, "hideTabBar", False),
                 "remoteDisplay": getattr(cp, "displayInRemoteUI", True),
                 "description":   getattr(cp, "description", ""),
+                "width":         getattr(cp, "width", None),
+                "height":        getattr(cp, "height", None),
             }
-            # Try to surface controls if the IOM exposes them on this version
-            try:
-                controls = []
-                for ctrl in getattr(cp, "controls", []) or []:
-                    controls.append({
-                        "id":   getattr(ctrl, "id", None),
-                        "type": type(ctrl).__name__,
-                        "name": getattr(ctrl, "name", ""),
-                    })
-                data["controls"] = controls
-            except Exception:
-                data["controls"] = "unavailable on this Indigo version"
+
+            elements, note = self._control_page_elements(pid)
+            if elements is None:
+                data["elements"] = []
+                data["elements_note"] = note
+            else:
+                missing = self._flag_missing_targets(elements)
+                data["elements"] = elements
+                data["element_count"] = len(elements)
+                if missing:
+                    data["broken_references"] = missing
             return {"success": True, "control_page": data}
         except Exception as exc:
             return self.handle_exception(exc, "get_control_page")

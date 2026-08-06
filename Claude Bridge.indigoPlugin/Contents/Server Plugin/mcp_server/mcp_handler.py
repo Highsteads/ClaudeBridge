@@ -3627,7 +3627,11 @@ class MCPHandler:
             "function": self._tool_list_control_pages
         }
         self._tools["get_control_page"] = {
-            "description": "Return a control page's properties (and controls if available).",
+            "description": ("Return a control page's properties AND its full layout: "
+                            "every element with its type, position, size, caption, and "
+                            "the device/variable/action group it points at. Elements "
+                            "whose target no longer exists are flagged, so this finds "
+                            "controls left behind by a deleted device."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
