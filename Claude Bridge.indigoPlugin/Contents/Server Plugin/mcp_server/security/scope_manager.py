@@ -148,6 +148,10 @@ ADMIN_TOOLS: Set[str] = {
     # Outbound webhooks — registering an egress target POSTs home state to an
     # external URL, strictly more sensitive than a WRITE (data-leaving-the-house).
     "webhook_create", "webhook_list", "webhook_delete",
+    # Raw server access — ADMIN despite being read-only. It reaches undocumented
+    # internals whose surface we do not fully know, so it is classified by what
+    # it can REACH, not by what today's Get-only guard permits.
+    "raw_server_request",
 }
 
 # Order matters: a name should never be in more than one set (audit enforces it),

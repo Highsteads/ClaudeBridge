@@ -4,7 +4,8 @@ captured live so audit_api_coverage can detect API drift after an Indigo
 upgrade. Regenerate via the snippet in audit_api_coverage's docstring.
 """
 
-# Generated live against Indigo 2025.2.0 on 10-06-2026 — 362 entries
+# Generated live against Indigo 2025.2.0 on 10-06-2026 — 362 namespace entries,
+# plus 7 top-level functions added 06-08-2026 (369 total).
 API_BASELINE = frozenset({
     "actionGroup.create",
     "actionGroup.delete",
@@ -368,4 +369,16 @@ API_BASELINE = frozenset({
     "zwave.stopNetworkOptimize",
     "zwave.subscribeToIncoming",
     "zwave.subscribeToOutgoing",
+    # Top-level functions — indigo.<name>, outside every command namespace.
+    # Added 06-08-2026 when the audit was widened to walk them; they are NOT
+    # new API, they were simply never enumerated. Undocumented internals: the
+    # rawServer* family reaches the server's own command set directly (Boost
+    # .Python builtins, so inspect.signature() raises — read __doc__ instead).
+    "acquireCallbackCompleteHandler",
+    "debugger",
+    "rawServerCommand",
+    "rawServerCommandPacketXml",
+    "rawServerRequest",
+    "rawServerRequestPacketXml",
+    "signal_handler",
 })

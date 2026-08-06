@@ -793,6 +793,22 @@ class SystemToolsHandler(BaseToolHandler):
                     for n in dir(fold):
                         if not n.startswith("_") and callable(getattr(fold, n, None)):
                             live.add(f"{ns}.folder.{n}")
+            # Top-level functions sit at indigo.<name>, OUTSIDE every namespace
+            # above, so a namespace-only walk reports a clean sweep while missing
+            # them entirely — that is how the five rawServer* functions stayed
+            # invisible until 06-Aug-2026. Keyed by bare name; namespace entries
+            # all contain a dot, so the two can never collide. Classes are
+            # excluded to match the namespace walk, which enumerates methods.
+            import inspect as _inspect
+            for n in dir(indigo):
+                if n.startswith("_"):
+                    continue
+                obj = getattr(indigo, n, None)
+                if obj is None or not callable(obj):
+                    continue
+                if _inspect.isclass(obj) or _inspect.ismodule(obj):
+                    continue
+                live.add(n)
             added   = sorted(live - API_BASELINE)
             removed = sorted(API_BASELINE - live)
             msg = (f"API coverage audit: {len(live)} live callables vs "
@@ -804,3 +820,52 @@ class SystemToolsHandler(BaseToolHandler):
                     "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "audit_api_coverage")
+
+    # Only READ-side request names are reachable. indigo.rawServerCommand
+    # MUTATES server state and is deliberately not exposed here at all; a
+    # request name that is not a Get is refused rather than tried, because
+    # these are undocumented internals and the blast radius of guessing at
+    # a name is unknown. Do NOT relax this to "try it and see".
+    RAW_REQUEST_PREFIX = "Get"
+
+    def raw_server_request(self, name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Send a READ-ONLY raw named request to the Indigo server.
+
+        indigo.rawServerRequest reaches the server's own command set directly.
+        It is UNDOCUMENTED and UNSUPPORTED — Perceptive Automation's own
+        utils.py uses exactly one call, rawServerRequest("GetControlPage",
+        {"ID": <id>, "GetPageFlags": 65538}) — so treat any use as fragile
+        across Indigo upgrades and verify against the running version.
+        """
+        self.log_incoming_request("raw_server_request", {"name": name, "args": args})
+        try:
+            if not isinstance(name, str) or not name.isidentifier():
+                return {"success": False,
+                        "error": "name must be a plain identifier, e.g. GetControlPage"}
+            if not name.startswith(self.RAW_REQUEST_PREFIX):
+                return {"success": False,
+                        "error": (f"refused: only read-side '{self.RAW_REQUEST_PREFIX}*' "
+                                  f"requests are exposed, and {name!r} is not one. "
+                                  "Mutating raw server commands are deliberately "
+                                  "unreachable through this tool.")}
+            if args is not None and not isinstance(args, dict):
+                return {"success": False, "error": "args must be an object or omitted"}
+
+            fn = getattr(indigo, "rawServerRequest", None)
+            if fn is None:
+                return {"success": False,
+                        "error": "indigo.rawServerRequest is not present on this Indigo version"}
+
+            raw = fn(name, args) if args is not None else fn(name)
+
+            from ...common.indigo_plain import to_plain
+            result = to_plain(raw)
+            msg = f"raw_server_request {name} returned {type(raw).__name__}"
+            self.log_tool_outcome("raw_server_request", True, msg)
+            return {"success": True, "request": name, "args": args,
+                    "result": result, "result_type": type(raw).__name__,
+                    "note": ("Undocumented Indigo internal — unsupported and may "
+                             "change without warning between versions."),
+                    "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "raw_server_request")

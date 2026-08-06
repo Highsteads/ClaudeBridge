@@ -4,8 +4,47 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
-# Date:        04-08-2026
-# Version:     2.17.1
+# Date:        06-08-2026
+# Version:     2.18.0
+#
+# v2.18.0 (06-08-2026): the API-coverage audit had a blind spot, and it hid the
+# only part of the Indigo API this plugin had never reached. audit_api_coverage
+# walked the command namespaces (indigo.device, indigo.server, …) and nothing
+# else, so it reported "362 live vs 362 baseline — 0 new, 0 removed" while five
+# undocumented callables sat at the TOP level, outside every namespace it looked
+# in: rawServerRequest, rawServerCommand, their two PacketXml siblings, and
+# acquireCallbackCompleteHandler. A clean audit meant "nothing changed in the
+# namespaces", never "nothing is left to add" — and it had been read as the
+# latter. The walker now covers top-level functions too (classes and modules
+# excluded, so indigo.Dict and the leaked stdlib imports cannot churn the
+# baseline), and all seven live names are in the frozen baseline so a genuinely
+# new one shows up after the next Indigo upgrade.
+#
+# The gap was worth closing on its own, but measuring it settled a bigger
+# question: of 448 namespace callables this plugin already used 446, everything
+# except indigo.host.browserOpen and the indigo.utils helpers. There is no
+# harvest left in the documented API. The raw server functions are the whole
+# remainder.
+#
+# NEW TOOL raw_server_request (ADMIN) exposes the read side of that: it reaches
+# the server's own command set through indigo.rawServerRequest, which is how
+# Perceptive Automation's own utils.py fetches a control page's layout
+# (rawServerRequest("GetControlPage", {"ID": id, "GetPageFlags": 65538}) —
+# live-verified here, 32 page elements). It is UNDOCUMENTED and UNSUPPORTED, so
+# treat it as fragile across Indigo upgrades. Only "Get*" names are permitted
+# and indigo.rawServerCommand, which mutates, is not reachable through the tool
+# at all; a name that is not a Get is refused rather than tried, because the
+# blast radius of guessing at an undocumented command name is unknown. It is
+# classified ADMIN despite being read-only — scoped by what it can REACH, not by
+# what today's guard permits. Replies come back as indigo.Dict/indigo.List,
+# which are Boost.Python types rather than dict/list subclasses, so the JSON
+# encoder would serialise a nested one to {} via its __dict__ fallback and lose
+# it silently; new common/indigo_plain.to_plain deep-converts an arbitrary reply
+# (the existing _deps_to_plain only knows the one getDependencies shape).
+#
+# Tests 439 → 452. The walker test and the guard test were both verified failing
+# first — the walker against the pre-fix code, the guard against a mutant with
+# the refusal removed.
 #
 # v2.17.1 (04-08-2026): the bundled MCP proxy (indigo_mcp_proxy.py v1.5) now
 # waits out a boot race instead of failing the attach. A client that starts

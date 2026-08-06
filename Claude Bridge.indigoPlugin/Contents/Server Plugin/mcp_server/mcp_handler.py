@@ -3169,6 +3169,25 @@ class MCPHandler:
             "inputSchema": _no_args_schema,
             "function": self._tool_audit_api_coverage,
         }
+        self._tools["raw_server_request"] = {
+            "description": ("Send a READ-ONLY raw named request to the Indigo server "
+                            "(indigo.rawServerRequest). Undocumented internal API — "
+                            "unsupported and may change between Indigo versions. Only "
+                            "'Get*' request names are permitted; mutating raw commands "
+                            "are not reachable. Example: name='GetControlPage', "
+                            "args={'ID': 12345, 'GetPageFlags': 65538}."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "Request name, must begin with 'Get'"},
+                    "args": {"type": "object",
+                             "description": "Optional arguments for the request"}
+                },
+                "required": ["name"]
+            },
+            "function": self._tool_raw_server_request,
+        }
         self._tools["device_toggle"] = {
             "description": "Toggle on/off state. Auto-detects dimmer/relay/speedcontrol.",
             "inputSchema": {
@@ -3890,6 +3909,14 @@ class MCPHandler:
             return safe_json_dumps(self.system_tools_handler.audit_api_coverage())
         except Exception as e:
             self.logger.error(f"audit_api_coverage error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_raw_server_request(self, name: str, args: dict = None) -> str:
+        try:
+            return safe_json_dumps(
+                self.system_tools_handler.raw_server_request(name, args))
+        except Exception as e:
+            self.logger.error(f"raw_server_request error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     def _tool_execute_indigo_python(self, code: str, mode: str = "exec") -> str:
