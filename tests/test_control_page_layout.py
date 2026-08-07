@@ -138,6 +138,22 @@ def test_decodes_a_brightness_step_with_its_value():
     assert steps[0]["value"] == 750
 
 
+def test_a_toggles_meaningless_zero_value_is_not_reported():
+    """The control-pages skill tells authors to put DeviceActionValue 0 on every
+    device action, so a generated page carries one on its toggles. Reporting it
+    makes a toggle read as "toggle to 0"; only brightness-style actions use it."""
+    steps = describe_action_steps({"ActionSteps": [
+        {"Class": 1, "DeviceAction": 6, "DeviceActionValue": 0, "DeviceID": 9}]})
+    assert "toggle" in steps[0]["action"]
+    assert "value" not in steps[0]
+
+
+def test_turn_on_does_not_report_a_value_either():
+    steps = describe_action_steps({"ActionSteps": [
+        {"Class": 1, "DeviceAction": 4, "DeviceActionValue": 0, "DeviceID": 9}]})
+    assert "value" not in steps[0]
+
+
 def test_decodes_a_thermostat_step():
     steps = describe_action_steps(
         {"ActionSteps": [{"Class": 3, "HVACAction": 0, "DeviceID": 9}]})

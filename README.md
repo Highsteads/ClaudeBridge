@@ -855,6 +855,9 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.19.2 (2026-08-07)
+A toggle was reporting `value: 0`, which reads as "toggle to nought" and is nothing of the sort. The control-pages skill tells authors to put a `DeviceActionValue` of zero on every device action, so every generated page carries one on its toggles, and yesterday's release dutifully reported it. Only the brightness-style actions actually use that field, so the value now appears solely for those. Presentation rather than correctness, but a number that means nothing is worse than no number at all, because the reader quite reasonably assumes it means something.
+
 ### 2.19.1 (2026-08-07)
 Yesterday's release could tell you what was on a control page but not what any of it did, which is really only half the question. Every element came back reporting no action whatsoever, including a light that plainly toggles when you tap it.
 

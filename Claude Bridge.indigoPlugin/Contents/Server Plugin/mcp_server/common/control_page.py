@@ -66,6 +66,17 @@ CAPTION_PLACEMENTS: Dict[int, str] = {
 # TextAlignmentTypeEnum
 TEXT_ALIGNMENTS: Dict[int, str] = {0: "left", 1: "right", 2: "center"}
 
+# DeviceAction codes that actually USE DeviceActionValue. Every other action
+# carries a meaningless 0 — the control-pages skill tells authors to include
+# `<DeviceActionValue>0</DeviceActionValue>` on every device action, so a
+# generated page has one on its toggles too, and reporting it makes a toggle
+# read as "toggle to 0". Only surface the value where it means something.
+VALUE_BEARING_DEVICE_ACTIONS = frozenset({
+    7,   # set brightness (0-1000, tenths of a percent)
+    8,   # brighten by
+    9,   # dim by
+})
+
 # ClientActionTypeEnum — what the CLIENT does on tap, as opposed to the server
 # action. 1014 is how a thermostat or dimmer gets its popup, so without this a
 # setpoint control is indistinguishable from a read-only sensor tile.
@@ -147,9 +158,11 @@ def describe_action_steps(action_group: Any) -> List[Dict[str, Any]]:
             "action_class": schema.label(schema.ACTION_CLASSES, cls, "class"),
         }
         if cls == schema.ACTION_CLASS_DEVICE:
+            device_action = s.get("DeviceAction")
             entry["action"] = schema.label(
-                schema.DEVICE_ACTION_CODES, s.get("DeviceAction"))
-            if s.get("DeviceActionValue") is not None:
+                schema.DEVICE_ACTION_CODES, device_action)
+            if (device_action in VALUE_BEARING_DEVICE_ACTIONS
+                    and s.get("DeviceActionValue") is not None):
                 entry["value"] = s.get("DeviceActionValue")
         elif cls == schema.ACTION_CLASS_THERMOSTAT:
             entry["action"] = schema.label(

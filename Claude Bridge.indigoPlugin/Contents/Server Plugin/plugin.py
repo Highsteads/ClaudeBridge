@@ -5,7 +5,17 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        07-08-2026
-# Version:     2.19.1
+# Version:     2.19.2
+#
+# v2.19.2 (07-08-2026): a toggle was reporting `value: 0`, which reads as
+# "toggle to 0" and is nothing of the sort. The control-pages skill instructs
+# authors to put `<DeviceActionValue>0</DeviceActionValue>` on EVERY device
+# action, so every generated page carries one on its toggles and turn-ons, and
+# v2.19.1 surfaced it whenever it was present. Only brightness-style actions
+# (set brightness, brighten by, dim by) actually use the field, so the value is
+# now reported only for those. Presentation, not correctness — but a number
+# that means nothing is worse than no number, because the reader assumes it
+# means something. Tests 479 → 481.
 #
 # v2.19.1 (07-08-2026): 2.19.0 could tell you what was ON a control page but not
 # what any of it DID, which is half the question. The cause was Indigo's own
