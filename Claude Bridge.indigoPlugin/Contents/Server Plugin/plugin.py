@@ -4,8 +4,38 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
-# Date:        06-08-2026
-# Version:     2.19.0
+# Date:        07-08-2026
+# Version:     2.19.1
+#
+# v2.19.1 (07-08-2026): 2.19.0 could tell you what was ON a control page but not
+# what any of it DID, which is half the question. The cause was Indigo's own
+# constant: FULL_PAGE_FLAGS sounds like everything, but the second argument to
+# calc_getPage_flags is `ignore_actions` and it is set True, so the server
+# withholds every ActionGroup. Each element came back reporting no action at
+# all — including a light that demonstrably toggles.
+#
+# Found by importing a generated page and reading it back, not by review. The
+# whole suite was green and stayed green, because the tests asserted the flag
+# constant the code used rather than the behaviour it produced. A page fetched
+# with 65536 instead returns the steps, so get_control_page now reports
+# `on_tap` per element (action class, action, target device, and the value for
+# a set-brightness step), decoded through the code tables in
+# adapters/indidb/schema.py — those were verified against live runtime enum
+# dumps in v2.12.4, so reusing them beats keeping a second copy that can drift.
+#
+# Also surfaces `client_action`. ClientActionType 1014 is how a thermostat or
+# dimmer gets its popup, so without it a setpoint control looked identical to a
+# read-only sensor tile. Absent or 0 is omitted rather than reported as a
+# behaviour, and `shows_state_text` now appears for elements displaying a value.
+#
+# Tests 469 → 479, and one of the new ones found a bug in this very change:
+# ActionSteps arriving as a string was being iterated CHARACTER BY CHARACTER
+# into ten "undecodable" steps. Same str-is-iterable trap indigo_plain.to_plain
+# already guards, missed here on the first pass.
+#
+# Live-verified against a real imported page: light "on tap -> toggle (code 6)",
+# radiator "client: popup controls | shows state text", the four sensors
+# "display only".
 #
 # v2.19.0 (06-08-2026): get_control_page had been promising something it could
 # never deliver. It carried a branch reaching for `cp.controls` — "surface the

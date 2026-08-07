@@ -14,11 +14,22 @@ observed data. Kept as plain dicts, not imports of indigo.utils, so the decoding
 is testable with no Indigo present.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from ..adapters.indidb import schema
 
 # indigo.utils.FULL_PAGE_FLAGS — calc_getPage_flags(False, True, False, False).
-# Asks for the page elements and skips the actions attached to them.
+# Despite the name, the second argument is `ignore_actions`, so this asks for
+# the page elements and DELIBERATELY SKIPS the actions attached to them. Kept
+# for reference because it is Indigo's own constant.
 FULL_PAGE_FLAGS = 65538
+
+# calc_getPage_flags(False, False, False, False) — elements AND their actions.
+# This is what we actually want: without it every element reports an empty
+# ActionGroup, so a button's whole purpose is invisible and a page reads as if
+# nothing on it does anything. Confirmed live 07-08-2026 against a page whose
+# light demonstrably toggles.
+PAGE_FLAGS_WITH_ACTIONS = 65536
 
 # PageElementTypeEnum
 PAGE_ELEMENT_TYPES: Dict[int, str] = {
@@ -55,6 +66,19 @@ CAPTION_PLACEMENTS: Dict[int, str] = {
 # TextAlignmentTypeEnum
 TEXT_ALIGNMENTS: Dict[int, str] = {0: "left", 1: "right", 2: "center"}
 
+# ClientActionTypeEnum — what the CLIENT does on tap, as opposed to the server
+# action. 1014 is how a thermostat or dimmer gets its popup, so without this a
+# setpoint control is indistinguishable from a read-only sensor tile.
+CLIENT_ACTION_TYPES: Dict[int, str] = {
+    0:    "none",
+    1014: "popup controls",
+    1015: "link to control page (navigate)",
+    1016: "external url",
+    1017: "replace control page",
+    1018: "previous page",
+    1019: "control page list",
+}
+
 # Which Indigo collection a page element's TargetElemID points into. Element
 # types absent here (server status, image/text, video…) carry no target at all.
 TARGET_COLLECTION: Dict[str, str] = {
@@ -86,6 +110,61 @@ def _named(table: Dict[int, str], code: Any) -> Optional[str]:
     code is always kept alongside so nothing is lost.
     """
     return table.get(code) if isinstance(code, int) else None
+
+
+def describe_action_steps(action_group: Any) -> List[Dict[str, Any]]:
+    """Decode the ActionGroup attached to a page element — what tapping it DOES.
+
+    Reuses the code tables in adapters/indidb/schema.py, which were verified
+    against live runtime enum dumps, rather than keeping a second copy here.
+    Only appears when the page is fetched with PAGE_FLAGS_WITH_ACTIONS.
+    """
+    if not action_group:
+        return []
+    try:
+        raw_steps = dict(action_group).get("ActionSteps", []) or []
+    except Exception:
+        return []
+    # A str is iterable, so list() on one yields a step per CHARACTER. Anything
+    # that is not a real sequence of steps is malformed, not ten actions.
+    if isinstance(raw_steps, (str, bytes)) or not hasattr(raw_steps, "__iter__"):
+        return []
+    try:
+        steps = list(raw_steps)
+    except Exception:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for step in steps:
+        try:
+            s = dict(step)
+        except Exception:
+            out.append({"action": "undecodable"})
+            continue
+
+        cls = s.get("Class")
+        entry: Dict[str, Any] = {
+            "action_class": schema.label(schema.ACTION_CLASSES, cls, "class"),
+        }
+        if cls == schema.ACTION_CLASS_DEVICE:
+            entry["action"] = schema.label(
+                schema.DEVICE_ACTION_CODES, s.get("DeviceAction"))
+            if s.get("DeviceActionValue") is not None:
+                entry["value"] = s.get("DeviceActionValue")
+        elif cls == schema.ACTION_CLASS_THERMOSTAT:
+            entry["action"] = schema.label(
+                schema.THERMOSTAT_ACTION_CODES, s.get("HVACAction"))
+        elif cls == schema.ACTION_CLASS_UNIVERSAL:
+            entry["action"] = schema.label(
+                schema.UNIVERSAL_ACTION_CODES, s.get("UniversalAction"))
+
+        for key, out_key in (("DeviceID", "device_id"),
+                             ("ActionGroupID", "action_group_id"),
+                             ("VariableID", "variable_id")):
+            if s.get(key) is not None:
+                entry[out_key] = s.get(key)
+        out.append(entry)
+    return out
 
 
 def describe_element(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -133,6 +212,21 @@ def describe_element(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     if raw.get("ImageFileName"):
         out["image"] = raw["ImageFileName"]
+
+    # What tapping it does, both halves: the server action steps and the
+    # client-side behaviour (popup, page link). Either may be absent.
+    steps = describe_action_steps(raw.get("ActionGroup"))
+    if steps:
+        out["on_tap"] = steps
+
+    client_action = raw.get("ClientActionType")
+    if client_action not in (None, 0):
+        out["client_action"] = (_named(CLIENT_ACTION_TYPES, client_action)
+                                or f"unknown({client_action})")
+        out["client_action_code"] = client_action
+
+    if raw.get("ShowStateText"):
+        out["shows_state_text"] = True
 
     placement = _named(CAPTION_PLACEMENTS, raw.get("CaptionPlacement"))
     if placement:

@@ -855,6 +855,15 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.19.1 (2026-08-07)
+Yesterday's release could tell you what was on a control page but not what any of it did, which is really only half the question. Every element came back reporting no action whatsoever, including a light that plainly toggles when you tap it.
+
+The culprit was Indigo's own constant. `FULL_PAGE_FLAGS` sounds like it asks for everything, but the second argument behind it is `ignore_actions` and it is set to true, so the server politely withholds the lot. Asking with different flags returns them. Each element now reports what tapping it does — the action, the device it targets, and the level for a set-brightness step — decoded through the same code tables the automation tools use, which were checked against live runtime dumps a few weeks back, so there is no second copy here to drift out of step.
+
+It also now reports the client-side action. `1014` is how a thermostat or dimmer gets its popup, and without it a setpoint control looked exactly like a read-only sensor tile.
+
+Worth saying how this was found, since it says something about the limits of a green test suite: the tests passed throughout, because they checked that the code used a particular constant rather than checking what came back. It only surfaced by generating a page, importing it, and reading it back to find a light that insisted it did nothing. One of the new tests then promptly found a bug in the fix itself, where a malformed action list arriving as text was being read one character at a time into ten imaginary actions.
+
 ### 2.19.0 (2026-08-06)
 If you have control pages, Claude can now tell you what is on them. It could not before, and worse, it had been quietly implying it could — `get_control_page` carried a hopeful little branch that went looking for a page's controls "if this version of Indigo exposes them", and no version of Indigo ever has. So it returned an empty list every single time, and an empty list looks exactly like a page with nothing on it. You would have been told your page was bare and had no way of knowing you had been told nothing at all.
 

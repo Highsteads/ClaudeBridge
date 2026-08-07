@@ -26,7 +26,7 @@ except ImportError:
 
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
-from ...common.control_page import FULL_PAGE_FLAGS, describe_element
+from ...common.control_page import PAGE_FLAGS_WITH_ACTIONS, describe_element
 
 
 # ── ID coercion helper ──────────────────────────────────────────────────────
@@ -877,7 +877,8 @@ class ExtendedToolsHandler(BaseToolHandler):
             return None, ("Page contents unavailable: indigo.rawServerRequest is "
                           "absent on this Indigo version.")
         try:
-            raw = fn("GetControlPage", {"ID": pid, "GetPageFlags": FULL_PAGE_FLAGS})
+            raw = fn("GetControlPage", {"ID": pid,
+                                        "GetPageFlags": PAGE_FLAGS_WITH_ACTIONS})
         except Exception as exc:
             return None, f"Page contents unavailable: {exc}"
 

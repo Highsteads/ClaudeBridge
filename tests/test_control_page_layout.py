@@ -13,7 +13,8 @@ import sys
 from unittest.mock import MagicMock
 
 from mcp_server.common.control_page import (
-    FULL_PAGE_FLAGS, PAGE_ELEMENT_TYPES, describe_element,
+    FULL_PAGE_FLAGS, PAGE_ELEMENT_TYPES, PAGE_FLAGS_WITH_ACTIONS,
+    describe_action_steps, describe_element,
 )
 from mcp_server.tools.extended_tools.extended_tools_handler import ExtendedToolsHandler
 
@@ -107,6 +108,75 @@ def test_full_page_flags_matches_indigos_own_constant():
     assert FULL_PAGE_FLAGS == 65538
 
 
+def test_we_ask_for_actions_not_indigos_default_flags():
+    """Indigo's own FULL_PAGE_FLAGS sets ignore_actions=True despite the name.
+
+    Using it means every element comes back with an empty ActionGroup, so a
+    button's entire purpose is invisible and the page reads as though nothing
+    on it does anything. That shipped in 2.19.0 and was only caught by
+    importing a real page and noticing its light reported no action.
+    """
+    assert PAGE_FLAGS_WITH_ACTIONS == 65536
+    assert PAGE_FLAGS_WITH_ACTIONS != FULL_PAGE_FLAGS
+
+
+# ── what tapping an element does ──────────────────────────────────────────────
+
+def test_decodes_a_device_toggle_step():
+    steps = describe_action_steps(
+        {"ActionSteps": [{"Class": 1, "DeviceAction": 6, "DeviceID": 1484056336}]})
+    assert len(steps) == 1
+    assert "toggle" in steps[0]["action"]
+    assert "device action" in steps[0]["action_class"]
+    assert steps[0]["device_id"] == 1484056336
+
+
+def test_decodes_a_brightness_step_with_its_value():
+    steps = describe_action_steps({"ActionSteps": [
+        {"Class": 1, "DeviceAction": 7, "DeviceActionValue": 750, "DeviceID": 9}]})
+    assert "set brightness" in steps[0]["action"]
+    assert steps[0]["value"] == 750
+
+
+def test_decodes_a_thermostat_step():
+    steps = describe_action_steps(
+        {"ActionSteps": [{"Class": 3, "HVACAction": 0, "DeviceID": 9}]})
+    assert "set heat setpoint" in steps[0]["action"]
+
+
+def test_unknown_action_codes_carry_the_raw_number():
+    steps = describe_action_steps(
+        {"ActionSteps": [{"Class": 1, "DeviceAction": 4242, "DeviceID": 9}]})
+    assert "4242" in steps[0]["action"]
+
+
+def test_display_only_elements_have_no_on_tap():
+    el = describe_element(dict(REAL_DEVICE_LIGHT, ActionGroup={"ActionSteps": []}))
+    assert "on_tap" not in el
+
+
+def test_a_missing_or_malformed_action_group_is_survivable():
+    assert describe_action_steps(None) == []
+    assert describe_action_steps({}) == []
+    assert describe_action_steps({"ActionSteps": "not a list"}) == []
+
+
+def test_element_surfaces_the_client_side_action():
+    """1014 is how a thermostat or dimmer gets its popup. Without it a setpoint
+    control is indistinguishable from a read-only sensor tile."""
+    el = describe_element({"ControlType": 1, "TargetElemID": 7,
+                           "ClientActionType": 1014, "ShowStateText": True})
+    assert el["client_action"] == "popup controls"
+    assert el["client_action_code"] == 1014
+    assert el["shows_state_text"] is True
+
+
+def test_client_action_none_is_omitted_rather_than_reported_as_a_behaviour():
+    for value in (0, None):
+        el = describe_element({"ControlType": 1, "ClientActionType": value})
+        assert "client_action" not in el, value
+
+
 def test_every_element_type_code_is_distinct():
     assert len(set(PAGE_ELEMENT_TYPES.values())) == len(PAGE_ELEMENT_TYPES)
 
@@ -191,8 +261,9 @@ def test_get_control_page_returns_the_layout(monkeypatch):
 
     def fake_raw(name, args=None):
         seen["name"], seen["args"] = name, args
-        return {"PageElemList": [REAL_SERVER_ICON, REAL_DEVICE_LIGHT,
-                                 REAL_DEVICE_THERMOSTAT]}
+        light = dict(REAL_DEVICE_LIGHT, ActionGroup={"ActionSteps": [
+            {"Class": 1, "DeviceAction": 6, "DeviceID": 1484056336}]})
+        return {"PageElemList": [REAL_SERVER_ICON, light, REAL_DEVICE_THERMOSTAT]}
 
     monkeypatch.setattr(ind, "rawServerRequest", fake_raw, raising=False)
 
@@ -200,7 +271,9 @@ def test_get_control_page_returns_the_layout(monkeypatch):
     page = result["control_page"]
     assert result["success"] is True
     assert seen["name"] == "GetControlPage"
-    assert seen["args"]["GetPageFlags"] == FULL_PAGE_FLAGS
+    # Must be the with-actions flags, or every on_tap comes back empty.
+    assert seen["args"]["GetPageFlags"] == PAGE_FLAGS_WITH_ACTIONS
+    assert "toggle" in page["elements"][1]["on_tap"][0]["action"]
     assert page["element_count"] == 3
     assert page["width"] == 600 and page["height"] == 200
     assert [e["type"] for e in page["elements"]] == ["server_icon", "device", "device"]
