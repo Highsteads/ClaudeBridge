@@ -34,9 +34,12 @@ CLOSED = []
 
 
 class FakeResponse:
-    def __init__(self, body, headers=None):
+    def __init__(self, body, headers=None, status=200):
         self._body = body.encode("utf-8") if isinstance(body, str) else body
         self._headers = headers or {"Content-Type": "application/json; charset=utf-8"}
+        # A real HTTPResponse always has .status; the proxy reads it so an
+        # HTML error page never reaches the client's JSON-RPC stream.
+        self.status = status
 
     def getheader(self, name, default=None):
         for k, v in self._headers.items():

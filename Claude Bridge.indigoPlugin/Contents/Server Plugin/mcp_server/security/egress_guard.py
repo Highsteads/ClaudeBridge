@@ -152,6 +152,44 @@ def _host_matches(host: str, patterns: Set[str]) -> bool:
     return False
 
 
+# A DNS lookup has no timeout of its own, and the macOS resolver will work
+# through its full retry cycle against unresponsive nameservers. vet_url runs on
+# the IWS request thread, where every tool call and every device callback in the
+# plugin serialises behind it, so an uncapped lookup can freeze the lot.
+RESOLVE_TIMEOUT_SECONDS = 5.0
+
+
+def _resolve_with_deadline(host: str, port: int, timeout: float = RESOLVE_TIMEOUT_SECONDS):
+    """getaddrinfo with a hard deadline.
+
+    The lookup itself cannot be cancelled, so it runs on a daemon thread we stop
+    waiting on. A straggler resolves into a thread nobody reads and dies with the
+    process — the point is that the REQUEST thread is released on time.
+    """
+    import threading
+
+    box: dict = {}
+
+    def _worker():
+        try:
+            box["infos"] = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        except Exception as exc:                     # gaierror and anything else
+            box["error"] = exc
+
+    t = threading.Thread(target=_worker, daemon=True,
+                         name=f"egress-resolve-{host[:32]}")
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise EgressDenied(
+            f"host {host!r} did not resolve within {timeout:.0f}s — refusing "
+            f"rather than holding up the plugin"
+        )
+    if "error" in box:
+        raise box["error"]
+    return box.get("infos") or []
+
+
 def vet_url(url: str, allowlist: Allowlist, resolve: bool = True) -> List[ipaddress._BaseAddress]:
     """Validate a webhook URL against the allowlist and the SSRF firewall.
 
@@ -198,7 +236,7 @@ def vet_url(url: str, allowlist: Allowlist, resolve: bool = True) -> List[ipaddr
     else:
         port = p.port or (443 if p.scheme == "https" else 80)
         try:
-            infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+            infos = _resolve_with_deadline(host, port)
         except socket.gaierror as e:
             raise EgressDenied(f"host {host!r} did not resolve: {e}")
         candidates = []

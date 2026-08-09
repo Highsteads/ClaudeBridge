@@ -215,6 +215,28 @@ class PluginControlHandler(BaseToolHandler):
                     "error": "Indigo module not available",
                 }
 
+            # Confirm the plugin EXISTS before reporting on it. getPlugin() hands
+            # back a live-looking PluginInfo for any string, so a typo'd or
+            # uninstalled bundle id used to return success with enabled=False and
+            # displayName "Unknown" — indistinguishable from a plugin that really
+            # is installed and disabled. Same check get_plugin_by_id gained in
+            # v2.10.1; this sibling was missed.
+            installed = None
+            try:
+                for p in self._get_cached_plugins(include_disabled=True):
+                    if p["id"] == plugin_id:
+                        installed = p
+                        break
+            except Exception:
+                installed = None
+
+            if installed is None:
+                return {
+                    "success": False,
+                    "error": f"Plugin '{plugin_id}' not found",
+                    "suggestion": "Use list_plugins to see the installed bundle ids.",
+                }
+
             # Get plugin from Indigo API
             plugin = indigo.server.getPlugin(plugin_id)
 
@@ -223,19 +245,10 @@ class PluginControlHandler(BaseToolHandler):
                 "id": plugin_id,
                 "enabled": plugin.isEnabled(),
                 "displayName": getattr(plugin, "pluginDisplayName", "Unknown"),
+                "version": installed.get("version", "Unknown"),
+                "path": installed.get("path", "Unknown"),
             }
-
-            # Try to get additional info from file system scan
-            try:
-                plugins = self._get_cached_plugins(include_disabled=True)
-                for p in plugins:
-                    if p["id"] == plugin_id:
-                        status["version"] = p.get("version", "Unknown")
-                        status["path"] = p.get("path", "Unknown")
-                        status["name"] = p.get("name", status["displayName"])
-                        break
-            except Exception:
-                pass
+            status["name"] = installed.get("name", status["displayName"])
 
             return {"success": True, "status": status}
 

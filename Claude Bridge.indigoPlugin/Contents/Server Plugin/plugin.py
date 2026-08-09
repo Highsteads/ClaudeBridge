@@ -5,7 +5,22 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        09-08-2026
-# Version:     2.20.0
+# Version:     2.20.1
+#
+# v2.20.1 (09-08-2026): the medium-severity batch of the same review. The
+# InfluxDB settings could not be configured from the dialog at all — the port
+# field was dead (its secret defaulted to a truthy 8086, so the `secret or
+# dialog` chain never reached the dialog) and the host field demanded an
+# http:// prefix that its own description tells you to leave off and the code
+# strips anyway. Bools were accepted as entity IDs in three more handlers, and
+# folder 0 is a real destination, so a stray `false` was a silent target.
+# Unknown state-filter operators matched everything instead of nothing. A
+# sensitive tool's failure scrubbed `error` while shipping the same text in
+# `traceback`. The exec proxy wrote HTML error pages into the client's JSON-RPC
+# stream and never answered the request id. A deleted webhook kept delivering
+# queued events. `or` chains read a legitimate zero — a flat battery, no sun —
+# as "unavailable". A failed search warmup left search empty and silent for the
+# life of the plugin. Tests 489 -> 503.
 #
 # v2.20.0 (09-08-2026): the three high-severity findings of a full 20-lens
 # review. (1) The Configure dialog could not be SAVED without an Anthropic API
@@ -793,7 +808,13 @@ def _get_secret(name: str, default=""):
 ANTHROPIC_API_KEY         = _get_secret("ANTHROPIC_API_KEY")
 CLAUDEBRIDGE_BEARER_TOKEN = _get_secret("CLAUDEBRIDGE_BEARER_TOKEN")
 INFLUXDB_HOST             = _get_secret("INFLUXDB_HOST")
-INFLUXDB_PORT             = _get_secret("INFLUXDB_PORT", 8086)
+# Every secret defaults to "" so that an ABSENT key falls through to its
+# PluginConfig field. INFLUXDB_PORT used to default to 8086, which is truthy, so
+# the `INFLUXDB_PORT or <dialog value>` chains below short-circuited and the
+# influx_port field could never take effect — a user on a non-default port was
+# silently connected to 8086. The 8086 default still applies, at the END of each
+# chain where it belongs.
+INFLUXDB_PORT             = _get_secret("INFLUXDB_PORT")
 INFLUXDB_USERNAME         = _get_secret("INFLUXDB_USERNAME")
 INFLUXDB_PASSWORD         = _get_secret("INFLUXDB_PASSWORD")
 INFLUXDB_DATABASE         = _get_secret("INFLUXDB_DATABASE")
@@ -1296,7 +1317,8 @@ class Plugin(indigo.PluginBase):
             scripts_dir.mkdir(parents=True, exist_ok=True)
             _shutil.copy2(bundle_proxy, dest_proxy)
 
-            token = ""
+            token   = ""
+            patched = False
             if secrets_path.exists():
                 try:
                     iws_secrets = _json.loads(secrets_path.read_text())
@@ -1327,12 +1349,25 @@ class Plugin(indigo.PluginBase):
                     # '\g<...>' or quotes is inserted LITERALLY — a plain re.sub
                     # replacement string would interpret backreferences and
                     # silently corrupt the token.
-                    new_text = _re.sub(
+                    # subn, not sub: a rename of the BEARER_TOKEN line would make
+                    # this a silent no-op, deploying the placeholder while the log
+                    # said the proxy was configured. Every MCP call would then 401
+                    # with nothing pointing here.
+                    new_text, count = _re.subn(
                         r'^(BEARER_TOKEN\s*=\s*")[^"]*(")',
                         lambda m: m.group(1) + token + m.group(2),
                         text, flags=_re.MULTILINE
                     )
-                    dest_proxy.write_text(new_text, encoding="utf-8")
+                    if count:
+                        dest_proxy.write_text(new_text, encoding="utf-8")
+                        patched = True
+                    else:
+                        self.logger.error(
+                            "[Config] BEARER_TOKEN line not found in the bundled MCP "
+                            "proxy — the token was NOT patched in and Claude Code will "
+                            "fail to authenticate. The proxy's token line has been "
+                            "renamed or removed."
+                        )
                 except Exception as _e:
                     self.logger.error(f"[Config] Bearer token patch failed: {_e}")
 
@@ -1343,7 +1378,11 @@ class Plugin(indigo.PluginBase):
             except Exception as _e:
                 self.logger.warning(f"\tCould not chmod deployed proxy to 0o600: {_e}")
 
-            changed.append("proxy script")
+            # Only claim the proxy was configured when the token actually went in.
+            # Reporting success on the no-token and patch-failed paths is how a
+            # broken deployment looks healthy.
+            if patched:
+                changed.append("proxy script")
         else:
             self.logger.warning("\tindigo_mcp_proxy.py not found in bundle — skipping proxy setup")
 
@@ -1711,6 +1750,15 @@ class Plugin(indigo.PluginBase):
         try:
             scopes_path.parent.mkdir(parents=True, exist_ok=True)
             scopes_path.write_text(json.dumps(starter, indent=2) + "\n")
+            # This file is KEYED BY FULL BEARER TOKENS once the user fills it in,
+            # so it must not inherit a group/world-readable umask — same reasoning
+            # as webhooks.json and the deployed proxy. ScopeManager re-asserts this
+            # on every load in case the file is restored from a backup.
+            try:
+                _os.chmod(scopes_path, 0o600)
+            except Exception as _e:
+                indigo.server.log(f"Claude Bridge: could not chmod scopes.json to 0600: {_e}",
+                                  isError=True)
             indigo.server.log(f"Claude Bridge: Wrote starter scopes.json to: {scopes_path}")
             indigo.server.log("Claude Bridge: Edit the token strings to match your IWS bearer "
                               "tokens, then use 'Reload scopes.json' to apply.")
@@ -1977,22 +2025,29 @@ class Plugin(indigo.PluginBase):
             influx_port = values_dict.get("influx_port", "").strip()
             influx_database = values_dict.get("influx_database", "").strip()
 
-            if not influx_url:
+            # A BARE HOST is what this field wants — the field's own description
+            # gives a bare-IP example and says the protocol prefix is stripped,
+            # and __init__ does strip it. Demanding http:// here contradicted both,
+            # so entering the documented example made the dialog unsavable.
+            # A prefix is still accepted, since it is simply removed.
+            if not influx_url and not INFLUXDB_HOST:
                 errors_dict["influx_url"] = (
-                    "InfluxDB URL is required when InfluxDB is enabled"
+                    "InfluxDB host is required when InfluxDB is enabled "
+                    "(e.g. 192.168.1.20) — or set INFLUXDB_HOST in IndigoSecrets.py"
                 )
-            elif not (
-                influx_url.startswith("http://") or influx_url.startswith("https://")
-            ):
-                errors_dict["influx_url"] = (
-                    "InfluxDB URL must start with http:// or https://"
-                )
+            elif influx_url:
+                host = influx_url.replace("http://", "").replace("https://", "")
+                host = host.split("/")[0].strip()
+                if not host:
+                    errors_dict["influx_url"] = (
+                        "InfluxDB host must be a hostname or IP address, "
+                        "not just a protocol prefix"
+                    )
 
-            if not influx_port:
-                errors_dict["influx_port"] = (
-                    "InfluxDB port is required when InfluxDB is enabled"
-                )
-            else:
+            # Blank is fine — the field is a FALLBACK behind INFLUXDB_PORT, and
+            # __init__ defaults to 8086 either way. Only a value actually typed
+            # here is checked, so a blank field can never be parsed as a number.
+            if influx_port:
                 try:
                     port = int(influx_port)
                     if port < 1 or port > 65535:
@@ -2002,9 +2057,12 @@ class Plugin(indigo.PluginBase):
                 except (ValueError, TypeError):
                     errors_dict["influx_port"] = "InfluxDB port must be a valid number"
 
-            if not influx_database:
+            # Same fallback rule as the host and port: blank is fine when
+            # IndigoSecrets.py supplies it.
+            if not influx_database and not INFLUXDB_DATABASE:
                 errors_dict["influx_database"] = (
-                    "InfluxDB database name is required when InfluxDB is enabled"
+                    "InfluxDB database name is required when InfluxDB is enabled "
+                    "— or set INFLUXDB_DATABASE in IndigoSecrets.py"
                 )
 
         return (len(errors_dict) == 0, values_dict, errors_dict)

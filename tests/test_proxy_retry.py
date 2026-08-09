@@ -13,6 +13,11 @@ import indigo_mcp_proxy as proxy
 
 
 class _Resp:
+    # A real http.client.HTTPResponse always carries .status, and the proxy now
+    # checks it so an HTML 401/500 page is never written into the JSON-RPC
+    # stream. A double without it is modelling something that cannot exist.
+    status = 200
+
     def getheader(self, name, default=""):
         if name == "Mcp-Session-Id":
             return "sess-1"

@@ -95,6 +95,30 @@ _last_exchange = None    # time.monotonic() of the last completed exchange
 _last_init     = None    # cached initialize request, replayed to re-handshake
 
 
+class _HttpError(Exception):
+    """The server answered, but not with JSON-RPC — an HTTP-level failure.
+
+    A 401 (the placeholder token was never patched in), a 404 (wrong plugin id
+    in the URL) or an IWS 500 all return an HTML or plain-text body. Writing that
+    body to stdout would corrupt the client's JSON-RPC stream AND leave the
+    pending request id unanswered, so the client waits for a reply that never
+    comes. Raising instead turns it into a proper JSON-RPC error for that id.
+    """
+
+    def __init__(self, status: int, body: str = ""):
+        self.status = status
+        self.body   = body
+        hint = ""
+        if status == 401:
+            hint = (" — the bearer token was rejected. Check that the plugin "
+                    "patched a real token into this proxy (Claude Bridge logs "
+                    "an error if it could not).")
+        elif status == 404:
+            hint = " — endpoint not found. Is the Claude Bridge plugin enabled?"
+        detail = f": {body.strip()[:200]}" if body.strip() else ""
+        super().__init__(f"HTTP {status} from Indigo's web server{hint}{detail}")
+
+
 class _SendFailed(Exception):
     """A connection failure the proxy deliberately did NOT retry: it happened
     after the request was written, on a connection we cannot prove the server
@@ -213,27 +237,48 @@ def _read_response(resp):
     messages = []
     emit_lines = []
 
+    status = resp.status
+
     if "text/event-stream" in content_type:
+        done = False
         for raw in resp:
+            if done:
+                continue          # keep consuming so the response reaches EOF
             line = raw.decode("utf-8").rstrip("\r\n")
             if line.startswith("data: "):
                 payload = line[6:]
                 if payload == "[DONE]":
-                    break
+                    # Do NOT break. An un-drained response leaves the keep-alive
+                    # connection mid-message, so the NEXT getresponse() raises
+                    # ResponseNotReady after that request has already been sent —
+                    # which for a tools/call is reported as "may have already
+                    # executed" while its real reply is lost.
+                    done = True
+                    continue
                 try:
                     msg = json.loads(payload)
                     messages.append(msg)
                     emit_lines.append(json.dumps(msg) + "\n")
                 except json.JSONDecodeError:
                     pass
+        try:
+            resp.read()           # belt and braces if the server stopped early
+        except Exception:
+            pass
     else:
         body_str = resp.read().decode("utf-8").strip()
         if body_str:
             try:
                 messages.append(json.loads(body_str))
+                # Only pass a body through to stdout once it has parsed as JSON.
+                # An HTML 401/404/500 page written verbatim corrupts the client's
+                # JSON-RPC stream, and the pending request id is never answered.
+                emit_lines.append(body_str + "\n")
             except json.JSONDecodeError:
-                pass
-            emit_lines.append(body_str + "\n")
+                raise _HttpError(status, body_str[:400])
+
+    if status >= 400 and not messages:
+        raise _HttpError(status, "")
 
     return messages, emit_lines
 
@@ -412,6 +457,12 @@ def post_message(data: dict):
         else:
             messages, emit_lines = _attempt(body, _build_headers(), method, is_notification)
     except _SendFailed as e:
+        if not is_notification:
+            _write_error(data.get("id"), str(e))
+        return
+    except _HttpError as e:
+        # Answered, but not with JSON-RPC. Report it against the request id
+        # rather than as a connection fault — the connection was fine.
         if not is_notification:
             _write_error(data.get("id"), str(e))
         return

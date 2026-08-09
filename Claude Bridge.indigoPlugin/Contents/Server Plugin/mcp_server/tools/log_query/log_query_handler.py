@@ -216,8 +216,31 @@ class LogQueryHandler(BaseToolHandler):
         try:
             today = date.today()
 
+            # Validate line_count for BOTH paths. This check used to sit inside
+            # the default path only, so the range path took it raw: a string
+            # raised TypeError in the comparison, and a zero or negative silently
+            # disabled the cap on a scan that can cover fourteen days.
+            if line_count is not None and (
+                not isinstance(line_count, int) or isinstance(line_count, bool)
+                or line_count <= 0
+            ):
+                self.log_tool_outcome("query", False, "Invalid line_count parameter")
+                return {"error": "line_count must be a positive integer", "success": False}
+
             # ── Time-range path: read from disk ───────────────────────────────
             if after is not None or before is not None:
+                # _parse_time_param calls string methods, so a number or a list
+                # here raised AttributeError from inside the parser rather than
+                # returning the clean "could not parse" error below.
+                for label, value in (("after", after), ("before", before)):
+                    if value is not None and not isinstance(value, str):
+                        return {
+                            "error": (f"'{label}' must be a time string such as "
+                                      f"'14:30:00' or '2026-08-09T14:30:00', "
+                                      f"got {type(value).__name__}"),
+                            "success": False,
+                        }
+
                 after_dt = _parse_time_param(after, today) if after   else None
                 before_dt = _parse_time_param(before, today) if before else None
 
@@ -261,12 +284,7 @@ class LogQueryHandler(BaseToolHandler):
                 return result
 
             # ── Default path: recent entries from Indigo in-memory log ────────
-            if line_count is not None and (
-                not isinstance(line_count, int) or line_count <= 0
-            ):
-                self.log_tool_outcome("query", False, "Invalid line_count parameter")
-                return {"error": "line_count must be a positive integer", "success": False}
-
+            # (line_count was validated above, for both paths.)
             self.debug_log(
                 f"Querying event log: {line_count} entries, timestamps={show_timestamp}"
             )

@@ -58,6 +58,14 @@ class SearchEntitiesHandler(BaseToolHandler):
             Dictionary with formatted search results
         """
         try:
+            # An EMPTY device_types list means "no filter", as it does in the
+            # wrapper and in QueryParser, which both test truthiness. This method
+            # tested `is not None`, so an empty list skipped the validation and
+            # the top_k over-fetch yet still reached the filter — where matching
+            # nothing discarded every device from the results.
+            if not device_types:
+                device_types = None
+
             # Concise query logging
             query_short = query[:50] + "..." if len(query) > 50 else query
             self.info_log(f"Searching: '{query_short}'")
@@ -78,7 +86,14 @@ class SearchEntitiesHandler(BaseToolHandler):
             # Rewrite the metadata to match the final set, otherwise the store's
             # pre-truncation counts make the summary claim a truncation that did
             # not happen (and spuriously suggest list_devices for "more").
-            if raw_results and raw_results[0].get("_similarity_score", 0) >= 0.95:
+            #
+            # NOT when a post-search filter is coming. QueryParser deliberately
+            # over-fetches (top_k >= 50) so the type and state filters below see a
+            # full candidate set; truncating to one first throws those candidates
+            # away, and if that single hit then fails the filter the answer is
+            # empty even though matching devices were in the set.
+            if (device_types is None and state_filter is None
+                    and raw_results and raw_results[0].get("_similarity_score", 0) >= 0.95):
                 raw_results = raw_results[:1]
                 if search_metadata:
                     search_metadata = {**search_metadata,

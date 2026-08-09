@@ -231,6 +231,19 @@ class ScopeManager:
                 "Create scopes.json to restrict per-token scopes (optional)."
             )
             return False
+        # The file is keyed by full bearer tokens, so re-assert 0600 on every load.
+        # A copy restored from a backup, or one created before this was enforced,
+        # otherwise sits group/world readable for the life of the install. Same
+        # pattern as SubscriptionStore.load() for webhooks.json.
+        try:
+            if (os.stat(self.scopes_file).st_mode & 0o077) != 0:
+                os.chmod(self.scopes_file, 0o600)
+                self.logger.warning(
+                    "\tscopes.json was readable by other users — permissions "
+                    "tightened to 0600. It holds your bearer tokens."
+                )
+        except Exception as exc:
+            self.logger.warning(f"\tCould not check/repair scopes.json permissions: {exc}")
         try:
             with open(self.scopes_file, "r", encoding="utf-8") as fh:
                 data = json.load(fh)

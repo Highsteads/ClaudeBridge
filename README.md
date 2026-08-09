@@ -855,6 +855,21 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.20.1 (2026-08-09)
+The middle tier of the same review. Nothing here is dramatic on its own, but a few would have been baffling to run into.
+
+If you use InfluxDB, the settings dialog was close to unusable. The port field did nothing at all — the value was read from your secrets file first, and that read fell back to 8086 rather than to nothing, so it always had an answer and never got as far as the dialog. Anyone running InfluxDB on another port was quietly connected to the wrong one. The host field, meanwhile, insisted on an `http://` prefix that its own description tells you to leave off and that the code strips again a moment later, so entering the example given on screen made the dialog refuse to save.
+
+A stray `true` or `false` where an ID belonged was being accepted as ID 1 or 0 in three more places. That matters most for folders, where 0 is a real destination rather than an obvious mistake.
+
+A mistyped comparison in a state filter — `gte_` for `gte`, say — used to match everything rather than nothing, because there was nothing left to fail. It now matches nothing and says so.
+
+When a tool that handles credentials failed, the error text was replaced with a pointer to the log, but the traceback beside it carried the same text word for word. The reply is now built from a short list of safe fields rather than by painting over the original.
+
+Also: the go-between script no longer writes an HTML error page into the stream Claude reads, and answers the request properly when Indigo returns a 401 or a 500. A deleted webhook stops delivering events that were already queued. Readings of zero — a flat battery, no sun, nothing crossing the meter — are reported as zero rather than as "unavailable". And if the search index fails to build at startup it now retries, where before it stayed empty and silent until the plugin was reloaded.
+
+Fourteen new tests, taking the suite to 503.
+
 ### 2.20.0 (2026-08-09)
 Three real faults, all turned up by a full review of every module rather than by anything going wrong in front of anyone.
 

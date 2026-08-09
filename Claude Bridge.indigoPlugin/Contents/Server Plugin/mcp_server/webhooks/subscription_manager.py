@@ -69,6 +69,13 @@ class SubscriptionManager:
             sub = self._subs.pop(subscription_id, None)
         if sub is None:
             return False
+        # Disable the popped object as well as dropping it from the store.
+        # Deliveries already sitting in the dispatcher's queue hold a reference
+        # to THIS object, and _deliver's only guard is `if not sub.enabled`, so
+        # without this a revoked subscription keeps being signed and POSTed to
+        # its target after the operator has deleted it. The max_fires/on_expired
+        # path pops the same way and is covered by the same line.
+        sub.enabled = False
         # Cancel ALL of this subscription's dwell timers (covers wildcard subs
         # whose timers are keyed by the per-event entity id, not sub.entity_id).
         if self._dwell:

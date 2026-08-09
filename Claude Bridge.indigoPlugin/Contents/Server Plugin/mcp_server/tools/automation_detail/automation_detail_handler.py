@@ -161,8 +161,18 @@ class AutomationDetailHandler(BaseToolHandler):
             if entity_id not in collection:
                 return live
             elem = collection[entity_id]
-            live["enabled"] = elem.enabled
+            # Name FIRST, and `enabled` guarded on its own. An indigo.ActionGroup
+            # has no `enabled` attribute, so reading it first raised immediately
+            # and the blanket except returned an EMPTY dict for every action
+            # group — the live name never won over the file copy, silently
+            # breaking this method's whole contract. Per-attribute guards keep one
+            # missing field from discarding all the others, as nextExecution
+            # already does below.
             live["name"] = elem.name
+            try:
+                live["enabled"] = elem.enabled
+            except AttributeError:
+                pass          # action groups have no enabled state
             if entity_type == "schedule":
                 try:
                     nxt = elem.nextExecution

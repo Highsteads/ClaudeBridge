@@ -47,6 +47,17 @@ class IndigoJSONEncoder(json.JSONEncoder):
             # non-UTF-8 bytes leave a U+FFFD marker rather than being silently
             # dropped.
             return obj.decode('utf-8', errors='replace')
+        elif hasattr(obj, 'keys') or (hasattr(obj, '__iter__')
+                                      and not isinstance(obj, (str, bytes))):
+            # indigo.Dict / indigo.List are Boost.Python types, NOT dict/list
+            # subclasses, so they used to fall through to the __dict__ branch
+            # below and serialise to {} — losing the whole payload SILENTLY.
+            # That trap has been fixed one call site at a time (v2.10.0's
+            # _deps_to_plain, v2.18.0's to_plain); handling it here makes
+            # safe_json_dumps correct by construction, so the next tool to
+            # return a nested indigo container cannot quietly regress.
+            from .indigo_plain import to_plain
+            return to_plain(obj)
         elif hasattr(obj, '__dict__'):
             # Handle custom objects by converting to dict, but exclude
             # underscore-prefixed (private) attributes so internal/credential

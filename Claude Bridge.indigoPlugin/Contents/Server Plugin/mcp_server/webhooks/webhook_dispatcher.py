@@ -36,6 +36,11 @@ from urllib.parse import urlsplit
 
 from ..security.egress_guard import EgressDenied, vet_url
 
+# How much of a receiver's response body to read before hanging up. Only the
+# status code matters to us, so this is purely about not letting a receiver
+# decide how much memory we spend.
+_RESPONSE_READ_CAP = 64 * 1024
+
 
 class WebhookDispatcher:
     """Async, SSRF-revalidating, IP-pinning webhook delivery."""
@@ -266,9 +271,25 @@ class WebhookDispatcher:
         if p.query:
             path += "?" + p.query
 
+        # A DEADLINE, not just a socket timeout. settimeout bounds each recv, so
+        # a receiver that dribbles a byte every few seconds keeps every single
+        # call under the limit and holds this delivery open indefinitely. There
+        # is one serial worker, so every other subscription queues behind it, and
+        # stop()'s join budget — calculated from connect+total — then orphans the
+        # worker on reload.
+        deadline = time.monotonic() + self._total_timeout
+
+        def _remaining() -> float:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise socket.timeout(
+                    f"webhook delivery exceeded {self._total_timeout}s"
+                )
+            return left
+
         raw = socket.create_connection((ip, port), timeout=self._connect_timeout)
         try:
-            raw.settimeout(self._total_timeout)
+            raw.settimeout(_remaining())
             if p.scheme == "https":
                 ctx = ssl.create_default_context()
                 if not verify_ssl:
@@ -280,10 +301,21 @@ class WebhookDispatcher:
             conn = http.client.HTTPConnection(host, port, timeout=self._total_timeout)
             conn.sock = sock                                        # pinned socket; no re-resolve
             try:
+                sock.settimeout(_remaining())
                 conn.request("POST", path, body=body, headers=headers)
+                sock.settimeout(_remaining())
                 resp = conn.getresponse()
                 status = resp.status
-                resp.read()
+                # Read a BOUNDED amount and discard. We only need the status
+                # code, and an unbounded read() would pull an arbitrarily large
+                # response body into memory on the say-so of the receiver.
+                read_budget = _RESPONSE_READ_CAP
+                while read_budget > 0:
+                    sock.settimeout(_remaining())
+                    chunk = resp.read(min(8192, read_budget))
+                    if not chunk:
+                        break
+                    read_budget -= len(chunk)
                 return status
             finally:
                 conn.close()

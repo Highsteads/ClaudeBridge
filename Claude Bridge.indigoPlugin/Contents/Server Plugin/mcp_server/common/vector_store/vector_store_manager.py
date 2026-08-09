@@ -168,6 +168,26 @@ class VectorStoreManager:
                     self.refresh_async()
             except Exception as exc:
                 self.logger.error(f"\t❌ Vector store warmup failed: {exc}")
+                # Do NOT give up here. Without this, one failed rebuild left
+                # search permanently empty and silent for the life of the plugin:
+                # _running stayed False, no interval loop was ever started, and
+                # any later refresh_async() just set a flag that nothing would
+                # replay. The interval loop already guards each tick, so letting
+                # it run means the next tick retries.
+                if self.update_interval > 0 and not self._stop_updates.is_set():
+                    try:
+                        self._start_background_updates()
+                        self._running = True
+                        self.logger.warning(
+                            f"\t📊 Vector store: warmup failed, retrying in "
+                            f"{self.update_interval}s — search results will be "
+                            f"incomplete until one succeeds"
+                        )
+                    except Exception as retry_exc:
+                        self.logger.error(
+                            f"\t❌ Vector store: could not schedule a retry after "
+                            f"a failed warmup: {retry_exc}"
+                        )
             finally:
                 self._is_initializing = False
 

@@ -24,10 +24,23 @@
 #   - Restart Claude Code
 
 import json
+import os
 import re
 import shutil
 import sys
 from pathlib import Path
+
+
+def _chmod_600(path) -> None:
+    """Make a file owner-read/write only.
+
+    Used on the deployed proxy, which carries the live IWS bearer token. Failing
+    to tighten permissions is worth a warning but must never abort the install.
+    """
+    try:
+        os.chmod(path, 0o600)
+    except Exception as exc:
+        print(f"  ! Could not set 0600 permissions on {path}: {exc}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -164,6 +177,10 @@ def install_proxy_script():
 
     SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, MCP_PROXY_DEST)
+    # copy2 preserves the source mode (typically 644) and the very next step
+    # writes the live bearer token into this file, so tighten it now — the same
+    # 0600 contract the plugin's own auto-setup applies.
+    _chmod_600(MCP_PROXY_DEST)
     ok(f"Proxy script copied to: {MCP_PROXY_DEST}")
 
 
@@ -204,6 +221,9 @@ def patch_proxy_bearer_token():
         return None
 
     MCP_PROXY_DEST.write_text(new_text)
+    # write_text can recreate the file, so re-assert 0600 now that the real
+    # token is in it.
+    _chmod_600(MCP_PROXY_DEST)
     ok("Bearer token patched in proxy script")
     return token
 

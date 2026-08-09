@@ -33,6 +33,12 @@ from ...common.control_page import PAGE_FLAGS_WITH_ACTIONS, describe_element
 
 def _coerce_id(value) -> int:
     """Accept int or str (numeric) and return int. Raises ValueError otherwise."""
+    # bool subclasses int, so True/False would sail through the isinstance check
+    # below and act as IDs 1 and 0. That reaches the delete and folder-move tools,
+    # and folder_id 0 is a REAL value (root), so a stray JSON false would be
+    # silently accepted as a destination rather than rejected.
+    if isinstance(value, bool):
+        raise ValueError(f"Expected numeric ID, got {value!r}")
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.strip().isdigit():
@@ -172,7 +178,11 @@ class ExtendedToolsHandler(BaseToolHandler):
                 self.logger.warning(f"enable_device {did}: requested {enable}, "
                                     f"server reports {actual!r}")
             self.log_tool_outcome("enable_device", confirmed, msg)
-            return {"success": True, "device_id": did, "enabled": actual,
+            # success follows the READBACK, as rename_device and
+            # reset_energy_accumulator already do. Reporting success while the
+            # server still says otherwise is the failure mode the readback exists
+            # to catch — a write to a foreign device can fail without raising.
+            return {"success": confirmed, "device_id": did, "enabled": actual,
                     "requested": enable, "confirmed": confirmed, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "enable_device")
@@ -751,10 +761,15 @@ class ExtendedToolsHandler(BaseToolHandler):
             text = (text or "").strip()
             if not text:
                 return {"success": False, "error": "text is required"}
-            indigo.server.speak(text, waitUntilDone=bool(wait))
+            # _coerce_bool, not bool(): the STRING "false" is truthy, and the
+            # truthy branch is the BLOCKING one. Dispatch is single-threaded, so
+            # waitUntilDone=True freezes every tool and every device callback for
+            # as long as the utterance takes.
+            wait_flag = _coerce_bool(wait)
+            indigo.server.speak(text, waitUntilDone=wait_flag)
             msg = f"Spoke {len(text)} chars"
             self.log_tool_outcome("server_speak", True, msg)
-            return {"success": True, "chars": len(text), "wait": bool(wait), "message": msg}
+            return {"success": True, "chars": len(text), "wait": wait_flag, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "server_speak")
 
@@ -816,7 +831,11 @@ class ExtendedToolsHandler(BaseToolHandler):
             out = {}
             if result:
                 try:
-                    out = dict(result)
+                    # DEEP convert. dict(result) is shallow, and every value here
+                    # is an indigo.List — a Boost.Python type, not a list subclass
+                    # — which the JSON encoder collapses to {} through its
+                    # __dict__ fallback. The deprecation lists would arrive empty.
+                    out = _deps_to_plain(result)
                 except Exception:
                     out = {"_raw": str(result)}
             return {"success": True, "include_warnings": bool(include_warnings),

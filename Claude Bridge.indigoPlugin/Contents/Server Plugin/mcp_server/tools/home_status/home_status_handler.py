@@ -29,6 +29,21 @@ from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 from ...common.battery import battery_pct as _battery_pct
 
+
+def _first(states, *keys):
+    """First key that is actually PRESENT, rather than first that is truthy.
+
+    Battery percentage, solar watts, grid watts, a room temperature and a
+    setpoint can all legitimately read 0, and an `or` chain treats 0 as absent —
+    reporting a real measurement as missing, which is the worst direction to be
+    wrong in. Returns None only when no key holds a value.
+    """
+    for key in keys:
+        value = states.get(key)
+        if value is not None:
+            return value
+    return None
+
 # SigenEnergyManager device type IDs
 SIGEN_INVERTER_TYPE  = "sigenergyInverter"
 SIGEN_BATTERY_TYPE   = "sigenergyBattery"
@@ -275,14 +290,17 @@ class HomeStatusHandler(BaseToolHandler):
                     if dev_key == "variables":
                         continue
                     states = snap[dev_key].get("states", {})
+                    # _first, not `or`: every one of these can legitimately be 0
+                    # — a flat battery, no sun, nothing crossing the meter — and
+                    # `or` reads 0 as missing, so it fell through to the variable
+                    # name guesses below or reported the figure as unavailable.
+                    # Zero is a reading, and often the interesting one.
                     if soc is None:
-                        soc = (states.get("batterySOC") or states.get("soc")
-                               or states.get("batterySoc"))
+                        soc = _first(states, "batterySOC", "soc", "batterySoc")
                     if solar_w is None:
-                        solar_w = (states.get("pvPower") or states.get("solarPower")
-                                   or states.get("pvWatts"))
+                        solar_w = _first(states, "pvPower", "solarPower", "pvWatts")
                     if grid_w is None:
-                        grid_w = (states.get("gridPower") or states.get("gridWatts"))
+                        grid_w = _first(states, "gridPower", "gridWatts")
 
                 for k, v in energy_vars.items():
                     kl = k.lower()
@@ -347,12 +365,12 @@ class HomeStatusHandler(BaseToolHandler):
                         for x in ("homeassistant", "ramses", "evohome", "thermostat")
                     ):
                         continue
-                    temp  = (dev.states.get("temperatureInput1")
-                             or dev.states.get("displayTemp")
-                             or dev.states.get("temperature"))
-                    setpt = (dev.states.get("heatSetpoint")
-                             or dev.states.get("setpointHeat")
-                             or dev.states.get("setpoint"))
+                    # See _first: a room genuinely at 0.0 C, or a setpoint of 0
+                    # on an off zone, must not read as "no sensor".
+                    temp  = _first(dev.states, "temperatureInput1",
+                                   "displayTemp", "temperature")
+                    setpt = _first(dev.states, "heatSetpoint",
+                                   "setpointHeat", "setpoint")
                     if temp is not None or setpt is not None:
                         zones.append({"name": dev.name, "temp": temp, "setpoint": setpt})
 

@@ -43,8 +43,10 @@ class ActionControlHandler(BaseToolHandler):
             # number|string, and MCP clients often send numeric IDs as strings)
             if isinstance(action_group_id, str) and action_group_id.strip().lstrip("-").isdigit():
                 action_group_id = int(action_group_id.strip())
-            # Validate action_group_id
-            if not isinstance(action_group_id, int):
+            # Validate action_group_id. bool is checked FIRST because it
+            # subclasses int, so a stray JSON true/false would otherwise pass as
+            # ID 1 or 0 and RUN whichever action group holds that id.
+            if isinstance(action_group_id, bool) or not isinstance(action_group_id, int):
                 self.info_log("❌ Invalid action_group_id type")
                 return {"error": "action_group_id must be an integer", "success": False}
 

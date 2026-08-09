@@ -177,11 +177,13 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "action_execute_group":     _ACTION_TOOLS | _DEVICE_TOOLS,
     "duplicate_action_group":   _ACTION_TOOLS,
     "delete_action_group":      _ACTION_TOOLS,
+    "update_action_group":      _ACTION_TOOLS,
     # ── Schedules ───────────────────────────────────────────────────────
     "enable_schedule":          _SCHEDULE_TOOLS,
     "disable_schedule":         _SCHEDULE_TOOLS,
     "duplicate_schedule":       _SCHEDULE_TOOLS,
     "delete_schedule":          _SCHEDULE_TOOLS,
+    "update_schedule":          _SCHEDULE_TOOLS,
     # Firing a schedule runs its actions, which can move device/variable state.
     "execute_schedule_now":     _SCHEDULE_TOOLS | _DEVICE_TOOLS | _VARIABLE_TOOLS,
     "schedule_remove_delayed_actions": _SCHEDULE_TOOLS,
@@ -191,6 +193,11 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "disable_trigger":          _TRIGGER_TOOLS,
     "move_trigger_to_folder":   _TRIGGER_TOOLS,
     "delete_trigger":           _TRIGGER_TOOLS,
+    # The v2.12.0 update_* writers were missed here while every enable/disable/
+    # delete/duplicate sibling was listed. Triggers, schedules and action groups
+    # have NO domain counter, so nothing else drops their buckets and a renamed
+    # trigger kept reading under its old name for the whole TTL.
+    "update_trigger":           _TRIGGER_TOOLS,
     "fire_trigger":             _DEVICE_TOOLS | _VARIABLE_TOOLS,  # may cause side-effects
     # ── Plugins ─────────────────────────────────────────────────────────
     "restart_plugin":           _PLUGIN_TOOLS,

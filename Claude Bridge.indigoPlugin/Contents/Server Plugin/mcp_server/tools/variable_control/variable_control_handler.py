@@ -51,8 +51,10 @@ class VariableControlHandler(BaseToolHandler):
             # number|string, and MCP clients often send numeric IDs as strings)
             if isinstance(variable_id, str) and variable_id.strip().lstrip("-").isdigit():
                 variable_id = int(variable_id.strip())
-            # Validate variable_id
-            if not isinstance(variable_id, int):
+            # Validate variable_id. bool is checked FIRST because it subclasses
+            # int, so a stray JSON true/false would otherwise pass as ID 1 or 0
+            # and act on whatever variable holds that id.
+            if isinstance(variable_id, bool) or not isinstance(variable_id, int):
                 self.info_log("❌ Invalid variable_id type")
                 return {"error": "variable_id must be an integer", "success": False}
 

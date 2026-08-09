@@ -16,6 +16,24 @@ from ..common.device_props import device_dict
 from ..common.json_encoder import filter_json, KEYS_TO_KEEP_MINIMAL_DEVICES
 
 
+def _to_variable_string(value) -> str:
+    """Render a JSON value as an Indigo variable value.
+
+    Indigo variables are ALWAYS strings. One helper for both the create and the
+    update path, because they drifted: update normalised bools and null, create
+    used a bare str() and wrote "True" and "None".
+
+    - bool -> Indigo's lowercase "true"/"false"; str(True) gives "True", which no
+      trigger or condition in Indigo compares against.
+    - None -> "" rather than the literal "None", which nothing would expect.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
 class IndigoDataProvider(DataProvider):
     """Data provider implementation for accessing Indigo entities."""
 
@@ -464,12 +482,7 @@ class IndigoDataProvider(DataProvider):
             # capitalised str(True) == "True", so conditions/triggers comparing the
             # value behave consistently. A JSON null becomes an empty string, not
             # the literal "None" (which no condition would ever expect).
-            if value is None:
-                new_value = ""
-            elif isinstance(value, bool):
-                new_value = str(value).lower()
-            else:
-                new_value = str(value)
+            new_value = _to_variable_string(value)
             indigo.variable.updateValue(variable_id, value=new_value)
 
             # Re-index from the server (consistent with the device methods) rather
@@ -593,12 +606,17 @@ class IndigoDataProvider(DataProvider):
             if not name or not isinstance(name, str):
                 return {"error": "Variable name is required and must be a string"}
 
-            # Validate folder_id
-            if not isinstance(folder_id, int):
+            # Validate folder_id. bool first — it subclasses int, and folder 0 is
+            # a real destination (root), so False would be silently accepted.
+            if isinstance(folder_id, bool) or not isinstance(folder_id, int):
                 return {"error": "folder_id must be an integer"}
 
-            # Convert value to string (Indigo variables are always strings)
-            value_str = str(value) if value is not None else ""
+            # Same normalisation as update_variable: Indigo variables are strings,
+            # a bool becomes Indigo's lowercase "true"/"false" (str(True) would
+            # give "True", which no trigger or condition compares against), and a
+            # JSON null becomes "" rather than the literal "None". The update path
+            # was fixed in v2.10.1 and the create path was missed.
+            value_str = _to_variable_string(value)
 
             # Create the variable using Indigo API
             # indigo.variable.create(name, value=None, folder=0)

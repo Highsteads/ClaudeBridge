@@ -3,6 +3,7 @@ InfluxDB query builder and utilities.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import List, Optional, Union
 from .time_utils import TimeFormatter
@@ -39,6 +40,34 @@ class InfluxDBQueryBuilder:
         (measurement / field / tag name). Escapes backslashes then double quotes.
         """
         return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+    # Function names and time intervals appear UNQUOTED in the query, so there is
+    # nothing to escape — they are allowlisted instead.
+    _AGGREGATIONS = frozenset({
+        "MEAN", "SUM", "COUNT", "MIN", "MAX",
+        "MEDIAN", "FIRST", "LAST", "SPREAD", "STDDEV",
+    })
+
+    @classmethod
+    def _validate_aggregation(cls, value: str) -> str:
+        agg = str(value).strip().upper()
+        if agg not in cls._AGGREGATIONS:
+            raise ValueError(
+                f"Unsupported aggregation {value!r}. "
+                f"Use one of: {', '.join(sorted(cls._AGGREGATIONS))}"
+            )
+        return agg
+
+    @staticmethod
+    def _validate_interval(value: str) -> str:
+        """An InfluxQL duration: digits followed by a unit, e.g. 5m, 1h, 1d."""
+        interval = str(value).strip()
+        if not re.fullmatch(r"\d+[smhdw]", interval):
+            raise ValueError(
+                f"Invalid time interval {value!r}. Expected a number followed by "
+                f"s, m, h, d or w — for example 15m, 1h or 7d."
+            )
+        return interval
 
     def build_device_history_query(
         self,
@@ -178,6 +207,13 @@ class InfluxDBQueryBuilder:
         device_property_esc = self._escape_identifier(device_property)
         measurement_esc     = self._escape_identifier(measurement)
         device_name_esc     = self._escape_literal(device_name)
+        # aggregation and group_by_time are the only parts of this query that go
+        # in unquoted, so escaping cannot protect them — they need an allowlist.
+        # No caller passes client data today, but this module's whole contract is
+        # that nothing unescaped reaches the query text, and the day someone wires
+        # a tool argument into either of these the injection would be invisible.
+        aggregation = self._validate_aggregation(aggregation)
+        group_by_time = self._validate_interval(group_by_time)
         query = (
             f'SELECT {aggregation}("{device_property_esc}") FROM "{measurement_esc}" '
             f"WHERE \"name\" = '{device_name_esc}' "

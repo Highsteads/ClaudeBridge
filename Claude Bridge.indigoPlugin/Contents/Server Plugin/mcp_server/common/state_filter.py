@@ -78,7 +78,25 @@ class StateFilter:
         """Equality that treats a numeric string and a number as equal — Indigo
         stores many states as strings ('72.5', '20'), so a raw == to a numeric
         filter value would never match. Falls back to direct == for non-numerics
-        (e.g. 'on' == 'on', True == True)."""
+        (e.g. 'on' == 'on', True == True).
+
+        A bool operand is handled before the numeric attempt: plenty of plugins
+        publish a boolean state as the STRING 'true' or 'True', and float('true')
+        raises, so eq:true against those never matched. An unrecognised string is
+        NO MATCH rather than a default — 'sort of true' must fail the comparison,
+        not inherit an answer."""
+        _BOOL_WORDS = {"true": True, "1": True, "on": True, "yes": True,
+                       "false": False, "0": False, "off": False, "no": False}
+        if isinstance(a, bool) or isinstance(b, bool):
+            flag, other = (a, b) if isinstance(a, bool) else (b, a)
+            if isinstance(other, bool):
+                return flag == other
+            if isinstance(other, str):
+                parsed = _BOOL_WORDS.get(other.strip().lower())
+                return parsed is not None and parsed == flag
+            if isinstance(other, (int, float)):
+                return bool(other) == flag
+            return False
         try:
             return float(a) == float(b)
         except (TypeError, ValueError):
@@ -110,7 +128,12 @@ class StateFilter:
         else:
             return False
             
-        # Handle different operators
+        # Handle different operators.
+        #
+        # Each branch decides ONLY whether its own operator passed. Operator
+        # identity and outcome are kept apart deliberately: an `elif op == "eq"
+        # and not matched` style chain sends a PASSING eq to the final else,
+        # which is how a fail-closed default breaks the happy path.
         for operator, expected in condition.items():
             if operator in ("gt", "gte", "lt", "lte"):
                 # Ordering operators: coerce both operands to float. Indigo
@@ -125,18 +148,21 @@ class StateFilter:
                     return False
                 if operator == "gt" and not (v > e):
                     return False
-                elif operator == "gte" and not (v >= e):
+                if operator == "gte" and not (v >= e):
                     return False
-                elif operator == "lt" and not (v < e):
+                if operator == "lt" and not (v < e):
                     return False
-                elif operator == "lte" and not (v <= e):
+                if operator == "lte" and not (v <= e):
                     return False
-            elif operator == "ne" and StateFilter._loose_eq(value, expected):
-                return False
-            elif operator == "eq" and not StateFilter._loose_eq(value, expected):
-                return False
-            elif operator == "contains" and expected not in str(value):
-                return False
+            elif operator == "ne":
+                if StateFilter._loose_eq(value, expected):
+                    return False
+            elif operator == "eq":
+                if not StateFilter._loose_eq(value, expected):
+                    return False
+            elif operator == "contains":
+                if expected not in str(value):
+                    return False
             elif operator == "regex":
                 # Client-supplied pattern — a malformed pattern raises re.error.
                 # Guard it so a bad pattern skips the device (return False)
@@ -146,7 +172,14 @@ class StateFilter:
                         return False
                 except re.error:
                     return False
-                    
+            else:
+                # FAIL CLOSED on an operator we do not implement. Ignoring it
+                # left the condition with nothing to fail, so the trailing
+                # `return True` matched EVERY entity carrying that state key —
+                # a typo like "gte_" silently turned a filter into a no-op, and
+                # a webhook condition into a permanent match.
+                return False
+
         return True
     
     @staticmethod

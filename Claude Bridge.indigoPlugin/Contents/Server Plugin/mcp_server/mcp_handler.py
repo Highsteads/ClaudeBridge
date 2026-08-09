@@ -1025,9 +1025,22 @@ class MCPHandler:
             obj = {}
         if not isinstance(obj, dict):
             obj = {}
-        obj["success"] = False
-        obj["error"] = "see the Claude Bridge event log for details"
-        return safe_json_dumps(obj)
+        # Build from a WHITELIST rather than overwriting two keys of the original.
+        # These tools' failure payloads carry `traceback` (whose last line is the
+        # very error text being scrubbed, plus code context), `stderr`, `stdout`
+        # and, for run_script, the full script path — so a scrub that only
+        # replaced `error` shipped the same secret by another name, and more of
+        # it than the exception path ever exposed.
+        scrubbed = {
+            "success": False,
+            "error":   "see the Claude Bridge event log for details",
+        }
+        # Carried through deliberately: control-flow flags a client needs to act
+        # on, none of which can hold tool output or credentials.
+        for key in ("timed_out", "busy", "wedged_since"):
+            if key in obj:
+                scrubbed[key] = obj[key]
+        return safe_json_dumps(scrubbed)
 
     @staticmethod
     def _extract_bearer(headers: Dict[str, str]) -> Optional[str]:
@@ -4932,8 +4945,13 @@ class MCPHandler:
             elif action == "turn_off":
                 result = self.device_control_handler.turn_off(device_id)
             elif action == "toggle":
-                on_state = top.get("onState", False)
-                result   = self.device_control_handler.turn_off(device_id) if on_state else self.device_control_handler.turn_on(device_id)
+                # Let INDIGO decide the direction. The search snapshot this
+                # result came from is rebuilt on a 300s interval (and after
+                # structural changes only), so a plain on/off change never
+                # refreshes it — deciding here could invert the command for up to
+                # five minutes. `.get("onState", False)` also read a device with
+                # no onState in the snapshot as "off" and always sent turn_on.
+                result = self.extended_tools_handler.device_toggle(device_id)
             elif action == "set_brightness":
                 if brightness is None:
                     return safe_json_dumps({"error": "brightness required for set_brightness", "success": False})
