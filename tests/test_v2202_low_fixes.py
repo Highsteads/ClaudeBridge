@@ -7,9 +7,6 @@
 # Date:        09-08-2026
 # Version:     1.0
 
-import pytest
-
-
 # ── Credentials must not appear in a diagnostic dump ─────────────────────────
 
 def test_snapshot_masks_secrets_by_default():
