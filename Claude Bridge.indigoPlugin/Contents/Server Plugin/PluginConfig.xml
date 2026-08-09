@@ -13,7 +13,7 @@ the matching key in IndigoSecrets.py. If a value is set in NEITHER place,
 the plugin logs an ERROR pointing here and skips that feature.
 
 Keys this plugin reads:
-  ANTHROPIC_API_KEY        - Anthropic Claude API key (required)
+  ANTHROPIC_API_KEY        - Anthropic Claude API key (optional, AI summaries only)
   CLAUDEBRIDGE_BEARER_TOKEN - IWS bearer token for the MCP proxy
   INFLUXDB_HOST / PORT / USERNAME / PASSWORD / DATABASE (optional)</Label>
     </Field>

@@ -4,8 +4,25 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
-# Date:        07-08-2026
-# Version:     2.19.2
+# Date:        09-08-2026
+# Version:     2.20.0
+#
+# v2.20.0 (09-08-2026): the three high-severity findings of a full 20-lens
+# review. (1) The Configure dialog could not be SAVED without an Anthropic API
+# key, though the field, its tooltip, its help text and startup() all call that
+# key optional — so anyone without an IndigoSecrets.py was locked out of every
+# other setting, webhooks and log level included, until they invented a key the
+# plugin does not need. The validator simply predated the key becoming optional.
+# (2) The exec lock refused nothing. It is reentrant and Indigo dispatches every
+# call on one thread, so the next caller was always the thread that wedged it and
+# its acquire() succeeded instantly — the v2.17.0 fail-fast never fired once, a
+# second run swapped stdout out from under the still-live worker, and the real
+# stdout could be lost until a reload. The wedge record now carries the abandoned
+# thread and liveness decides, so a runaway is refused while it runs and clears
+# itself the moment it ends. (3) analyze_historical_data's entity-name validator
+# answered a validation ERROR with "all valid", handing raw client-supplied names
+# to the InfluxQL builder; the fail-closed fix had landed in a twin nothing calls.
+# Tests 481 -> 489.
 #
 # v2.19.2 (07-08-2026): a toggle was reporting `value: 0`, which reads as
 # "toggle to 0" and is nothing of the sort. The control-pages skill instructs
@@ -1924,11 +1941,14 @@ class Plugin(indigo.PluginBase):
         """
         errors_dict = indigo.Dict()
 
-        # Validate Anthropic API key — blank is OK if IndigoSecrets.py provides it
-        api_key = values_dict.get("anthropic_api_key", "")
-        if not api_key and not ANTHROPIC_API_KEY:
-            errors_dict["anthropic_api_key"] = "Enter an Anthropic API key (or add ANTHROPIC_API_KEY to IndigoSecrets.py)"
-
+        # The Anthropic API key is OPTIONAL and is deliberately NOT validated here.
+        # Every MCP tool works without one — Claude Code uses the user's own account,
+        # and only the AI summaries in the historical-analysis tool need a key. An
+        # earlier version errored on a blank field, which made the whole dialog
+        # unsavable for anyone without an IndigoSecrets.py: they could not change the
+        # log level or enable webhooks without inventing a key the plugin says it
+        # does not need. startup() logs a warning when the key is absent, which is
+        # the right weight for an optional feature.
 
         # Validate log level
         try:

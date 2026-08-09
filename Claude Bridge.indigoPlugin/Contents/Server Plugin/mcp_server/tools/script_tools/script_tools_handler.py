@@ -602,7 +602,8 @@ if __name__ == "__main__":
                 # Hold the lock deliberately; record the wedge so later calls
                 # fail fast and name THIS script rather than the next caller's.
                 exec_lock.mark_wedged("run_script", f"'{os.path.basename(path)}' "
-                                                    f"exceeded {_RUN_SCRIPT_TIMEOUT_SECONDS}s")
+                                                    f"exceeded {_RUN_SCRIPT_TIMEOUT_SECONDS}s",
+                                      thread=_t)
                 return {
                     "success": False, "name": os.path.basename(path), "timed_out": True,
                     "error": (f"Script exceeded the {_RUN_SCRIPT_TIMEOUT_SECONDS}s limit and was left "

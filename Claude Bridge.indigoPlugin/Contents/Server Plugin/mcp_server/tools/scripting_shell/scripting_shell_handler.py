@@ -195,7 +195,8 @@ class ScriptingShellHandler(BaseToolHandler):
             # it. Record the wedge so every later call fails fast with a message
             # that names THIS run rather than blaming the next caller's script.
             exec_lock.mark_wedged("execute_indigo_python",
-                                  f"exceeded {_EXEC_TIMEOUT_SECONDS}s")
+                                  f"exceeded {_EXEC_TIMEOUT_SECONDS}s",
+                                  thread=_t)
             self.log_tool_outcome("execute_indigo_python", False,
                                   f"timed out after {_EXEC_TIMEOUT_SECONDS}s")
             return {

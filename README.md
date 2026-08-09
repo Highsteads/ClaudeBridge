@@ -14,14 +14,14 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 ## How it works
 
-Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **166 tools** for reading and controlling your system.
+Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **167 tools** for reading and controlling your system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
 │  Claude Code        │         │  go-between script   │         │  Indigo web  │
 │  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
 │                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (166 tools) │
+│                     │         │  key automatically   │         │  (167 tools) │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
@@ -351,7 +351,7 @@ Anthropic API account with pay-as-you-go billing instead of a subscription.)
 it.** The plugin can hold its own API key from
 [console.anthropic.com](https://console.anthropic.com), but it only uses it for
 one thing: writing AI summaries inside the historical-analysis tool, which also
-needs an InfluxDB database set up — a niche feature. **All 166 tools work
+needs an InfluxDB database set up — a niche feature. **All 167 tools work
 without this key.** If you do set one up, it bills per use (pennies a month,
 as a rule), separately from your subscription.
 
@@ -466,7 +466,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 166 tools available.
+The `indigo-mcp` tools will appear on next session start. You should see 167 tools available.
 
 </details>
 
@@ -521,7 +521,7 @@ Network: http://<your-indigo-server-ip>:8176/message/com.clives.indigoplugin.cla
 
 ## Available Tools
 
-**166 tools, grouped by security scope.** This table is **auto-generated** from the
+**167 tools, grouped by security scope.** This table is **auto-generated** from the
 plugin's own tool registry (`mcp_server/mcp_handler.py`) cross-referenced with the
 deny-by-default scope classification (`mcp_server/security/scope_manager.py`), so it
 can never drift from the code. Regenerate with `python3 scripts/generate_tool_doc.py
@@ -845,7 +845,7 @@ Claude Bridge.indigoPlugin/
 │           │   └── vector_store/           # Text search store
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
-│           └── tools/                      # 21 tool handler modules (166 tools)
+│           └── tools/                      # 21 tool handler modules (167 tools)
 │       ├── indigo_mcp_proxy.py             # Claude Code go-between script
 │       └── install.py                      # one-shot installer
 └── README.md
@@ -854,6 +854,17 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.20.0 (2026-08-09)
+Three real faults, all turned up by a full review of every module rather than by anything going wrong in front of anyone.
+
+The first will have affected anybody who installed this plugin and was not me. The Anthropic API key is optional — the field says so, the tooltip says so, the help text underneath says so, and the plugin only warns when it is absent — and yet the Configure dialog would not save without one. So to switch on webhooks, or change the log level, or adjust anything whatsoever, you first had to invent a key for a feature you were not using. The check simply predated the key becoming optional and nobody had been back to it since.
+
+The second is the sort of fault that hides behind its own documentation. When a script sent to Indigo never finishes, the plugin abandons it and is meant to turn away later script calls until it ends, with a message naming the one that is stuck. It never turned away anything. The lock it leans on is reentrant, and because Indigo runs every plugin call on a single thread, the next caller was always the same thread that got stuck, so it sailed straight through, took the output stream out from under the runaway still writing to it, and the plugin's real output could be lost until a reload. It now checks whether the abandoned script is genuinely still going, which means it says no while it is, and lets go by itself the moment it ends rather than staying stuck for good.
+
+The third only bites if you use the InfluxDB history tools, but there it bites hard. When the check that confirms your device names exist ran into trouble, it announced that every name was fine and passed them straight into the query. The fix for exactly that had been written months ago and applied to a near-identical function that nothing calls, which is a neat reminder that a fix is only a fix where the code actually runs.
+
+Eight new tests, taking the suite to 489.
 
 ### 2.19.2 (2026-08-07)
 A toggle was reporting `value: 0`, which reads as "toggle to nought" and is nothing of the sort. The control-pages skill tells authors to put a `DeviceActionValue` of zero on every device action, so every generated page carries one on its toggles, and yesterday's release dutifully reported it. Only the brightness-style actions actually use that field, so the value now appears solely for those. Presentation rather than correctness, but a number that means nothing is worse than no number at all, because the reader quite reasonably assumes it means something.

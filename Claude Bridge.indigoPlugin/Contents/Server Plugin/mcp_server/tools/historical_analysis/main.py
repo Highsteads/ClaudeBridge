@@ -1401,17 +1401,27 @@ Recommend 1-3 most relevant properties:"""
                 
         except Exception as e:
             self.error_log(f"Error validating entity names: {e}")
-            # Fallback classification (assume all are devices for backward compatibility)
+            # Fail CLOSED. These names are interpolated into InfluxQL downstream,
+            # so a validation error must never be answered with "they all look
+            # fine" — that hands the query builder raw client-supplied strings.
+            # The caller turns all_valid False into an error result.
             return {
-                "all_valid": True,
-                "valid_entities": entity_names,
-                "invalid_entities": [],
+                "all_valid": False,
+                "valid_entities": [],
+                "invalid_entities": list(entity_names or []),
                 "suggestions": [],
-                "error_message": "",
-                "detailed_report": "",
+                "error_message": (
+                    f"Entity names could not be validated ({type(e).__name__}: {e}). "
+                    "Refusing to run the query rather than trusting unverified names."
+                ),
+                "detailed_report": (
+                    "Validation of the requested entity names failed, so the analysis was "
+                    "not run. Check the Indigo event log for the underlying error, then "
+                    "confirm the names with search_entities() or list_devices()."
+                ),
                 "entity_classification": {
-                    "devices": entity_names,
+                    "devices": [],
                     "variables": [],
-                    "detected_type": "devices"
+                    "detected_type": "none"
                 }
             }
