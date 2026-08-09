@@ -421,6 +421,15 @@ class IndigoDataProvider(DataProvider):
             
             previous_brightness = device_before.brightness
             
+            # Coerce BEFORE comparing. A stringy "50" from a lax client raised
+            # "'<=' not supported between str and int" — a cryptic TypeError in
+            # place of a plain statement about the argument.
+            try:
+                brightness = float(brightness)
+            except (TypeError, ValueError):
+                return {"error": f"Invalid brightness value: {brightness!r}. "
+                                 f"Must be a number, 0-1 or 0-100"}
+
             # Normalize brightness value.
             # A strict fraction in [0, 1) is treated as 0-1 and scaled to 0-100;
             # everything from 1 upwards is treated as a 0-100 percent. This avoids
@@ -723,7 +732,11 @@ class IndigoDataProvider(DataProvider):
             previous = dev.coolSetpoint if hasattr(dev, 'coolSetpoint') else None
             if previous is None:
                 return {"error": f"Device '{dev.name}' has no cool setpoint", "success": False}
-            new_setpoint = round(float(previous) + float(delta), 1)
+            try:
+                delta_c = float(delta)
+            except (TypeError, ValueError):
+                return {"error": f"delta must be a number, got {delta!r}", "success": False}
+            new_setpoint = round(float(previous) + delta_c, 1)
             new_setpoint = max(self.SETPOINT_COOL_MIN_C,
                                min(self.SETPOINT_COOL_MAX_C, new_setpoint))
             indigo.thermostat.setCoolSetpoint(device_id, value=new_setpoint)
@@ -758,7 +771,10 @@ class IndigoDataProvider(DataProvider):
             "programcool": indigo.kHvacMode.ProgramCool,
             "programauto": indigo.kHvacMode.ProgramAuto,
         }
-        mode_key = mode.lower().replace(" ", "")
+        # str() first: this runs OUTSIDE the try below, so a non-string mode
+        # (a number, None) raised AttributeError out of the handler instead of
+        # returning the clear "unknown mode" message a caller can act on.
+        mode_key = str(mode or "").lower().replace(" ", "")
         if mode_key not in _MODE_MAP:
             return {"error": f"Unknown HVAC mode '{mode}'. Valid: {list(_MODE_MAP.keys())}",
                     "success": False}

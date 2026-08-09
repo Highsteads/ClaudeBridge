@@ -214,6 +214,26 @@ class ScopeManager:
         self._ever_loaded_ok: bool    = False   # True once any valid load has happened
         self.reload()
 
+    def _coerce_scopes(self, raw, where: str) -> List[str]:
+        """Turn a scopes value from the file into a clean list of scope names.
+
+        `list("admin")` gives ['a','d','m','i','n'] — five scopes, none of them
+        real — so a user who writes `"scopes": "admin"` instead of
+        `["admin"]` gets a token with NO usable permissions and no explanation.
+        A bare string is accepted as the single scope it obviously means, and
+        anything else is rejected loudly rather than silently mangled.
+        """
+        if isinstance(raw, str):
+            self.logger.warning(
+                f"\tscopes.json: {where} is the string {raw!r}; reading it as "
+                f'["{raw}"]. Use a JSON list to silence this.'
+            )
+            return [raw]
+        if isinstance(raw, (list, tuple, set)):
+            return [str(s) for s in raw]
+        raise ValueError(f"{where}: scopes must be a list of scope names, "
+                         f"got {type(raw).__name__}")
+
     def reload(self) -> bool:
         """Re-read scopes.json. Returns True on success, False if missing/invalid."""
         # No file at all → stock unconfigured state: permissive, but warn so the
@@ -251,7 +271,8 @@ class ScopeManager:
                 raise ValueError("scopes.json must be a JSON object")
             default_raw = data.get("default_scopes")
             self._default_explicit = default_raw is not None
-            self._default = list(default_raw) if default_raw is not None else list(self.DEFAULT_SCOPES)
+            self._default = (self._coerce_scopes(default_raw, "default_scopes")
+                             if default_raw is not None else list(self.DEFAULT_SCOPES))
             tokens_raw    = data.get("tokens") or {}
             if not isinstance(tokens_raw, dict):
                 raise ValueError("'tokens' must be an object keyed by bearer token")
@@ -262,7 +283,8 @@ class ScopeManager:
                 raw_scopes = info.get("scopes")
                 # Distinguish "key absent" (inherit default) from "explicit []"
                 # (deny-all). `raw or default` would wrongly treat [] as falsy.
-                scopes = list(raw_scopes) if raw_scopes is not None else list(self._default)
+                scopes = (self._coerce_scopes(raw_scopes, f"token {token[:8]}…")
+                          if raw_scopes is not None else list(self._default))
                 new_tokens[token] = {"name": info.get("name") or "", "scopes": scopes}
             self._tokens     = new_tokens
             self._configured = True

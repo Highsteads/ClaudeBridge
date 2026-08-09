@@ -58,7 +58,13 @@ def _install_indigo_stub() -> None:
     ind.Dict = dict
     ind.List = list
     for attr in ("server", "devices", "variables", "kStateImageSel",
-                 "activePlugin", "kDeviceAction", "Variable", "Device"):
+                 "activePlugin", "kDeviceAction", "Variable", "Device",
+                 # Enum namespaces the handlers read at call time. The real
+                 # module always has these, so a stub without them models
+                 # something that cannot exist and fails tests for the wrong
+                 # reason.
+                 "kHvacMode", "kFanMode", "thermostat", "dimmer", "device",
+                 "actionGroups", "triggers", "schedules"):
         setattr(ind, attr, MagicMock())
     sys.modules["indigo"] = ind
 

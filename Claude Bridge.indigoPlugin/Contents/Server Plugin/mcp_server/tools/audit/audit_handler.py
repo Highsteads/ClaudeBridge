@@ -136,12 +136,16 @@ class AuditHandler(BaseToolHandler):
             batteries  = self._collect_low_battery(threshold=20)
             stale      = self._collect_stale_devices(days=7)
 
-            # Variables with empty or "null" values
+            # Variables with empty or "null" values.
+            # "false" is NOT one of them: every boolean flag in the estate sits
+            # at "false" half the time, and counting those made the audit's
+            # empty-variable figure meaningless — the number moved with the
+            # state of the house rather than with anything needing attention.
             empty_vars = []
             for vid in indigo.variables:
                 v = indigo.variables[vid]
                 val = str(v.value).strip().lower()
-                if val in ("", "none", "null", "false") and not v.readOnly:
+                if val in ("", "none", "null") and not v.readOnly:
                     empty_vars.append({"id": v.id, "name": v.name, "value": v.value})
 
             # Disabled triggers

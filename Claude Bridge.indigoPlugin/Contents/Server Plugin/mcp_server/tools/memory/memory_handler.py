@@ -109,7 +109,14 @@ class MemoryHandler(BaseToolHandler):
             with self._lock:
                 path      = _memory_path()
                 memories  = _load(path)
-                memory_id = int(time.time() * 1000)  # ms epoch as unique ID
+                # A millisecond epoch is not unique enough: two notes saved in
+                # the same millisecond share an id, and forget() deletes BY id,
+                # so removing one would silently delete the other as well.
+                # Step past any id already in the file.
+                memory_id = int(time.time() * 1000)
+                existing  = {m.get("id") for m in memories}
+                while memory_id in existing:
+                    memory_id += 1
 
                 memories.append({
                     "id":        memory_id,
@@ -184,6 +191,8 @@ class MemoryHandler(BaseToolHandler):
         """Delete a memory entry by its ID."""
         self.log_incoming_request("forget", {"memory_id": memory_id})
         try:
+            if isinstance(memory_id, bool):
+                return {"success": False, "error": "memory_id must be an integer"}
             try:
                 target_id = int(memory_id)
             except (TypeError, ValueError):

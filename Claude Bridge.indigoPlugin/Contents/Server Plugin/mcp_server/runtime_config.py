@@ -89,12 +89,35 @@ def get_int(key, default=0):
 
 
 def is_influx_enabled():
-    """Convenience wrapper used in two hot paths."""
-    return bool(get("influxdb_enabled"))
+    """Convenience wrapper used in two hot paths.
+
+    NOT bool(): Indigo re-serialises a checkbox as the STRING "false" after a
+    Configure dialog save, and bool("false") is True — so the feature would read
+    as ENABLED precisely for the users who had turned it off and saved.
+    """
+    value = get("influxdb_enabled")
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return bool(value)
 
 
-def snapshot():
-    """Return a copy of the current live config (for diagnostics)."""
+# Keys whose values must never appear in a diagnostic dump.
+_SECRET_KEYS = frozenset({"anthropic_api_key", "influxdb_password"})
+
+
+def snapshot(reveal_secrets: bool = False):
+    """Return a copy of the current live config, for diagnostics.
+
+    Credentials are MASKED by default. This dict is for logging and health
+    output, and a caller cannot be expected to know which keys are sensitive —
+    so the safe form is the default and revealing them has to be asked for.
+    """
     merged = dict(_DEFAULTS)
     merged.update(_config)
+    if reveal_secrets:
+        return merged
+    for key in _SECRET_KEYS:
+        value = merged.get(key)
+        if value:
+            merged[key] = f"<set, {len(str(value))} chars>"
     return merged

@@ -855,6 +855,21 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+### 2.20.2 (2026-08-09)
+The smaller findings from the same review, taking the ones that touch your credentials or quietly tell you something untrue.
+
+The diagnostic snapshot of the plugin's settings handed back your Anthropic key and your InfluxDB password in plain text. It now says whether each is set and nothing more. The InfluxDB on/off setting read the word "false" as on, which is how a checkbox comes back once the dialog has been saved, so switching it off and saving did not switch it off.
+
+Battery reporting had two faults pulling in opposite directions. A sensor that reports a separate "battery low" flag as the word "False" was read as flat, because any non-empty word counts as true — so healthy sensors appeared in the low-battery list. Meanwhile a reading of 255, which is the usual way hardware says "I don't know", was passed along as 255%, sorting comfortably at the healthy end of the same list. Both now read as unknown, which is what they are.
+
+Saved notes could collide. The id was the clock in milliseconds, so two notes written in the same millisecond shared one, and deleting either deleted both.
+
+The house audit counted every variable sitting at "false" as an empty variable. Since roughly half the flags in a house are false at any moment, that number moved with the weather rather than with anything needing attention.
+
+If you use the optional per-token permissions file, writing `"scopes": "admin"` rather than `["admin"]` used to give that token five permissions named a, d, m, i and n — which is to say none at all, silently. It now reads what you plainly meant and says so in the log.
+
+Eight new tests, taking the suite to 511.
+
 ### 2.20.1 (2026-08-09)
 The middle tier of the same review. Nothing here is dramatic on its own, but a few would have been baffling to run into.
 

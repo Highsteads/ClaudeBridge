@@ -5,7 +5,20 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        09-08-2026
-# Version:     2.20.1
+# Version:     2.20.2
+#
+# v2.20.2 (09-08-2026): the security and data-integrity subset of the review's
+# low-severity findings. runtime_config.snapshot() returned the Anthropic key
+# and the InfluxDB password in the clear to any diagnostic caller, and
+# is_influx_enabled() read the STRING "false" as enabled. A batteryLow state
+# arriving as "False" made every healthy sensor report as flat, and a 255
+# "unknown" sentinel was reported as 255%, which sorts as healthy in a
+# low-battery sweep. Two notes saved in the same millisecond shared an id, so
+# deleting one deleted the other. audit_home counted every boolean variable
+# sitting at "false" as an empty variable, which made the figure track the
+# state of the house rather than anything wrong. A string scope in scopes.json
+# exploded into one scope per character, leaving that token with none.
+# Tests 503 -> 511.
 #
 # v2.20.1 (09-08-2026): the medium-severity batch of the same review. The
 # InfluxDB settings could not be configured from the dialog at all — the port
