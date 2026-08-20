@@ -5,7 +5,8 @@ Provides Mac Mini system health reporting and Indigo housekeeping tools:
   - system_health          : disk, RAM, uptime, macOS/Python versions
   - list_python_scripts    : enumerate Python Scripts folder
   - find_orphaned_scripts  : scripts referencing device/variable IDs that no longer exist
-  - find_orphaned_plugin_data : Preferences/Plugins dirs with no matching installed plugin
+  - find_orphaned_plugin_data : Preferences/Plugins entries (dirs AND .indiPref files) with
+                                no matching installed plugin, plus stale LaunchAgents
   - find_large_files       : files over a size threshold in a given path
   - get_reflector_url      : Indigo Reflector remote URL (if configured)
   - create_device_folder   : create a new device folder
@@ -203,6 +204,70 @@ def _bundle_id_from_plist(plugin_path: str) -> Optional[str]:
     except Exception:
         return None
 
+# Indigo's own built-in plugins have prefs but no bundle in Plugins/, so they must
+# never be reported as orphaned.  Confirmed against a live 2025.2 install.
+_BUILTIN_PREFS_IDS = frozenset({
+    "com.indigodomo.indigoserver",
+    "com.indigodomo.webserver",
+    "com.perceptiveautomation.indigoplugin.ActionCollection",
+    "com.perceptiveautomation.indigoplugin.devicecollection",
+    "com.perceptiveautomation.indigoplugin.zwave",
+    "com.perceptiveautomation.indigoplugin.insteon",
+})
+
+_BUILTIN_PREFS_PREFIXES = (
+    "com.perceptiveautomation.indigoplugin.scriptexecutor",
+)
+
+
+def _is_builtin_prefs_id(bundle_id: str) -> bool:
+    """True for Indigo's own built-ins, which ship inside IndigoServer.app."""
+    if bundle_id in _BUILTIN_PREFS_IDS:
+        return True
+    return bundle_id.startswith(_BUILTIN_PREFS_PREFIXES)
+
+
+def _launch_agents_dir() -> str:
+    return os.path.expanduser("~/Library/LaunchAgents")
+
+
+# Arguments worth existence-checking: the interpreter is usually /usr/bin/python3 or
+# /opt/homebrew/bin/node and exists forever, while the SCRIPT it runs is the thing that
+# moves or gets deleted.  Live case: an agent still pointing into "Indigo 2024.2".
+_SCRIPT_SUFFIXES = (".py", ".js", ".mjs", ".sh", ".rb", ".pl", ".command")
+
+
+def _launch_agent_paths(plist_path: str):
+    """Return (label, exec_path, [paths to existence-check]) for a LaunchAgent plist.
+
+    Checks the executable itself plus any absolute script argument.  Never raises:
+    a malformed or unreadable plist yields (None, None, []) and is skipped.
+    """
+    try:
+        with open(plist_path, "rb") as fh:
+            data = plistlib.load(fh)
+    except Exception:
+        return None, None, []
+    if not isinstance(data, dict):
+        return None, None, []
+
+    label = data.get("Label")
+    args  = data.get("ProgramArguments")
+    args  = [a for a in args if isinstance(a, str)] if isinstance(args, list) else []
+
+    exec_path = data.get("Program")
+    if not isinstance(exec_path, str):
+        exec_path = args[0] if args else None
+
+    checkable = []
+    if exec_path:
+        checkable.append(exec_path)
+    for arg in args[1:]:
+        if arg.startswith("/") and arg.endswith(_SCRIPT_SUFFIXES):
+            checkable.append(arg)
+    return label, exec_path, checkable
+
+
 def _installed_bundle_ids() -> set:
     """Return CFBundleIdentifiers of all installed (active + disabled) plugins."""
     ids: set = set()
@@ -398,9 +463,22 @@ class SystemToolsHandler(BaseToolHandler):
 
     def find_orphaned_plugin_data(self) -> Dict[str, Any]:
         """
-        Compare Preferences/Plugins subdirectories against installed plugin
-        bundle IDs.  Any prefs directory whose name is not a current bundle ID
-        is orphaned — the plugin was removed but its data was not cleaned up.
+        Find plugin data left behind by plugins that are no longer installed.
+
+        Covers three things, because leftovers hide in all three and the first
+        version of this tool only looked at one:
+          * Preferences/Plugins SUBDIRECTORIES  (per-plugin data folders)
+          * Preferences/Plugins .indiPref FILES (per-plugin saved prefs — every
+            plugin writes one, most write nothing else, so scanning only
+            directories missed the common case entirely)
+          * ~/Library/LaunchAgents plists whose executable no longer exists, or
+            whose label names an uninstalled plugin.  A plugin that manages a
+            helper process installs an agent, and removing the bundle does NOT
+            unload it: the helper keeps running with nothing driving it.
+
+        Indigo's own built-ins (Z-Wave, the web server, script executors …) have
+        prefs but no bundle in Plugins/, and are reported separately rather than
+        as orphans.
         """
         self.log_incoming_request("find_orphaned_plugin_data", {})
         try:
@@ -411,45 +489,105 @@ class SystemToolsHandler(BaseToolHandler):
 
             installed = _installed_bundle_ids()
 
-            orphaned = []
-            active   = []
+            orphaned: List[Dict[str, Any]] = []
+            active:   List[Dict[str, Any]] = []
+            builtin:  List[Dict[str, Any]] = []
 
             for entry in sorted(os.scandir(prefs_dir), key=lambda e: e.name.lower()):
-                if not entry.is_dir():
+                if entry.is_dir():
+                    kind = "dir"
+                    bid  = entry.name
+                    total_size = 0
+                    for dirpath, _, filenames in os.walk(entry.path):
+                        for fname in filenames:
+                            try:
+                                total_size += os.path.getsize(os.path.join(dirpath, fname))
+                            except OSError:
+                                pass
+                elif entry.name.endswith(".indiPref"):
+                    kind = "prefs_file"
+                    bid  = entry.name[: -len(".indiPref")]
+                    try:
+                        total_size = entry.stat().st_size
+                    except OSError:
+                        total_size = 0
+                else:
                     continue
-                bid = entry.name
-                # Calculate total size of the orphaned data directory
-                total_size = 0
-                for dirpath, _, filenames in os.walk(entry.path):
-                    for fname in filenames:
-                        try:
-                            total_size += os.path.getsize(os.path.join(dirpath, fname))
-                        except OSError:
-                            pass
 
                 info = {
                     "bundle_id": bid,
+                    "kind":      kind,
                     "path":      entry.path,
                     "size_kb":   round(total_size / 1024, 1),
                 }
                 if bid in installed:
                     active.append(info)
+                elif _is_builtin_prefs_id(bid):
+                    builtin.append(info)
                 else:
                     orphaned.append(info)
 
+            stale_agents = self._stale_launch_agents(installed)
+
             result = {
-                "success":             True,
-                "orphaned_count":      len(orphaned),
-                "active_count":        len(active),
-                "installed_plugins":   len(installed),
-                "orphaned":            orphaned,
-                "active":              active,
+                "success":               True,
+                "orphaned_count":        len(orphaned),
+                "active_count":          len(active),
+                "builtin_count":         len(builtin),
+                "installed_plugins":     len(installed),
+                "orphaned":              orphaned,
+                "builtin":               builtin,
+                "active":                active,
+                "stale_launch_agents":       stale_agents,
+                "stale_launch_agent_count":  len(stale_agents),
+                "note": ("Orphaned prefs are safe to delete. Read a prefs file before "
+                         "deleting it — plugins have been found storing API keys and "
+                         "passwords in plain text there. A stale LaunchAgent should be "
+                         "unloaded (launchctl bootout gui/$(id -u) <plist>) before its "
+                         "plist is removed, or its process keeps running."),
             }
-            self.log_tool_outcome("find_orphaned_plugin_data", True,
-                                  f"{len(orphaned)} orphaned prefs dirs found")
+            self.log_tool_outcome(
+                "find_orphaned_plugin_data", True,
+                f"{len(orphaned)} orphaned prefs entries, "
+                f"{len(stale_agents)} stale launch agents")
             return result
         except Exception as exc:
             return self.handle_exception(exc, "find_orphaned_plugin_data")
+
+    def _stale_launch_agents(self, installed: set) -> List[Dict[str, Any]]:
+        """LaunchAgents whose executable or script no longer exists on disk.
+
+        Read-only, and deliberately narrow: an agent is reported only when a path
+        it needs is genuinely absent, so a clean result means something.  It is
+        NOT inferred from the label — several legitimate agents here carry a
+        plugin-ish label (com.clives.claudebridge.webhookrelay) while being very
+        much alive, and a check that cries wolf is a check nobody reads.
+        """
+        agents_dir = _launch_agents_dir()
+        stale: List[Dict[str, Any]] = []
+        if not os.path.isdir(agents_dir):
+            return stale
+
+        try:
+            entries = sorted(os.scandir(agents_dir), key=lambda e: e.name.lower())
+        except OSError:
+            return stale
+
+        for entry in entries:
+            if not entry.name.endswith(".plist") or not entry.is_file():
+                continue
+            label, exec_path, checkable = _launch_agent_paths(entry.path)
+            if not checkable:
+                continue
+            missing = [pth for pth in checkable if not os.path.exists(pth)]
+            if missing:
+                stale.append({
+                    "label":   label or entry.name,
+                    "path":    entry.path,
+                    "target":  exec_path,
+                    "reasons": [f"path missing: {m}" for m in missing],
+                })
+        return stale
 
     # ────────────────────────────────────────────────────────────────────────
     # find_large_files

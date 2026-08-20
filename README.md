@@ -567,7 +567,7 @@ _Pure queries — no state change. Require the `read` scope._
 | `find_devices_in_error` | Return all Indigo devices currently in an error or fault state. |
 | `find_large_files` | Walk a directory tree and return files exceeding a size threshold, sorted largest first. Defaults to scanning the entire Indigo install folder for files >= 10 MB. |
 | `find_low_battery` | Return all devices with a batteryLevel state below the given threshold (default 20%). Sorted lowest battery first. |
-| `find_orphaned_plugin_data` | Compare Preferences/Plugins subdirectories against installed plugin bundle IDs. Returns any prefs directories that belong to plugins that are no longer installed, along with their size on disk. Safe to delete orphaned entries to recover disk space. |
+| `find_orphaned_plugin_data` | Find plugin data left behind by plugins that are no longer installed: Preferences/Plugins subdirectories AND .indiPref files (most plugins write only the file, so directories alone miss the common case), plus ~/Library/LaunchAgents plists whose executable or script no longer exists — a plugin's managed helper agent outlives the plugin and keeps running. Indigo's own built-ins are listed separately, not as orphans. Read a prefs file before deleting it: credentials have been found in them. |
 | `find_orphaned_scripts` | Scan all Python scripts in the Indigo Scripts folder and report any that reference device or variable IDs which no longer exist in Indigo. Useful for finding stale scripts after devices or variables have been deleted. |
 | `find_stale_devices` | Return enabled devices whose state has not changed in more than N days (default 7). Helps identify dead or forgotten hardware. |
 | `get_action_group_by_id` | Get a specific action group by ID |
@@ -854,6 +854,19 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.21.0 (2026-08-20)
+`find_orphaned_plugin_data` now finds the leftovers it always claimed to.
+
+It looked at the subdirectories in Preferences/Plugins and nowhere else. Most plugins never create a subdirectory — everything they save goes in a single `.indiPref` file beside it — so the tool reported a clean sweep over a folder full of dead plugin data. A sweep here turned up thirteen orphan prefs files, two of which held a password in plain text, and the tool had never mentioned one of them. Prefs files are now scanned alongside the directories, and each entry says which kind it is.
+
+Indigo's own built-ins — Z-Wave, the web server, the script executors — keep prefs without ever having a bundle in the Plugins folder, so they are listed separately instead of being called orphans.
+
+It also reports stale launch agents. A plugin that runs a helper process installs one, and removing the plugin does not remove the agent: on this server a helper had been running for fifteen days with nothing left to talk to. An agent is only reported when a path it needs is genuinely missing, so a working one is never flagged.
+
+One warning worth repeating, which is now in the tool's own output: read a prefs file before you delete it. Plugins have been found keeping API keys and passwords in there in plain text.
+
+Seven new tests, taking the suite to 518.
 
 ### 2.20.2 (2026-08-09)
 The smaller findings from the same review, taking the ones that touch your credentials or quietly tell you something untrue.

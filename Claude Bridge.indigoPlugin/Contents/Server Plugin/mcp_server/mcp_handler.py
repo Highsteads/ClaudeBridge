@@ -2013,10 +2013,14 @@ class MCPHandler:
 
         self._tools["find_orphaned_plugin_data"] = {
             "description": (
-                "Compare Preferences/Plugins subdirectories against installed "
-                "plugin bundle IDs. Returns any prefs directories that belong to "
-                "plugins that are no longer installed, along with their size on "
-                "disk. Safe to delete orphaned entries to recover disk space."
+                "Find plugin data left behind by plugins that are no longer "
+                "installed: Preferences/Plugins subdirectories AND .indiPref "
+                "files (most plugins write only the file, so directories alone "
+                "miss the common case), plus ~/Library/LaunchAgents plists whose "
+                "executable or script no longer exists — a plugin's managed "
+                "helper agent outlives the plugin and keeps running. Indigo's own "
+                "built-ins are listed separately, not as orphans. Read a prefs "
+                "file before deleting it: credentials have been found in them."
             ),
             "inputSchema": {"type": "object", "properties": {}},
             "function": self._tool_find_orphaned_plugin_data

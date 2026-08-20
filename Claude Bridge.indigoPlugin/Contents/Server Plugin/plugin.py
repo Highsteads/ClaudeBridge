@@ -4,8 +4,17 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
-# Date:        09-08-2026
-# Version:     2.20.2
+# Date:        20-08-2026
+# Version:     2.21.0
+#
+# v2.21.0 (20-08-2026): find_orphaned_plugin_data now sees what it always
+# claimed to. It scanned Preferences/Plugins SUBDIRECTORIES only, so the
+# per-plugin .indiPref FILES were invisible — and that is where most plugins
+# keep everything. A live sweep found 13 orphan prefs files, two of them
+# holding plaintext credentials, plus three LaunchAgents whose script had
+# gone. Prefs files are scanned, Indigo's own built-ins are listed apart
+# from orphans, and stale LaunchAgents are reported — a plugin's managed
+# helper agent outlives the plugin and keeps running.
 #
 # v2.20.2 (09-08-2026): the security and data-integrity subset of the review's
 # low-severity findings. runtime_config.snapshot() returned the Anthropic key
