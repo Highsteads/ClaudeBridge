@@ -204,8 +204,12 @@ def _bundle_id_from_plist(plugin_path: str) -> Optional[str]:
     except Exception:
         return None
 
-# Indigo's own built-in plugins have prefs but no bundle in Plugins/, so they must
-# never be reported as orphaned.  Confirmed against a live 2025.2 install.
+# Indigo's own built-ins normally DO have a bundle — as DOT-PREFIXED HIDDEN folders in
+# Plugins/ (".Z-Wave.indigoPlugin", ".Web Server.indigoPlugin", ".Action Collection.
+# indigoPlugin"), which a plain `ls` does not show — so they usually match as active and
+# never reach this table.  It is the fallback for an install where one is absent (Insteon
+# on a Z-Wave-only server, say), so that a core pref is never called an orphan.
+# Measured on a live 2025.2 install, 20-Aug-2026.
 _BUILTIN_PREFS_IDS = frozenset({
     "com.indigodomo.indigoserver",
     "com.indigodomo.webserver",
