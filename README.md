@@ -170,7 +170,7 @@ it in a couple of round-trips.
 
 ## What it does
 
-Claude Bridge gives Claude Code **166 MCP tools**, enough to read and change
+Claude Bridge gives Claude Code **167 MCP tools**, enough to read and change
 anything on a running Indigo server. They fall into the groups below, and every
 tool is listed by name in [Available Tools](#available-tools) further down.
 
@@ -383,7 +383,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 166 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 167 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and
@@ -562,7 +562,7 @@ _Pure queries — no state change. Require the `read` scope._
 | `energy_daily_summary` | Parse SigenEnergyManager daily log files into per-day kWh totals: PV generated, grid imported, grid exported, home consumption, max/min SOC, and overall self-sufficiency percentage. |
 | `energy_log_days` | Return raw SigenEnergyManager log lines for the last N days (max 14). Useful for asking Claude to reason about specific events, decisions, or anomalies. |
 | `energy_status` | Return a live energy snapshot from SigenEnergyManager device states: battery SOC, solar generation, grid import/export, tariff, and related variable values. |
-| `find_automation_references` | Reverse lookup: which triggers/schedules/action groups reference a device, variable, or action group — role-tagged (watches / condition_reads / acts_on / sets / executes, plus heuristic script/plugin-config id matches) and following action-group execution chains transitively. Cross-checked against the server's own dependency graph. Richer than dependency_map for automation debugging and safe-delete checks. |
+| `find_automation_references` | Reverse lookup: which triggers/schedules/action groups reference a device, variable, or action group — role-tagged (watches / condition_reads / acts_on / sets / executes) and following action-group execution chains transitively. Cross-checked against the server's own dependency graph, AND against both Python script folders on disk (entity_type 'script', role 'script_reference', with line numbers) which getDependencies does not cover. Plugins that hard-code an ID in their own source remain uncovered. Richer than dependency_map for automation debugging and safe-delete checks. |
 | `find_conflicts` | Detect configuration conflicts in Indigo. Checks for: duplicate device names, devices sharing the same hardware address, triggers with duplicate names, Python scripts referencing deleted device/variable IDs (orphaned refs), and multiple scripts writing to the same variable (potential race condition). |
 | `find_devices_in_error` | Return all Indigo devices currently in an error or fault state. |
 | `find_large_files` | Walk a directory tree and return files exceeding a size threshold, sorted largest first. Defaults to scanning the entire Indigo install folder for files >= 10 MB. |
@@ -854,6 +854,19 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.22.0 (2026-08-26)
+`find_automation_references` now reads the script folders, which its own description had been claiming it did all along.
+
+It answered from two places — the action steps in Indigo's database file, and the server's own dependency graph — and neither of those knows the first thing about the Python scripts sitting on disk. So a device driven entirely from a script came back with nothing against its name, which reads as "nothing touches this" rather than "I never looked there". That is the worst way for a tool people use for safe-delete checks to be wrong. The kitchen spot lights here reported one trigger and no scripts at all, while five scripts were driving them by ID, and `dependency_map` had been quietly finding all five the whole time.
+
+Both script folders are scanned now, by numeric ID and by quoted name, and every hit carries its line numbers so you can go and look. No role is guessed for a script hit, because a script that mentions an ID might read it, write it, or only log it, and a confident wrong answer would be worse than none at all.
+
+Plugins that hard-code a device ID in their own source are still not covered by any of this. The reply now says so on every call rather than leaving you to assume the list in front of you is the whole story.
+
+The folder walk moved into one shared module, so `dependency_map` and `audit_variables` share a single copy instead of each carrying its own.
+
+Fifteen new tests, taking the suite to 533.
 
 ### 2.21.0 (2026-08-20)
 `find_orphaned_plugin_data` now finds the leftovers it always claimed to.

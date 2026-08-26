@@ -216,3 +216,86 @@ def test_investigate_event_requires_target(store):
         log_query_handler=FakeLogQuery([]))
     result = handler.investigate_event()
     assert result["success"] is False
+
+
+# ── Handler: script-folder references (v2.22.0) ──────────────────────────────
+
+@pytest.fixture()
+def script_folder(tmp_path):
+    d = tmp_path / "Python Scripts"
+    d.mkdir()
+    (d / "Lamp_Driver.py").write_text(
+        f"LAMP = {DEV_LAMP}\n"
+        f"indigo.device.turnOn({DEV_LAMP})\n",
+        encoding="utf-8",
+    )
+    (d / "Innocent.py").write_text("x = 1\n", encoding="utf-8")
+    return d
+
+
+@pytest.fixture()
+def script_handler(store, script_folder):
+    return AutomationDetailHandler(
+        data_provider=None, structure_store=store, log_query_handler=None,
+        script_dirs_provider=lambda: [str(script_folder)])
+
+
+def test_find_references_includes_scripts(script_handler):
+    result = script_handler.find_automation_references(
+        "device", DEV_LAMP, include_server_check=False)
+    scripts = [r for r in result["references"] if r["entity_type"] == "script"]
+    assert len(scripts) == 1
+    ref = scripts[0]
+    assert ref["name"] == "Lamp_Driver.py"
+    assert ref["role"] == "script_reference"
+    assert ref["lines"] == [1, 2]
+    assert ref["source"] == "script_folder"
+    assert "lines 1, 2" in ref["detail"]
+    # The script reference is counted like any other.
+    assert result["count"] == len(result["references"])
+
+
+def test_script_references_do_not_break_the_server_merge(script_handler):
+    """_merge_server_dependencies keys on (entity_type, id) and a script has no
+    id — so the scan must run after it, not before."""
+    result = script_handler.find_automation_references(
+        "device", DEV_LAMP, include_server_check=True)
+    assert result["success"] is True
+    assert any(r["entity_type"] == "script" for r in result["references"])
+
+
+def test_include_scripts_false_suppresses_the_scan(script_handler):
+    result = script_handler.find_automation_references(
+        "device", DEV_LAMP, include_server_check=False, include_scripts=False)
+    assert not [r for r in result["references"] if r["entity_type"] == "script"]
+    assert not any("plugin bundles" in n for n in result["notes"])
+
+
+def test_plugin_source_caveat_is_always_stated(script_handler):
+    """An empty script result must not read as 'nothing references this'."""
+    result = script_handler.find_automation_references(
+        "device", DEV_SENSOR, include_server_check=False)
+    assert any("plugin bundles" in n for n in result["notes"])
+
+
+def test_missing_script_folder_is_reported_not_silent(store):
+    handler = AutomationDetailHandler(
+        data_provider=None, structure_store=store, log_query_handler=None,
+        script_dirs_provider=lambda: [])
+    result = handler.find_automation_references(
+        "device", DEV_LAMP, include_server_check=False)
+    assert result["success"] is True
+    assert any("No Indigo script folder" in n for n in result["notes"])
+
+
+def test_script_scan_failure_degrades_with_a_note(store):
+    def boom():
+        raise OSError("disk gone")
+
+    handler = AutomationDetailHandler(
+        data_provider=None, structure_store=store, log_query_handler=None,
+        script_dirs_provider=boom)
+    result = handler.find_automation_references(
+        "device", DEV_LAMP, include_server_check=False)
+    assert result["success"] is True
+    assert any("Script folder scan unavailable" in n for n in result["notes"])

@@ -11,6 +11,8 @@ Tools:
 Action steps, conditions and embedded scripts come from the read-only
 .indiDb structure store (the IOM does not expose them); live fields
 (enabled, next execution) come from the IOM and always win where both exist.
+find_automation_references also scans the two script folders on disk, which
+neither of those sources covers.
 """
 
 import datetime
@@ -26,6 +28,7 @@ except ImportError:
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 from ...adapters.indidb import IndiDbStructureStore
+from ...common.script_refs import find_script_references, scripts_dirs
 from . import detail_renderer
 
 AUTOMATION_TYPES = ("trigger", "schedule", "action_group")
@@ -87,11 +90,15 @@ class AutomationDetailHandler(BaseToolHandler):
         structure_store: IndiDbStructureStore,
         log_query_handler=None,
         logger: Optional[logging.Logger] = None,
+        script_dirs_provider=None,
     ):
         super().__init__(tool_name="automation_detail", logger=logger)
         self.data_provider = data_provider
         self.structure_store = structure_store
         self.log_query_handler = log_query_handler
+        # Injectable so the script scan can be driven against a temp folder in
+        # tests; defaults to the real Indigo script folders.
+        self.script_dirs_provider = script_dirs_provider or scripts_dirs
 
     # ── Shared resolution helpers ────────────────────────────────────────────
 
@@ -228,7 +235,11 @@ class AutomationDetailHandler(BaseToolHandler):
         entity_type: str,
         entity_id: Union[int, str],
         include_server_check: bool = True,
+        include_scripts: bool = True,
     ) -> Dict[str, Any]:
+        """Role-tagged reverse lookup across all three places a reference hides:
+        the .indiDb action steps and conditions, the server's own dependency
+        graph, and the Python scripts on disk."""
         self.log_incoming_request("find_automation_references",
                                   {"entity_type": entity_type,
                                    "entity_id": entity_id})
@@ -261,6 +272,14 @@ class AutomationDetailHandler(BaseToolHandler):
                                                 references, notes)
 
             target_name = self._display_name(entity_type, entity_id)
+
+            # Scripts are covered by neither the structure store nor
+            # getDependencies. Appended last because _merge_server_dependencies
+            # keys every reference on (entity_type, id) and a script has no ID.
+            if include_scripts:
+                self._append_script_references(entity_id, target_name,
+                                               references, notes)
+
             self.log_tool_outcome("find_automation_references", True,
                                   f"{entity_type} '{target_name}': "
                                   f"{len(references)} references")
@@ -275,6 +294,59 @@ class AutomationDetailHandler(BaseToolHandler):
             }
         except Exception as exc:
             return self.handle_exception(exc, "find_automation_references")
+
+    def _append_script_references(
+        self,
+        entity_id: int,
+        target_name: str,
+        references: List[Dict[str, Any]],
+        notes: List[str],
+    ) -> None:
+        """Scan both Indigo script folders and append what mentions this entity.
+
+        Matching is by numeric ID and by quoted name. No role is inferred: a
+        script mentioning an ID may read it, write it or merely log it, and a
+        guessed role here would be worse than none. The line numbers are given
+        so the caller can go and look.
+        """
+        try:
+            script_dirs = list(self.script_dirs_provider() or [])
+        except Exception as exc:
+            notes.append(f"Script folder scan unavailable: {exc}")
+            return
+
+        if not script_dirs:
+            notes.append("No Indigo script folder found — scripts were not scanned.")
+            return
+
+        try:
+            hits = find_script_references(entity_id, target_name, script_dirs)
+        except Exception as exc:
+            notes.append(f"Script folder scan failed: {exc}")
+            return
+
+        for hit in hits:
+            lines = hit["lines"]
+            shown = ", ".join(str(n) for n in lines[:5])
+            if len(lines) > 5:
+                shown += f", +{len(lines) - 5} more"
+            plural = "line" if len(lines) == 1 else "lines"
+            references.append({
+                "entity_type": "script",
+                "name":        hit["script"],
+                "role":        "script_reference",
+                "detail":      f"{plural} {shown} "
+                               f"(matched by {' and '.join(hit['matched_by'])})",
+                "lines":       lines,
+                "matched_by":  hit["matched_by"],
+                "source":      "script_folder",
+            })
+
+        notes.append(
+            "Scanned %d script folder(s). A plugin that hard-codes this ID in "
+            "its own source is still not covered by any of these sources — grep "
+            "the plugin bundles before deleting." % len(script_dirs)
+        )
 
     def _merge_server_dependencies(
         self,

@@ -11,7 +11,6 @@ Provides configuration health checks and housekeeping analysis:
 """
 
 import logging
-import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Union
@@ -25,56 +24,11 @@ from ..base_handler import BaseToolHandler
 from ...common.device_props import device_address
 from ...adapters.data_provider import DataProvider
 from ...common.battery import battery_pct as _battery_pct
-
-
-def _scripts_dirs() -> List[str]:
-    """
-    Return EVERY existing Indigo scripts folder (one level above the version dir).
-
-    An Indigo installation has two sibling script folders and BOTH can hold
-    automation that references device/variable IDs:
-      - <PA base>/Scripts        — scripts called directly by schedules/triggers
-      - <PA base>/Python Scripts — the main automation-logic folder (the bulk)
-
-    A previous version returned only the FIRST existing folder, so any ID used
-    solely in 'Python Scripts' was invisible to every audit — the documented
-    audit_variables over-reporting (it returned the whole estate as
-    'unreferenced'). Always scan both folders that exist.
-    """
-    pa_base = os.path.dirname(indigo.server.getInstallFolderPath())
-    candidates = [
-        os.path.join(pa_base, "Scripts"),
-        os.path.join(pa_base, "Python Scripts"),
-    ]
-    return [d for d in candidates if os.path.isdir(d)]
-
-
-def _iter_script_files(script_dirs):
-    """
-    Yield (display_name, content) for every .py file across all given dirs.
-
-    The display name is prefixed with the folder name when the same filename
-    exists in both folders, so a caller can tell them apart. open() forces
-    UTF-8 (Indigo's embedded Python defaults to ASCII) and tolerates the odd
-    bad byte with errors='replace'.
-    """
-    if isinstance(script_dirs, str):
-        script_dirs = [script_dirs]
-    multi = len([d for d in script_dirs if os.path.isdir(d)]) > 1
-    for d in script_dirs:
-        if not os.path.isdir(d):
-            continue
-        folder = os.path.basename(d)
-        for entry in os.scandir(d):
-            if not entry.name.endswith(".py") or not entry.is_file():
-                continue
-            try:
-                with open(entry.path, "r", encoding="utf-8", errors="replace") as fh:
-                    content = fh.read()
-            except OSError:
-                continue
-            name = f"{folder}/{entry.name}" if multi else entry.name
-            yield name, content
+from ...common.script_refs import (
+    scripts_dirs as _scripts_dirs,
+    iter_script_files as _iter_script_files,
+    scan_scripts_for_ids as _scan_scripts_for_ids,
+)
 
 
 def _days_since(ts) -> Optional[float]:
@@ -90,23 +44,6 @@ def _days_since(ts) -> Optional[float]:
     except Exception:
         pass
     return None
-
-
-def _scan_scripts_for_ids(script_dirs) -> Dict[int, List[str]]:
-    """
-    Scan all .py files across script_dirs (accepts a list of folders, or a
-    single folder string for backward compatibility).
-    Returns {numeric_id: [script_name, ...]} for every 8-12 digit ID found.
-    """
-    id_pattern = re.compile(r"\b(\d{8,12})\b")
-    id_map: Dict[int, List[str]] = {}
-    for name, content in _iter_script_files(script_dirs):
-        for m in id_pattern.findall(content):
-            iid = int(m)
-            id_map.setdefault(iid, [])
-            if name not in id_map[iid]:
-                id_map[iid].append(name)
-    return id_map
 
 
 class AuditHandler(BaseToolHandler):

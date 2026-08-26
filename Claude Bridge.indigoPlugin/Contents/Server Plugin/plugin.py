@@ -4,8 +4,22 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
-# Date:        20-08-2026
-# Version:     2.21.0
+# Date:        26-08-2026
+# Version:     2.22.0
+#
+# v2.22.0 (26-08-2026): find_automation_references now reads the script
+# folders. It answered from the .indiDb action steps and the server's own
+# dependency graph, and nothing else — so a device driven entirely from a
+# Python script came back with nothing to show, which reads as "nothing
+# references this" rather than "I never looked there". The tool description
+# had claimed the scan all along. Live case: the Kitchen Spot Lights reported
+# one trigger and no scripts while five scripts drove them by ID, and
+# dependency_map found all five. Both folders are now scanned, by numeric ID
+# and by quoted name, and each hit carries its line numbers. The folder walk
+# moved to common/script_refs.py so dependency_map and audit_variables share
+# one copy instead of three. No role is guessed for a script hit — a wrong
+# role would be worse than none. Plugins that hard-code an ID are still not
+# covered and the reply now says so on every call.
 #
 # v2.21.0 (20-08-2026): find_orphaned_plugin_data now sees what it always
 # claimed to. It scanned Preferences/Plugins SUBDIRECTORIES only, so the

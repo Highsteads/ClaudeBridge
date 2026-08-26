@@ -2252,10 +2252,13 @@ class MCPHandler:
             "description": (
                 "Reverse lookup: which triggers/schedules/action groups "
                 "reference a device, variable, or action group — role-tagged "
-                "(watches / condition_reads / acts_on / sets / executes, plus "
-                "heuristic script/plugin-config id matches) and following "
-                "action-group execution chains transitively. Cross-checked "
-                "against the server's own dependency graph. Richer than "
+                "(watches / condition_reads / acts_on / sets / executes) and "
+                "following action-group execution chains transitively. "
+                "Cross-checked against the server's own dependency graph, AND "
+                "against both Python script folders on disk (entity_type "
+                "'script', role 'script_reference', with line numbers) which "
+                "getDependencies does not cover. Plugins that hard-code an ID "
+                "in their own source remain uncovered. Richer than "
                 "dependency_map for automation debugging and safe-delete "
                 "checks."
             ),
@@ -2275,6 +2278,12 @@ class MCPHandler:
                         "type": "boolean",
                         "description": "Also merge indigo getDependencies "
                                        "results (default true)"
+                    },
+                    "include_scripts": {
+                        "type": "boolean",
+                        "description": "Also scan the Scripts and Python "
+                                       "Scripts folders for the ID and the "
+                                       "quoted name (default true)"
                     }
                 },
                 "required": ["entity_type", "entity_id"]
@@ -4268,12 +4277,14 @@ class MCPHandler:
             return safe_json_dumps({"error": str(e)})
 
     def _tool_find_automation_references(self, entity_type, entity_id,
-                                         include_server_check=True) -> str:
+                                         include_server_check=True,
+                                         include_scripts=True) -> str:
         try:
             return safe_json_dumps(
                 self.automation_detail_handler.find_automation_references(
                     entity_type, entity_id,
-                    include_server_check=bool(include_server_check)))
+                    include_server_check=bool(include_server_check),
+                    include_scripts=bool(include_scripts)))
         except Exception as e:
             self.logger.error(f"find_automation_references error: {e}")
             return safe_json_dumps({"error": str(e)})
