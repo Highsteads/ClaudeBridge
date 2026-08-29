@@ -311,3 +311,31 @@ def test_exact_reference_survives_either_order(heuristic_first):
     assert len(refs) == 1
     assert "confidence" not in refs[0]
     assert refs[0]["detail"] == "decoded"
+
+
+# ── The measured Type code ───────────────────────────────────────────────────
+
+def test_type_4_is_labelled_even_with_no_source():
+    """A scripted condition whose script was emptied still names itself.
+
+    The presence-of-ScriptSource test cannot cover this one — there is no
+    source to detect — so it falls through to the code table. Before Type 4 was
+    measured it read "unknown (type 4)", which tells a reader nothing.
+    """
+    rendered = detail_renderer.render_condition(
+        {"Type": 4, "ScriptSource": "", "ScriptType": 0}, _name_lookup)
+    assert "scripted" in rendered["type"]
+    assert "type 4" in rendered["type"]
+
+
+def test_presence_still_wins_over_the_code():
+    """A scripted condition under an UNEXPECTED code must still be decoded.
+
+    One measurement on one Indigo version is not a guarantee across versions,
+    so the source is what identifies it — never the number.
+    """
+    rendered = detail_renderer.render_condition(
+        {"Type": 6, "ScriptSource": "return True", "ScriptType": 0}, _name_lookup)
+    assert rendered["type"].startswith("scripted condition")
+    assert "type 6" in rendered["type"]
+    assert rendered["script"]["source"] == "return True"

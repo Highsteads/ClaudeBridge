@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.24.0
+**Version:** 2.24.1
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -854,6 +854,14 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.24.1 (2026-08-29)
+A scripted condition whose script has been emptied now says what it is instead of reporting an unknown code.
+
+The condition type Indigo stores for a scripted condition is not written down anywhere first-party, so this plugin has always identified one by the presence of its source rather than by the number — which is right whatever the number happens to be, and stays right if it ever changes. That leaves one gap: a scripted condition with nothing in it has no source to go on, and read as "unknown".
+
+The number has now been measured here rather than taken from a forum post, so that case is labelled properly. Detection still works from the source, not the code. Two tests, one for the empty case and one proving a scripted condition under an unexpected code is still decoded.
+
 
 ### 2.24.0 (2026-08-29)
 Deleting something that cannot be brought back now takes two deliberate acts, not one.

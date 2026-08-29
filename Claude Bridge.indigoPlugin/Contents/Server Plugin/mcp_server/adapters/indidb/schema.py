@@ -44,13 +44,20 @@ CONDITION_TYPES: Dict[int, str] = {
     5:   "time/date window",
     7:   "device state comparison",
     100: "compound",
+    # MEASURED 29-Aug-2026 on this install, from a probe trigger created in the
+    # Indigo client for the purpose. The stored dict holds exactly ObjVers,
+    # ScriptSource, ScriptType and Type — no VarID, no DevID, no ConditionList.
+    # Undocumented by any first-party source; the forum reports (t=29053) said
+    # 4 and were right, but this entry rests on our own measurement.
+    4: "scripted (Python returns True/False)",
 }
-# NB not exhaustive. A SCRIPTED condition (the Condition tab's "return
-# True/False" Python) stores its code in the Condition dict as ScriptSource,
-# and its Type code is not documented by any first-party source. Nothing in
-# this install has ever held one, so no code is claimed here — the renderer
-# and the reverse index both detect a scripted condition by the PRESENCE of
-# ScriptSource, which is right whatever the number turns out to be.
+# The renderer and the reverse index still detect a scripted condition by the
+# PRESENCE of ScriptSource rather than by this code. One measurement on one
+# Indigo version does not guarantee the number across versions, a presence test
+# is right whatever it is, and the raw code is carried in the label regardless.
+# This entry only improves the edge case the presence test cannot cover: a
+# Type 4 condition whose script has been emptied, which would otherwise read as
+# "unknown (type 4)".
 
 # VarState codes inside a Type 3 condition.
 VAR_STATE_CODES: Dict[int, str] = {
