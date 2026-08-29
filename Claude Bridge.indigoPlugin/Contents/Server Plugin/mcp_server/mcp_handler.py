@@ -2257,10 +2257,13 @@ class MCPHandler:
                 "Cross-checked against the server's own dependency graph, AND "
                 "against both Python script folders on disk (entity_type "
                 "'script', role 'script_reference', with line numbers) which "
-                "getDependencies does not cover. Plugins that hard-code an ID "
-                "in their own source remain uncovered. Richer than "
-                "dependency_map for automation debugging and safe-delete "
-                "checks."
+                "getDependencies does not cover. Also text-scans EMBEDDED "
+                "scripts — scripted conditions, trigger/schedule action "
+                "scripts and action-group scripts — by numeric ID and by "
+                "quoted name; those hits carry confidence 'heuristic'. "
+                "Plugins that hard-code an ID in their own source remain "
+                "uncovered. Richer than dependency_map for automation "
+                "debugging and safe-delete checks."
             ),
             "inputSchema": {
                 "type": "object",

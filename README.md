@@ -562,7 +562,7 @@ _Pure queries — no state change. Require the `read` scope._
 | `energy_daily_summary` | Parse SigenEnergyManager daily log files into per-day kWh totals: PV generated, grid imported, grid exported, home consumption, max/min SOC, and overall self-sufficiency percentage. |
 | `energy_log_days` | Return raw SigenEnergyManager log lines for the last N days (max 14). Useful for asking Claude to reason about specific events, decisions, or anomalies. |
 | `energy_status` | Return a live energy snapshot from SigenEnergyManager device states: battery SOC, solar generation, grid import/export, tariff, and related variable values. |
-| `find_automation_references` | Reverse lookup: which triggers/schedules/action groups reference a device, variable, or action group — role-tagged (watches / condition_reads / acts_on / sets / executes) and following action-group execution chains transitively. Cross-checked against the server's own dependency graph, AND against both Python script folders on disk (entity_type 'script', role 'script_reference', with line numbers) which getDependencies does not cover. Plugins that hard-code an ID in their own source remain uncovered. Richer than dependency_map for automation debugging and safe-delete checks. |
+| `find_automation_references` | Reverse lookup: which triggers/schedules/action groups reference a device, variable, or action group — role-tagged (watches / condition_reads / acts_on / sets / executes) and following action-group execution chains transitively. Cross-checked against the server's own dependency graph, AND against both Python script folders on disk (entity_type 'script', role 'script_reference', with line numbers) which getDependencies does not cover. Also text-scans EMBEDDED scripts — scripted conditions, trigger/schedule action scripts and action-group scripts — by numeric ID and by quoted name; those hits carry confidence 'heuristic'. Plugins that hard-code an ID in their own source remain uncovered. Richer than dependency_map for automation debugging and safe-delete checks. |
 | `find_conflicts` | Detect configuration conflicts in Indigo. Checks for: duplicate device names, devices sharing the same hardware address, triggers with duplicate names, Python scripts referencing deleted device/variable IDs (orphaned refs), and multiple scripts writing to the same variable (potential race condition). |
 | `find_devices_in_error` | Return all Indigo devices currently in an error or fault state. |
 | `find_large_files` | Walk a directory tree and return files exceeding a size threshold, sorted largest first. Defaults to scanning the entire Indigo install folder for files >= 10 MB. |
@@ -854,6 +854,19 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.23.0 (2026-08-29)
+`find_automation_references` now reads the Python hidden inside triggers, schedules and action groups, and `get_trigger_details` will show you a scripted condition instead of pretending there isn't one.
+
+A condition written as Python on the Condition tab keeps its code inside the automation itself. Nothing here had ever read it, so a trigger with a perfectly good scripted condition reported having no condition at all, and a variable used only by that script came back with nothing against its name. That is the same shape of mistake as the last two releases, one layer further in, and it is the one that matters most, because "nothing references this" is the question you ask just before you delete something.
+
+Embedded scripts are scanned in all three places they hide — scripted conditions, the script steps on a trigger or schedule, and the ones in an action group — by numeric ID and by quoted name, so `indigo.variables["holiday_mode"]` counts as a reference too. Every one of those hits says `confidence: heuristic` and names the token that matched, so you can tell a text match from something read straight out of the structure. It is a text scan and not a Python parser, so an ID built up with an f-string will still slip past. For a question about deleting things, matching too much is the safe way to be wrong.
+
+Indigo IDs are only unique within a class, which Jay pointed out on the forum while this was being written. The reverse lookup used to keep one entity per ID and quietly throw the other away. It now reports both, and says so in the reply whenever a heuristic match is involved.
+
+Where a condition is read both from the structure and from a script beside it, the decoded answer wins, whichever order they were found in.
+
+Thirteen new tests, taking the suite to 546.
 
 ### 2.22.0 (2026-08-26)
 `find_automation_references` now reads the script folders, which its own description had been claiming it did all along.

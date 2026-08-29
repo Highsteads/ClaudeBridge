@@ -53,13 +53,54 @@ def decode_script_link(link_b64: Any) -> Optional[str]:
         return None
 
 
+# ── Embedded scripts ──────────────────────────────────────────────────────────
+
+def render_embedded_script(
+    source: Any, script_type: Any, include_scripts: bool
+) -> Dict[str, Any]:
+    """Render one embedded script body.
+
+    Shared by action steps and scripted conditions. They store the same two
+    keys (ScriptSource + ScriptType) and used to be rendered by one branch
+    only, which is how condition scripts came to be invisible.
+    """
+    text = source if isinstance(source, str) else ""
+    script: Dict[str, Any] = {
+        "kind":     "embedded",
+        "language": schema.label(schema.SCRIPT_TYPES, script_type,
+                                 prefix="ScriptType"),
+        "lines":    text.count("\n") + 1 if text else 0,
+    }
+    if include_scripts and text:
+        script["source"] = text
+    return script
+
+
 # ── Conditions ────────────────────────────────────────────────────────────────
 
-def render_condition(condition: Any, name_lookup: NameLookup) -> Dict[str, Any]:
+def render_condition(
+    condition: Any, name_lookup: NameLookup, include_scripts: bool = True
+) -> Dict[str, Any]:
     """Decode one Condition dict (recursing into compounds)."""
     if not isinstance(condition, dict) or "Type" not in condition:
         return {"type": "always"}
     cond_type = condition.get("Type")
+
+    # A SCRIPTED condition keeps its Python in the Condition dict itself.
+    # Detected by the PRESENCE of ScriptSource rather than by the Type code:
+    # no first-party source documents that code and this install has never
+    # held one to measure, so a presence test is right whatever it turns out
+    # to be. The raw code is carried in the label either way. Type 100 is
+    # excluded so a compound can never lose its nested list to this branch.
+    script_source = condition.get("ScriptSource")
+    if (cond_type != 100 and isinstance(script_source, str) and script_source):
+        return {
+            "type":   f"scripted condition (type {cond_type})",
+            "script": render_embedded_script(script_source,
+                                             condition.get("ScriptType"),
+                                             include_scripts),
+        }
+
     rendered: Dict[str, Any] = {
         "type": schema.label(schema.CONDITION_TYPES, cond_type, prefix="type"),
     }
@@ -94,7 +135,7 @@ def render_condition(condition: Any, name_lookup: NameLookup) -> Dict[str, Any]:
         rendered["logic"] = schema.label(schema.CONDITION_LOGIC,
                                          condition_list.get("Logic"))
         rendered["conditions"] = [
-            render_condition(item, name_lookup)
+            render_condition(item, name_lookup, include_scripts)
             for item in (condition_list.get("Conditions") or [])
             if isinstance(item, dict)
         ]
@@ -162,14 +203,9 @@ def render_action_steps(
                     "path": decode_script_link(step.get("ScriptLink2")),
                 }
             else:
-                source = step.get("ScriptSource") or ""
-                script: Dict[str, Any] = {
-                    "kind": "embedded",
-                    "lines": source.count("\n") + 1 if source else 0,
-                }
-                if include_scripts and source:
-                    script["source"] = source
-                entry["script"] = script
+                entry["script"] = render_embedded_script(
+                    step.get("ScriptSource"), step.get("ScriptType"),
+                    include_scripts)
 
         elif step_class == schema.ACTION_CLASS_VARIABLE:
             entry["variable"] = _named(name_lookup, "variable", step.get("VarID"))
@@ -248,7 +284,8 @@ def render_trigger_details(
             event["config"] = meta.get(plugin_id, meta) if plugin_id else meta
     details["event"] = event
 
-    details["condition"] = render_condition(record.get("Condition"), name_lookup)
+    details["condition"] = render_condition(record.get("Condition"), name_lookup,
+                                            include_scripts)
     inline_group = record.get("ActionGroup") or {}
     details["action_steps"] = render_action_steps(
         inline_group.get("ActionSteps") if isinstance(inline_group, dict) else None,
@@ -292,7 +329,8 @@ def render_schedule_details(
         timing["auto_delete_after_firing"] = True
     details["timing"] = timing
 
-    details["condition"] = render_condition(record.get("Condition"), name_lookup)
+    details["condition"] = render_condition(record.get("Condition"), name_lookup,
+                                            include_scripts)
     inline_group = record.get("ActionGroup") or {}
     details["action_steps"] = render_action_steps(
         inline_group.get("ActionSteps") if isinstance(inline_group, dict) else None,
@@ -305,7 +343,8 @@ def render_action_group_details(
 ) -> Dict[str, Any]:
     details = _common_fields(record)
     details["entity_type"] = "action_group"
-    details["condition"] = render_condition(record.get("Condition"), name_lookup)
+    details["condition"] = render_condition(record.get("Condition"), name_lookup,
+                                            include_scripts)
     details["action_steps"] = render_action_steps(
         record.get("ActionSteps"), name_lookup, include_scripts)
     return details

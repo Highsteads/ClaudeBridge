@@ -45,6 +45,12 @@ CONDITION_TYPES: Dict[int, str] = {
     7:   "device state comparison",
     100: "compound",
 }
+# NB not exhaustive. A SCRIPTED condition (the Condition tab's "return
+# True/False" Python) stores its code in the Condition dict as ScriptSource,
+# and its Type code is not documented by any first-party source. Nothing in
+# this install has ever held one, so no code is claimed here — the renderer
+# and the reverse index both detect a scripted condition by the PRESENCE of
+# ScriptSource, which is right whatever the number turns out to be.
 
 # VarState codes inside a Type 3 condition.
 VAR_STATE_CODES: Dict[int, str] = {
@@ -150,6 +156,15 @@ UNIVERSAL_ACTION_CODES: Dict[int, str] = {
 # VarAction codes (action Class 201).
 VAR_ACTION_CODES: Dict[int, str] = {
     0: "set to value",
+}
+
+# ScriptType codes on anything carrying a <ScriptSource> — Class 101 action
+# steps and scripted conditions alike. Only 0 is measured: all four embedded
+# scripts in this install are Python and all store 0. Indigo also runs
+# AppleScript, whose code is UNVERIFIED, so label() reports it raw rather than
+# guessing.
+SCRIPT_TYPES: Dict[int, str] = {
+    0: "python",
 }
 
 # ── Schedule (TDTrigger) timing codes ────────────────────────────────────────

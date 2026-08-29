@@ -280,6 +280,16 @@ class AutomationDetailHandler(BaseToolHandler):
                 self._append_script_references(entity_id, target_name,
                                                references, notes)
 
+            if any(ref.get("confidence") == "heuristic" for ref in references):
+                notes.append(
+                    "Some references were matched as TEXT inside an embedded "
+                    "script or a plugin's config, not decoded from structure "
+                    "— those carry confidence 'heuristic'. An ID built by "
+                    "concatenation or an f-string is missed, and an ID is "
+                    "unique only within its class, so a cross-class collision "
+                    "could attribute one to the wrong entity."
+                )
+
             self.log_tool_outcome("find_automation_references", True,
                                   f"{entity_type} '{target_name}': "
                                   f"{len(references)} references")
