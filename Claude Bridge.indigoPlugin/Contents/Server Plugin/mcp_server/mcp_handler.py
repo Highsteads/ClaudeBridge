@@ -18,7 +18,8 @@ from .common.progress import ProgressEmitter, encode_sse_response
 from .common.tool_cache import ToolCache
 from .common.vector_store.vector_store_manager import VectorStoreManager
 from .handlers.list_handlers import ListHandlers
-from .security import RateLimiter, RateLimitExceeded, ScopeManager, ScopeDenied
+from .security import (RateLimiter, RateLimitExceeded, ScopeManager, ScopeDenied,
+                       delete_gate, DeleteDenied)
 from .tools.action_control import ActionControlHandler
 from .tools.device_control import DeviceControlHandler
 from .tools.device_control.color_names import parse_color
@@ -179,6 +180,14 @@ class MCPHandler:
         self._resources = {}
         self._register_tools()
         self._register_resources()
+
+        # Every gated delete gains its `confirm` argument here rather than in
+        # seven hand-written schemas, so the gate and the advertised contract
+        # cannot drift apart and a new destructive tool cannot be registered
+        # without one. Declared but NOT required: a missing confirm must reach
+        # the gate and get its explanatory refusal, not a bare
+        # "missing required argument" that says nothing about why.
+        self._declare_delete_confirmations()
 
         # Deny-by-default self-check: every registered tool must be classified
         # into exactly one scope bucket. Logs an ERROR for any unclassified tool
@@ -849,6 +858,22 @@ class MCPHandler:
                 f"(token='{self.scope_manager.name_for_token(bearer)}', has={sd.granted})"
             )
             return self._json_error(msg_id, -32099, str(sd))
+
+        # ── Irreversible-delete gate ─────────────────────────────────────
+        # Sits AFTER the scope check and is independent of it. Admin scope
+        # says the caller is trusted; it cannot say anyone meant to destroy
+        # this particular object. Central here rather than in each handler so
+        # a new delete tool cannot be added without the gate applying.
+        try:
+            delete_gate.check(tool_name, tool_args)
+        except DeleteDenied as dd:
+            self.logger.warning(f"⛔ Delete refused for '{tool_name}': {dd}")
+            return self._json_error(msg_id, -32099, str(dd))
+        if tool_name in delete_gate.DESTRUCTIVE_TOOLS:
+            # Consumed by the gate above. The handlers are called with
+            # **tool_args and none of them takes a `confirm` parameter, so it
+            # has to come out here or every gated delete TypeErrors.
+            tool_args = {k: v for k, v in tool_args.items() if k != "confirm"}
 
         # ── Argument validation (required keys present) ──────────────────
         # A lightweight check against the tool's declared inputSchema so a
@@ -4593,6 +4618,27 @@ class MCPHandler:
             self.logger.error(f"energy_compare error: {e}")
             return safe_json_dumps({"error": str(e)})
 
+    def _declare_delete_confirmations(self):
+        """Add the `confirm` argument to every tool the delete gate protects."""
+        for name in sorted(delete_gate.DESTRUCTIVE_TOOLS):
+            tool = self._tools.get(name)
+            if not tool:
+                # A gated name with no tool is a rename that left the gate
+                # behind — say so rather than silently protecting nothing.
+                self.logger.error(
+                    f"\t❌ delete gate names '{name}' but no such tool is registered")
+                continue
+            schema = tool.setdefault("inputSchema", {"type": "object"})
+            props  = schema.setdefault("properties", {})
+            props["confirm"] = {
+                "type": "boolean",
+                "description": delete_gate.CONFIRM_ARG_DESCRIPTION,
+            }
+            tool["description"] = (
+                tool.get("description", "").rstrip()
+                + delete_gate.CONFIRM_DESCRIPTION_SUFFIX
+            )
+
     def _register_resources(self):
         """Register all available resources."""
         # Device resources
@@ -4639,6 +4685,35 @@ class MCPHandler:
             "name": "Action Group",
             "description": "Get a specific action group",
             "function": self._resource_get_action
+        }
+
+        # Automation resources. Triggers and schedules were reachable only
+        # through tools, so a client had a stable read path for the objects it
+        # could NOT mutate and none for the ones it could. These reuse the same
+        # handlers as the tools — a resource that renders automations its own
+        # way is a second contract to keep in step.
+        self._resources["indigo://triggers"] = {
+            "name": "Triggers",
+            "description": "List all Indigo triggers",
+            "function": self._resource_list_triggers
+        }
+
+        self._resources["indigo://triggers/{trigger_id}"] = {
+            "name": "Trigger",
+            "description": "Full definition of one trigger: event, conditions and action steps",
+            "function": self._resource_get_trigger
+        }
+
+        self._resources["indigo://schedules"] = {
+            "name": "Schedules",
+            "description": "List all Indigo schedules, with each one's next run time",
+            "function": self._resource_list_schedules
+        }
+
+        self._resources["indigo://schedules/{schedule_id}"] = {
+            "name": "Schedule",
+            "description": "Full definition of one schedule: timing, conditions and action steps",
+            "function": self._resource_get_schedule
         }
     
     # Tool implementation methods
@@ -5317,6 +5392,45 @@ class MCPHandler:
             self.logger.error(f"Resource get action error: {e}")
             return safe_json_dumps({"error": str(e)})
     
+    def _resource_list_triggers(self) -> str:
+        """List triggers — same source as the list_triggers tool."""
+        try:
+            return safe_json_dumps(self.schedule_control_handler.list_triggers())
+        except Exception as e:
+            self.logger.error(f"Resource list triggers error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _resource_get_trigger(self, trigger_id: str) -> str:
+        """One trigger, through the same renderer as get_trigger_details.
+
+        Scripts are included, as they are for the tool's default. A resource is
+        a read, and a caller that fetched a trigger to find out what it does is
+        not helped by a body with the body left out.
+        """
+        try:
+            return safe_json_dumps(self.automation_detail_handler.get_details(
+                "trigger", int(trigger_id), include_scripts=True))
+        except Exception as e:
+            self.logger.error(f"Resource get trigger error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _resource_list_schedules(self) -> str:
+        """List schedules — same source as the list_schedules tool."""
+        try:
+            return safe_json_dumps(self.schedule_control_handler.list_schedules())
+        except Exception as e:
+            self.logger.error(f"Resource list schedules error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _resource_get_schedule(self, schedule_id: str) -> str:
+        """One schedule, through the same renderer as get_schedule_details."""
+        try:
+            return safe_json_dumps(self.automation_detail_handler.get_details(
+                "schedule", int(schedule_id), include_scripts=True))
+        except Exception as e:
+            self.logger.error(f"Resource get schedule error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
     # Helper methods
     def _json_response(self, obj: Any, status: int = 200) -> Dict[str, Any]:
         """Create JSON response for IWS."""

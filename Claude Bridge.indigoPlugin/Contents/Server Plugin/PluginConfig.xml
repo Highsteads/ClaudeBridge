@@ -168,6 +168,19 @@ and leave this field blank.</Label>
         <Label>Click to test Anthropic API and InfluxDB connections with current configuration</Label>
     </Field>
 
+    <Field id="separator_deletes" type="separator"/>
+
+    <Field id="deletes_label" type="label" fontSize="regular" alignWithControl="false" alignText="left">
+        <Label>IRREVERSIBLE DELETES</Label>
+    </Field>
+    <Field id="deletes_help" type="label" fontSize="small" alignWithControl="false">
+        <Label>Off by default. While this is off, Claude cannot delete a device, variable, automation or folder no matter which token it holds — the request is refused and the reason is logged. Turning it on is not enough on its own: every such call must also pass confirm=true, so a mistyped or over-eager request still fails. Deleting a script is not covered, because that archives to _backups/_archived/ and can be recovered.</Label>
+    </Field>
+    <Field type="checkbox" id="allow_destructive_delete" defaultValue="false">
+        <Label>Allow Claude to delete devices, variables and automations:</Label>
+        <Description>Leave this off unless you are actively tidying up, and turn it off again afterwards</Description>
+    </Field>
+
     <Field id="separator_dotfiles" type="separator"/>
 
     <Field id="dotfiles_label" type="label" fontSize="regular" alignWithControl="false" alignText="left">

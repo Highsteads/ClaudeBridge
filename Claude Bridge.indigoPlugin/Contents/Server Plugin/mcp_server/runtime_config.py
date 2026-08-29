@@ -40,6 +40,10 @@ _DEFAULTS = {
     "influxdb_password":  "",
     "influxdb_database":  "indigo",
     "db_file":            "",
+    # Irreversible deletes are refused unless the owner turns this on AND the
+    # call passes confirm=true. Default False, and it must stay False: a
+    # missing key has to read as "not allowed", never as "not yet decided".
+    "allow_destructive_delete": False,
 }
 
 _config = {}
@@ -88,17 +92,33 @@ def get_int(key, default=0):
             return 0
 
 
-def is_influx_enabled():
-    """Convenience wrapper used in two hot paths.
+def get_bool(key, default=False):
+    """Read a config value coerced to bool, guarded against Indigo's strings.
 
     NOT bool(): Indigo re-serialises a checkbox as the STRING "false" after a
-    Configure dialog save, and bool("false") is True — so the feature would read
-    as ENABLED precisely for the users who had turned it off and saved.
+    Configure dialog save, and bool("false") is True — so a feature would read
+    as ENABLED precisely for the users who had turned it off and saved. That
+    was a live bug in is_influx_enabled until v2.20.2, and the reasoning was
+    trapped inside that one function where nothing else could reuse it.
+
+    An UNRECOGNISED string returns the caller's default rather than False, so a
+    pref holding junk cannot silently flip a default-on feature off — the same
+    rule plugin_utils.as_bool adopted in v1.4.
     """
-    value = get("influxdb_enabled")
+    value = get(key, default)
     if isinstance(value, str):
-        return value.strip().lower() in ("true", "1", "yes", "on")
+        text = value.strip().lower()
+        if text in ("true", "1", "yes", "on"):
+            return True
+        if text in ("false", "0", "no", "off", ""):
+            return False
+        return bool(default)
     return bool(value)
+
+
+def is_influx_enabled():
+    """Convenience wrapper used in two hot paths."""
+    return get_bool("influxdb_enabled", False)
 
 
 # Keys whose values must never appear in a diagnostic dump.

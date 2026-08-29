@@ -29,6 +29,7 @@ BUNDLE_SP = os.path.join(
 )
 HANDLER_PATH = os.path.join(BUNDLE_SP, "mcp_server", "mcp_handler.py")
 SCOPE_PATH = os.path.join(BUNDLE_SP, "mcp_server", "security", "scope_manager.py")
+GATE_PATH = os.path.join(BUNDLE_SP, "mcp_server", "security", "delete_gate.py")
 README_PATH = os.path.join(REPO_ROOT, "README.md")
 
 BEGIN_MARKER = "<!-- BEGIN TOOL TABLE -->"
@@ -82,6 +83,36 @@ def parse_tools(handler_src):
                             break
                 tools[name] = desc
     return tools
+
+
+def parse_delete_gate(gate_src):
+    """Return (destructive_tool_names, description_suffix) from delete_gate.py.
+
+    The gated tools have their description extended at REGISTRATION time, not
+    in the `self._tools[...] = {...}` literal, so a static parse of the handler
+    alone silently understates what those tools require — which is the exact
+    kind of doc/runtime drift this generator exists to prevent. Parsed rather
+    than imported to keep the "runs anywhere, no Indigo" property.
+    """
+    names, suffix = set(), ""
+    tree = ast.parse(gate_src)
+    for node in ast.walk(tree):
+        targets, value = [], None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets, value = [node.target.id], node.value
+        elif isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            value = node.value
+        for tname in targets:
+            if tname == "DESTRUCTIVE_TOOLS" and isinstance(value, ast.Set):
+                names = {e.value for e in value.elts
+                         if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+            elif tname == "CONFIRM_DESCRIPTION_SUFFIX":
+                try:
+                    suffix = ast.literal_eval(value)
+                except (ValueError, SyntaxError):
+                    suffix = ""
+    return names, suffix
 
 
 def parse_scope_sets(scope_src):
@@ -175,6 +206,13 @@ def main():
 
     tools = parse_tools(_read(HANDLER_PATH))
     scopes = parse_scope_sets(_read(SCOPE_PATH))
+
+    # Mirror the registration-time augmentation so the table states the real
+    # contract for a gated delete rather than the bare literal.
+    gated, suffix = parse_delete_gate(_read(GATE_PATH))
+    for name in gated:
+        if name in tools and suffix and suffix.strip() not in tools[name]:
+            tools[name] = tools[name].rstrip() + suffix
     table_md, warnings = build_table(tools, scopes)
 
     for w in warnings:

@@ -8,10 +8,13 @@ request path and were removed in v2.8.4 — recover from git history if a future
 use is ever wanted.
 """
 
+from . import delete_gate
+from .delete_gate  import DeleteDenied
 from .rate_limiter  import RateLimiter, RateLimitExceeded
 from .scope_manager import ScopeManager, ScopeDenied, required_scope_for
 
 __all__ = [
     "RateLimiter", "RateLimitExceeded",
     "ScopeManager", "ScopeDenied", "required_scope_for",
+    "delete_gate", "DeleteDenied",
 ]

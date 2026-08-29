@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.23.0
+**Version:** 2.24.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -701,13 +701,13 @@ _Destructive / irreversible / code-execution / lifecycle / physical-security. Re
 | Tool | Description |
 |------|-------------|
 | `create_script` | Create a new Python script in the Indigo Scripts folder. Fails if the file already exists — use write_script to update. |
-| `delete_action_group` | Permanently delete an action group. |
-| `delete_device` | Permanently delete a device. Destructive — cannot be undone. |
-| `delete_device_folder` | Delete a device folder by ID or name. Refuses a non-empty folder unless delete_children=true (which deletes the devices inside it — irreversible). |
-| `delete_schedule` | Permanently delete a schedule. |
+| `delete_action_group` | Permanently delete an action group. Requires confirm=true AND the plugin's delete preference to be enabled. |
+| `delete_device` | Permanently delete a device. Destructive — cannot be undone. Requires confirm=true AND the plugin's delete preference to be enabled. |
+| `delete_device_folder` | Delete a device folder by ID or name. Refuses a non-empty folder unless delete_children=true (which deletes the devices inside it — irreversible). Requires confirm=true AND the plugin's delete preference to be enabled. |
+| `delete_schedule` | Permanently delete a schedule. Requires confirm=true AND the plugin's delete preference to be enabled. |
 | `delete_script` | Safely archive a Python script (moves to _backups/_archived/). Does not permanently delete — can be recovered manually. |
-| `delete_trigger` | Permanently delete a trigger. |
-| `delete_variable_folder` | Delete a variable folder by ID or name. Refuses a non-empty folder unless delete_children=true (which deletes the variables inside it — irreversible). |
+| `delete_trigger` | Permanently delete a trigger. Requires confirm=true AND the plugin's delete preference to be enabled. |
+| `delete_variable_folder` | Delete a variable folder by ID or name. Refuses a non-empty folder unless delete_children=true (which deletes the variables inside it — irreversible). Requires confirm=true AND the plugin's delete preference to be enabled. |
 | `execute_indigo_python` | Run arbitrary Python in this plugin's Indigo context. Has full access to the `indigo` module (devices, variables, triggers, thermostat.setHeatSetpoint, etc). mode='exec' runs a statement block and returns captured stdout/stderr. mode='eval' evaluates a single expression and returns its repr in 'value'. ADMIN scope — treat as arbitrary code execution on the Indigo server. |
 | `execute_plugin_menu_item` | Click a plugin's menu item under the Indigo client's Plugins menu (e.g. plugin_name='Zigbee2MQTT Bridge', menu_item_name='Refresh Device Capabilities'). Uses AppleScript GUI scripting — requires the Indigo GUI client to be running and System Events permission granted. ADMIN scope. |
 | `lock_device` | Lock a Z-Wave or other lock device. |
@@ -718,7 +718,7 @@ _Destructive / irreversible / code-execution / lifecycle / physical-security. Re
 | `run_script` | Execute a Python script from the Python Scripts folder in the Indigo Python context. The script runs with full access to the indigo module. Use for triggering automation logic, one-off tasks, or testing scripts. Returns stdout/stderr output. |
 | `scaffold_automation_script` | Generate and save a complete Python script template to the Indigo Scripts folder. Pre-fills the standard header, log() helper, and named constants for any supplied device/variable IDs (names looked up live). Ready to open in Indigo and add logic. Fails if the script already exists. |
 | `unlock_device` | Unlock a Z-Wave or other lock device, optionally with a PIN code. |
-| `variable_delete` | Permanently delete a variable. Destructive — cannot be undone. |
+| `variable_delete` | Permanently delete a variable. Destructive — cannot be undone. Requires confirm=true AND the plugin's delete preference to be enabled. |
 | `webhook_create` | Register an OUTBOUND webhook: the home POSTs a signed JSON event to an APPROVED external URL when a device/variable condition is met. ADMIN. The target must be on the egress allow-list (default-deny — private/LAN ranges need an explicit CIDR opt-in). Returns a one-time HMAC signing key — capture it. Requires 'Enable Event Webhooks' in the plugin config. |
 | `webhook_delete` | Delete an outbound webhook subscription by id. ADMIN. |
 | `webhook_list` | List outbound webhook subscriptions with delivery-health stats. ADMIN. Secrets are redacted (signing key omitted, bearer token shown as ***). |
@@ -854,6 +854,19 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.24.0 (2026-08-29)
+Deleting something that cannot be brought back now takes two deliberate acts, not one.
+
+Until now an admin token was the only thing standing between a request and a deleted trigger. That is the wrong shape of protection: a token is given admin rights so it can write scripts and restart plugins, and the same grant quietly carried the power to destroy a device, a variable or an automation in a single call. Scope can say whether a caller is trusted. It cannot say whether anyone meant to delete this particular thing.
+
+So there is now a preference — off by default, and off is where it should stay unless you are actively tidying up — and on top of that every such call must pass `confirm=true`. Both, or the request is refused and the log says which one was missing. Refusing on only the first would send you round the loop twice. Admin scope stays as a third boundary rather than the only one. Deleting a script is deliberately not included, because that archives to `_backups/_archived/` and can be fetched back.
+
+Triggers and schedules are now MCP resources in their own right — `indigo://triggers`, `indigo://triggers/{id}`, and the same pair for schedules. They were reachable only through tools, so a client had a stable read path for the objects it could not change and none for the ones it could. They go through the same handlers the tools use, because a resource that renders an automation its own way is just a second contract to keep in step.
+
+Embedded script source is capped at 4,000 characters, and says so when it cuts. An action group can hold hundreds of lines and every step gets rendered, so an uncapped answer could be far larger than the question deserved. When you ask for details without the scripts you now get the opening line of each rather than a bare line count, which is usually enough to tell what it does.
+
+Forty new tests, taking the suite to 586, and one of them now runs the tool-table generator in check mode so the published table cannot quietly fall behind the code. Ten deliberate sabotages, each one confirmed to turn the suite red before the code was trusted.
 
 ### 2.23.0 (2026-08-29)
 `find_automation_references` now reads the Python hidden inside triggers, schedules and action groups, and `get_trigger_details` will show you a scripted condition instead of pretending there isn't one.

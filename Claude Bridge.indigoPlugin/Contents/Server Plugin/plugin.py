@@ -5,7 +5,7 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        29-08-2026
-# Version:     2.23.0
+# Version:     2.24.0
 #
 # v2.22.0 (26-08-2026): find_automation_references now reads the script
 # folders. It answered from the .indiDb action steps and the server's own
@@ -914,6 +914,11 @@ class Plugin(indigo.PluginBase):
         # Normalise to a real bool once here (a saved pref may be "true"/"false"
         # strings) so callers don't each need their own bool() wrap.
         self.enable_influxdb   = self._as_bool(plugin_prefs.get("enable_influxdb", False))
+        # Default False and read the SAME way at every site — a pref that is
+        # only refreshed on restart would let a Configure save appear to take
+        # effect while the gate still held the old value.
+        self.allow_destructive_delete = self._as_bool(
+            plugin_prefs.get("allow_destructive_delete", False))
         # Strip protocol from host (clients add their own) — accept either form in config
         _influx_url            = (INFLUXDB_HOST or plugin_prefs.get("influx_url", "")).strip()
         self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
@@ -1241,6 +1246,7 @@ class Plugin(indigo.PluginBase):
             influxdb_password = self.influx_password,
             influxdb_database = self.influx_database,
             db_file           = db_path,
+            allow_destructive_delete = self.allow_destructive_delete,
         )
 
         # Initialize data provider
@@ -1983,6 +1989,8 @@ class Plugin(indigo.PluginBase):
             # (matches the resolution order used everywhere else in the plugin).
             self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
             self.enable_influxdb   = self._as_bool(values_dict.get("enable_influxdb", False))
+            self.allow_destructive_delete = self._as_bool(
+                values_dict.get("allow_destructive_delete", False))
             _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
             self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
             self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))
@@ -2434,6 +2442,8 @@ class Plugin(indigo.PluginBase):
             # InfluxDB off who merely opens+saves Configure would otherwise turn
             # it ON until the next restart.
             self.enable_influxdb   = self._as_bool(values_dict.get("enable_influxdb", False))
+            self.allow_destructive_delete = self._as_bool(
+                values_dict.get("allow_destructive_delete", False))
             _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
             self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
             self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))
@@ -2489,6 +2499,7 @@ class Plugin(indigo.PluginBase):
                 large_model       = self.large_model,
                 small_model       = self.small_model,
                 influxdb_enabled  = bool(self.enable_influxdb),
+                allow_destructive_delete = self.allow_destructive_delete,
                 influxdb_host     = self.influx_url.replace("http://", "").replace("https://", ""),
                 influxdb_port     = self._as_port(self.influx_port, "influx_port"),
                 influxdb_username = self.influx_login,

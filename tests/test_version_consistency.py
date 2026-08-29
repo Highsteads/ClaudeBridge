@@ -15,6 +15,8 @@
 import os
 import plistlib
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -61,3 +63,22 @@ def test_cfbundleversion_is_the_bundle_layout_not_the_release():
     """Jay: CFBundleVersion describes the bundle layout and stays at 1.0.0."""
     with open(PLIST, "rb") as fh:
         assert plistlib.load(fh)["CFBundleVersion"] == "1.0.0"
+
+
+def test_generated_tool_table_is_current():
+    """The README's tool table must match the code that generates it.
+
+    `scripts/generate_tool_doc.py --check` already existed and nothing ran it,
+    so the table could drift for as long as nobody happened to regenerate it.
+    A tool whose description changed in the handler but not in the README is
+    the same class of silent divergence as a stale version header.
+    """
+    script = os.path.join(REPO, "scripts", "generate_tool_doc.py")
+    if not os.path.isfile(script):
+        pytest.skip("doc generator not present")
+    result = subprocess.run([sys.executable, script, "--check"],
+                            cwd=REPO, capture_output=True, text=True)
+    assert result.returncode == 0, (
+        "README tool table is stale or a tool is unclassified — run "
+        "`python3 scripts/generate_tool_doc.py --write`\n"
+        + (result.stdout or "") + (result.stderr or ""))

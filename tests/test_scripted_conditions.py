@@ -194,8 +194,33 @@ def test_scripted_condition_honours_include_scripts(parsed):
     record = parsed.triggers[TRIG_GARAGE]
     rendered = detail_renderer.render_condition(record["Condition"], _name_lookup,
                                                 include_scripts=False)
-    assert "source" not in rendered["script"]
-    assert rendered["script"]["lines"] == 4
+    script = rendered["script"]
+    assert "source" not in script
+    assert script["lines"] == 4
+    # A line count alone says nothing about what the script does.
+    assert script["first_line"].startswith("FRIDAY_SPRINKLERS_AUTO_OFF_ID")
+
+
+def test_long_source_is_capped_and_says_so(parsed):
+    """Truncation must never be silent — a cut-off script reads as a whole one."""
+    long_source = "x = 1  # padding\n" * 500
+    script = detail_renderer.render_embedded_script(long_source, 0, True)
+    assert len(script["source"]) == detail_renderer.MAX_SCRIPT_CHARS
+    assert script["truncated"] is True
+    assert str(len(long_source)) in script["note"]
+    assert script["chars"] == len(long_source), "the real size must survive the cut"
+
+
+def test_short_source_is_not_marked_truncated(parsed):
+    script = detail_renderer.render_embedded_script("return True", 0, True)
+    assert script["source"] == "return True"
+    assert script["truncated"] is False
+
+
+def test_empty_script_carries_no_source_keys():
+    script = detail_renderer.render_embedded_script("", 0, True)
+    assert script["lines"] == 0 and script["chars"] == 0
+    assert "source" not in script and "first_line" not in script
 
 
 def test_detail_renderers_pass_the_flag_through(parsed):

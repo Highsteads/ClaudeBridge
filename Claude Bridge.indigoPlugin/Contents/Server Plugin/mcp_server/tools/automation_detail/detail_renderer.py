@@ -55,6 +55,15 @@ def decode_script_link(link_b64: Any) -> Optional[str]:
 
 # ── Embedded scripts ──────────────────────────────────────────────────────────
 
+# Ceiling on how much embedded source one rendered script may carry. An action
+# group can hold hundreds of lines, and get_action_group_details renders every
+# step, so an uncapped renderer can hand back more text than the question was
+# worth — a context bill the caller never agreed to. Truncation is always
+# SIGNALLED, never silent: a script cut off without saying so reads as a
+# complete one that simply ends early, which is a worse answer than no source.
+MAX_SCRIPT_CHARS = 4000
+
+
 def render_embedded_script(
     source: Any, script_type: Any, include_scripts: bool
 ) -> Dict[str, Any]:
@@ -70,9 +79,25 @@ def render_embedded_script(
         "language": schema.label(schema.SCRIPT_TYPES, script_type,
                                  prefix="ScriptType"),
         "lines":    text.count("\n") + 1 if text else 0,
+        "chars":    len(text),
     }
-    if include_scripts and text:
-        script["source"] = text
+    if not text:
+        return script
+
+    if include_scripts:
+        if len(text) > MAX_SCRIPT_CHARS:
+            script["source"]    = text[:MAX_SCRIPT_CHARS]
+            script["truncated"] = True
+            script["note"] = (
+                f"source truncated at {MAX_SCRIPT_CHARS} of {len(text)} characters"
+            )
+        else:
+            script["source"]    = text
+            script["truncated"] = False
+    else:
+        # A line count alone does not say what the script DOES. The opening
+        # line usually does, and costs almost nothing.
+        script["first_line"] = text.splitlines()[0].strip()[:200]
     return script
 
 
