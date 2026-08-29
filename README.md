@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.24.2
+**Version:** 2.24.3
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -854,6 +854,18 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.24.3 (2026-08-30)
+The plugin no longer claims it will tell your client when its tools change, because it never could.
+
+Every connection was answered with a promise to send a notification whenever the list of tools, resources or prompts changed — and there is no way for this plugin to send one. Indigo's web server answers a request with a response and then the conversation is over. There is no open line to talk down.
+
+That promise cost real time yesterday. A client that has been told it will hear about changes has no reason to go and look, so a session connected before the delete confirmation was added kept quietly dropping the new argument, and every delete was refused for missing something that had in fact been sent. The plugin was right each time and the caller had no way to know why.
+
+It now declares only what it can do: the tools, resources and prompts it serves, and an honest note that resource subscription is unsupported. Clients decide for themselves when to re-read, which is what they were doing anyway. The `logging` claim went for the same reason — it needs the same missing channel, and the one method behind it was never implemented.
+
+Seven tests hold the line, including one that fails if a capability is ever advertised without the methods to back it.
+
 
 ### 2.24.2 (2026-08-29)
 If a delete is refused for a missing confirmation you did actually send, the message now tells you why.

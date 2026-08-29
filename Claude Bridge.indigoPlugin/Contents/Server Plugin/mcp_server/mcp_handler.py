@@ -746,11 +746,31 @@ class MCPHandler:
                 "id": msg_id,
                 "result": {
                     "protocolVersion": self.PROTOCOL_VERSION,
+                    # ONLY what this server can actually honour. There is no
+                    # push channel to a client: IWS answers one request with
+                    # one response, and the SSE path is a BUFFERED body
+                    # composed inside a single call, not an open stream. So a
+                    # `listChanged` notification can never be sent, and
+                    # `logging` (server-initiated notifications/message, plus a
+                    # logging/setLevel this server does not implement) can
+                    # never be honoured either.
+                    #
+                    # Advertising them was not harmless. A client told it will
+                    # be notified when the tool list changes has no reason to
+                    # re-read it — which is exactly why a session connected
+                    # before v2.24.0 went on stripping the new `confirm`
+                    # argument for hours while the plugin refused calls that
+                    # were correctly made (29-08-2026). The honest declaration
+                    # makes a client re-read on its own terms instead of
+                    # waiting for a message that will never arrive.
+                    #
+                    # `subscribe: False` STAYS: that is an accurate statement
+                    # that resource subscription is unsupported. If a real push
+                    # channel is ever added, the claims can come back with it.
                     "capabilities": {
-                        "logging": {},
-                        "prompts": {"listChanged": True},
-                        "resources": {"subscribe": False, "listChanged": True},
-                        "tools": {"listChanged": True}
+                        "prompts": {},
+                        "resources": {"subscribe": False},
+                        "tools": {}
                     },
                     "serverInfo": {
                         "name": "Indigo Claude Bridge",
