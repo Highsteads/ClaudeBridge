@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.24.1
+**Version:** 2.24.2
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -854,6 +854,14 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.24.2 (2026-08-29)
+If a delete is refused for a missing confirmation you did actually send, the message now tells you why.
+
+An MCP client reads the list of tools once, when it connects, and quietly drops any argument that list does not mention. So a client that was already connected when you upgraded to 2.24.0 strips the new `confirm` argument on its way to the plugin, and the delete is refused for leaving out something you included. The old wording answered that with "pass confirm=true", which is advice you cannot act on — exactly the loop the gate's name-every-reason rule was written to avoid. It now says to reconnect the client so it re-reads the tools.
+
+Worth knowing after any upgrade that adds or changes a tool: reconnect before the new arguments will reach the plugin.
+
 
 ### 2.24.1 (2026-08-29)
 A scripted condition whose script has been emptied now says what it is instead of reporting an unknown code.

@@ -78,6 +78,22 @@ def test_both_conditions_needed():
         delete_gate.check("delete_trigger", {})
 
 
+def test_missing_confirm_names_the_stale_client_cache():
+    """An MCP client caches the tool list and drops unknown arguments.
+
+    A client connected before this gate existed strips `confirm` in flight, so
+    the caller is refused for omitting something they did pass. Telling them
+    only to "pass confirm=true" is advice they cannot act on. Live-hit within
+    an hour of shipping the gate.
+    """
+    _allow(True)
+    with pytest.raises(DeleteDenied) as exc:
+        delete_gate.check("delete_trigger", {})
+    message = str(exc.value)
+    assert "reconnect" in message
+    assert "tool list" in message
+
+
 def test_refusal_names_every_missing_condition():
     """Naming only the first would send the caller round the loop twice."""
     _allow(False)

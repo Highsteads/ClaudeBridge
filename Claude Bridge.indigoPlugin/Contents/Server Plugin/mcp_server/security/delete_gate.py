@@ -104,9 +104,20 @@ def check(tool_name: str, tool_args: Dict[str, Any]) -> None:
             f"'{PREFERENCE_LABEL}' in Plugins → Claude Bridge → Configure to allow it"
         )
     if not confirmed:
+        # The stale-tool-list case is named explicitly. An MCP client caches
+        # the tool list at connect time and DROPS arguments the cached schema
+        # does not know about, so a client connected before this gate existed
+        # strips `confirm` in flight and the caller is refused for omitting
+        # something they did pass. Without this sentence the advice is
+        # "do the thing you just did", which is the loop this gate's
+        # every-reason-at-once rule exists to avoid. Live-hit within an hour
+        # of shipping the gate, 29-Aug-2026.
         reasons.append(
             "the call did not pass confirm=true — repeat the request with "
-            "confirm set to true once you are sure of the target"
+            "confirm set to true once you are sure of the target. If you DID "
+            "pass it, your MCP client is holding a tool list from before this "
+            "plugin version and dropped the argument in flight: reconnect the "
+            "client so it re-reads the tools, then try again"
         )
     raise DeleteDenied(
         f"'{tool_name}' refused: " + "; and ".join(reasons) +
