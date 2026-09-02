@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.24.3
+**Version:** 2.24.4
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -854,6 +854,11 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+### 2.24.4 (2026-09-02)
+The plugin-development tools can find your source repos again.
+
+`plugin_diff_source_vs_installed` and the other plugin-dev tools looked for the GitHub clones in one fixed place, `~/Documents/GitHub`. On this machine the clones moved to `~/GitHub` two weeks ago, and every drift check since has answered "no source repo matches" for every plugin — the tool built to catch drift could not see any repo to compare against. It now looks in `~/GitHub` first and falls back to `~/Documents/GitHub`, so either layout works.
 
 ### 2.24.3 (2026-08-30)
 The plugin no longer claims it will tell your client when its tools change, because it never could.

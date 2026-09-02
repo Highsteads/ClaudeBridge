@@ -13,7 +13,7 @@
 #
 # All filesystem paths are derived at call time:
 #   - installed plugin:  indigo.server.getInstallFolderPath() / Plugins / <name>.indigoPlugin
-#   - source repo:       ~/Documents/GitHub/<RepoName>
+#   - source repo:       ~/GitHub/<RepoName> (falls back to ~/Documents/GitHub)
 #   - SQL Logger DB:     indigo.server.getInstallFolderPath() / Logs / indigo_history.sqlite
 #
 # Returns are all dicts wrapped at the mcp_handler dispatch layer.
@@ -68,8 +68,19 @@ def _sql_logger_db() -> str:
     return os.path.join(_indigo_base(), "Logs", "indigo_history.sqlite")
 
 def _github_root() -> str:
-    """Best-effort: the user's GitHub clone root."""
-    return os.path.expanduser("~/Documents/GitHub")
+    """Best-effort: the user's GitHub clone root.
+
+    ~/GitHub first — the clones moved there on 17-Aug-2026, out of iCloud
+    Drive, which had been evicting .git files and resurrecting overwritten
+    files as numbered copies. ~/Documents/GitHub stays as the fallback for an
+    install that still keeps them there. Until 02-Sep-2026 this returned the
+    old path only, so plugin_diff_source_vs_installed answered "no source
+    repo" for every plugin on this machine for two weeks."""
+    for cand in ("~/GitHub", "~/Documents/GitHub"):
+        path = os.path.expanduser(cand)
+        if os.path.isdir(path):
+            return path
+    return os.path.expanduser("~/GitHub")
 
 def _resolve_node() -> Optional[str]:
     """Locate the node binary. Indigo's plugin host runs with a minimal PATH
@@ -124,7 +135,7 @@ def _resolve_installed_bundle(plugin_name: str) -> Optional[str]:
 
 def _resolve_source_repo(plugin_name: str) -> Optional[str]:
     """
-    Find the source repo for a plugin under ~/Documents/GitHub/. Tries:
+    Find the source repo for a plugin under the GitHub clone root. Tries:
       - exact match
       - case-insensitive
       - stripped-spaces variant ('Claude Bridge' → 'ClaudeBridge')

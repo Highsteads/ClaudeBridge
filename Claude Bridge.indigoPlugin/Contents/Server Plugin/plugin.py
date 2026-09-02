@@ -5,7 +5,7 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        30-08-2026
-# Version:     2.24.3
+# Version:     2.24.4
 #
 # v2.22.0 (26-08-2026): find_automation_references now reads the script
 # folders. It answered from the .indiDb action steps and the server's own
