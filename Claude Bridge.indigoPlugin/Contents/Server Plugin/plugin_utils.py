@@ -5,7 +5,7 @@
 #              Bundled in Contents/Server Plugin/ and imported via os.getcwd()
 # Author:      CliveS & Claude Opus 4.8
 # Date:        02-08-2026
-# Version:     1.4
+# Version:     1.5
 #
 # v1.4 (02-08-2026): as_bool() returns the DEFAULT for a string it does not
 # recognise, rather than False. Returning False silently flipped every
@@ -82,7 +82,10 @@ def log_startup_banner(plugin_id, display_name, version, extras=None):
     """
     if indigo is None:
         return
-    title = f"Starting {display_name} Plugin"
+    # The name and version inside the bar (v1.5) — this banner has only been
+    # emitted from Show Plugin Info / Test Connection since 25-May-2026, so
+    # "Starting ..." timestamped hours after boot read as a restart.
+    title = f"{display_name} v{version}"
     width = 60
     # Centre the title within the bar; if title is longer than the bar (very
     # long plugin names) just emit the title on its own line.
@@ -142,6 +145,30 @@ class MillisecondTimestampFilter(logging.Filter):
         return True
 
 
+_LOG_LEVEL_NAMES = {
+    "DEBUG":    logging.DEBUG,
+    "INFO":     logging.INFO,
+    "WARNING":  logging.WARNING,
+    "ERROR":    logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
+
+def log_level(level, default=logging.INFO):
+    """Map a level NAME ("WARNING") or int to the logging int that
+    indigo.server.log(level=...) wants (v1.5). A STRING passed straight
+    through is silently ignored by Indigo and the line logs as plain Info —
+    the bug that hid every WARNING and ERROR raised through the house log()
+    helper until 21-Jul-2026, and that the template re-introduced for six
+    weeks because every file carried its own copy of this map. Junk maps to
+    `default` rather than raising."""
+    if isinstance(level, bool):
+        return default
+    if isinstance(level, int):
+        return level
+    return _LOG_LEVEL_NAMES.get(str(level).strip().upper(), default)
+
+
 def as_bool(value, default=False):
     """Coerce an Indigo value to a bool without being fooled by "false".
 
@@ -156,9 +183,11 @@ def as_bool(value, default=False):
     if isinstance(value, (int, float)):
         return bool(value)
     s = str(value).strip().lower()
-    if s in ("true", "1", "yes", "on"):
+    # "t" / "f" are what psql prints for a PostgreSQL boolean column (v1.5) —
+    # unambiguous, and a history bool read through here returned the DEFAULT.
+    if s in ("true", "1", "yes", "on", "t"):
         return True
-    if s in ("false", "0", "no", "off"):
+    if s in ("false", "0", "no", "off", "f"):
         return False
     # An UNRECOGNISED string is unknown, not False — returning False here
     # silently flipped default=True callers off whenever a pref held junk.
@@ -191,6 +220,7 @@ def install_timestamp_filter(plugin, enabled=True):
         def menuToggleTimestamps(self):
             self.timestamp_enabled = not self.timestamp_enabled
             self.pluginPrefs["timestampEnabled"] = self.timestamp_enabled
+            self.savePluginPrefs()          # a menu-callback pref write only reaches disk on a graceful shutdown otherwise
             if self._ts_filter:
                 self._ts_filter.enabled = self.timestamp_enabled
             state = "ON" if self.timestamp_enabled else "OFF"
