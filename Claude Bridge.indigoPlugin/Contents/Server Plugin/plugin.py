@@ -4,8 +4,20 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
-# Date:        30-08-2026
-# Version:     2.24.4
+# Date:        06-09-2026
+# Version:     2.25.0
+#
+# v2.25.0 (06-09-2026): execute_device_action — run a plugin's OWN Actions.xml
+# action, the ones under Device -> Actions that no built-in tool could reach.
+# Every plugin feature used to end with a human clicking that menu to validate
+# it. Indigo's executeAction has taken (actionTypeId, deviceId, props) all
+# along; what stopped it being usable is that it fails SILENTLY three ways —
+# unknown action id, device action called with no device, owning plugin not
+# running — so the tool checks the call against the plugin's own Actions.xml
+# and refuses instead. Measured the same day: setTimerStartValue with the
+# device id moved a timer 60 -> 43 seconds, the identical call without it
+# returned None and changed nothing. That, not "props are lost in cross-plugin
+# serialisation", is the real Email+ trap.
 #
 # v2.22.0 (26-08-2026): find_automation_references now reads the script
 # folders. It answered from the .indiDb action steps and the server's own

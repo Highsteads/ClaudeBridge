@@ -2009,6 +2009,60 @@ class MCPHandler:
             "function": self._tool_restart_plugin
         }
 
+        # v2.25.0 — call a plugin's OWN Actions.xml action. The one gap that
+        # left every plugin feature ending "a human runs it from Device ->
+        # Actions to validate".
+        self._tools["execute_device_action"] = {
+            "description": (
+                "Run a plugin's own custom action from its Actions.xml — the actions "
+                "that appear under Device -> Actions in the Indigo client, which no "
+                "built-in tool can reach. Give device_id for a device action (Indigo "
+                "marks those with deviceFilter) or plugin_id alone for a plugin-level "
+                "action; props carries the action's ConfigUI fields. The call is "
+                "checked against the plugin's Actions.xml first, so an unknown action "
+                "id, a device action with no device, or a stopped owning plugin come "
+                "back as errors — Indigo itself returns cleanly and does nothing in all "
+                "three cases. A plugin action reports success by changing state, not by "
+                "returning a value, so re-read the device to confirm the effect. ADMIN "
+                "scope: these actuate real hardware (valves, locks, doors, sprinklers)."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action_type_id": {
+                        "type": "string",
+                        "description": "The <Action id=...> from the plugin's Actions.xml"
+                    },
+                    "device_id": {
+                        "anyOf": [{"type": "number"}, {"type": "string"}],
+                        "description": ("Device id or exact name. REQUIRED for any action "
+                                        "declared with deviceFilter; omit only for a "
+                                        "plugin-level action.")
+                    },
+                    "props": {
+                        "type": "object",
+                        "description": ("The action's ConfigUI field values, e.g. "
+                                        "{'amount': '43', 'amountType': 'seconds'}. Indigo "
+                                        "stores ConfigUI values as strings, so prefer "
+                                        "strings unless the field is a checkbox.")
+                    },
+                    "plugin_id": {
+                        "type": "string",
+                        "description": ("Owning plugin's bundle id. Derived from the device "
+                                        "when omitted; required for a plugin-level action.")
+                    },
+                    "wait_until_done": {
+                        "type": "boolean",
+                        "description": ("Block until the plugin's callback returns (default "
+                                        "true). Dispatch is single-threaded, so a slow "
+                                        "action holds every other tool call.")
+                    }
+                },
+                "required": ["action_type_id"]
+            },
+            "function": self._tool_execute_device_action
+        }
+
         self._tools["get_plugin_status"] = {
             "description": "Get detailed plugin status",
             "inputSchema": {
@@ -3249,7 +3303,11 @@ class MCPHandler:
                             "unsupported and may change between Indigo versions. Only "
                             "'Get*' request names are permitted; mutating raw commands "
                             "are not reachable. Example: name='GetControlPage', "
-                            "args={'ID': 12345, 'GetPageFlags': 65538}."),
+                            "args={'ID': 12345, 'GetPageFlags': 65536}. Use 65536, NOT "
+                            "Indigo's own FULL_PAGE_FLAGS (65538) — its second flag is "
+                            "ignore_actions, so 65538 withholds every element's action and "
+                            "a page of working buttons reads as if nothing on it does "
+                            "anything."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -5309,6 +5367,28 @@ class MCPHandler:
         except Exception as e:
             self.logger.error(f"Restart plugin error: {e}")
             return safe_json_dumps({"error": str(e)})
+
+    def _tool_execute_device_action(
+        self,
+        action_type_id: str,
+        device_id=None,
+        props=None,
+        plugin_id: str = None,
+        wait_until_done: bool = True,
+    ) -> str:
+        """Execute a plugin's own Actions.xml action."""
+        try:
+            result = self.plugin_control_handler.execute_device_action(
+                action_type_id=action_type_id,
+                device_id=device_id,
+                props=props,
+                plugin_id=plugin_id,
+                wait_until_done=wait_until_done,
+            )
+            return safe_json_dumps(result)
+        except Exception as e:
+            self.logger.error(f"Execute device action error: {e}")
+            return safe_json_dumps({"success": False, "error": str(e)})
 
     def _tool_get_plugin_status(self, plugin_id: str) -> str:
         """Get plugin status tool implementation."""

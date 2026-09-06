@@ -134,6 +134,10 @@ ADMIN_TOOLS: Set[str] = {
     "write_script", "create_script", "delete_script",
     # Plugin lifecycle
     "restart_plugin", "plugin_refresh_deps",
+    # Running another plugin's own action. ADMIN because the blast radius is
+    # whatever that plugin exposes — valves, locks, garage doors, sprinkler
+    # zones, alarm arming — and a wrong device id actuates the wrong hardware.
+    "execute_device_action",
     # Irreversible deletes
     "delete_device", "delete_schedule", "delete_trigger", "delete_action_group", "variable_delete",
     "remove_all_delayed_actions",

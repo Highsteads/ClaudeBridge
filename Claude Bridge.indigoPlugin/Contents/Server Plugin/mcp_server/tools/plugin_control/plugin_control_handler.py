@@ -14,6 +14,7 @@ except ImportError:
     indigo = None
 
 from ...adapters.data_provider import DataProvider
+from ...common import plugin_actions
 from ..base_handler import BaseToolHandler
 from .plugin_scanner import PluginScanner
 
@@ -197,6 +198,206 @@ class PluginControlHandler(BaseToolHandler):
             error_msg = f"Failed to restart plugin '{plugin_id}': {e}"
             self.logger.error(error_msg, exc_info=True)
             return {"success": False, "error": error_msg}
+
+    def execute_device_action(
+        self,
+        action_type_id: str,
+        device_id: Optional[Any] = None,
+        props: Optional[Dict[str, Any]] = None,
+        plugin_id: Optional[str] = None,
+        wait_until_done: bool = True,
+    ) -> Dict[str, Any]:
+        """Invoke a plugin's own Actions.xml action, with the guards Indigo lacks.
+
+        The bare `executeAction` call has three silent-failure modes, and this
+        method exists to convert each into an error the caller can act on:
+        an unknown action id, a device action called with no device, and an
+        owning plugin that is not running (a stopped plugin swallows every
+        action and the caller sees no exception at all).
+        """
+        self.log_incoming_request(
+            "execute_device_action",
+            {"action_type_id": action_type_id, "device_id": device_id,
+             "plugin_id": plugin_id, "prop_keys": sorted(props or {})},
+        )
+        try:
+            if not indigo:
+                return {"success": False, "error": "Indigo module not available"}
+
+            action_type_id = (action_type_id or "").strip()
+            if not action_type_id:
+                return {"success": False, "error": "action_type_id is required"}
+
+            # ── Resolve the device (id or name), if one was given ───────────
+            device = None
+            dev_id: Optional[int] = None
+            if device_id is not None:
+                device, err = self._resolve_device(device_id)
+                if err:
+                    return {"success": False, "error": err}
+                dev_id = device.id
+
+            # ── Resolve the owning plugin ──────────────────────────────────
+            if not plugin_id:
+                if device is None:
+                    return {
+                        "success": False,
+                        "error": ("Pass device_id (the action's device) or plugin_id "
+                                  "(for a plugin-level action) so the owning plugin "
+                                  "can be identified."),
+                    }
+                plugin_id = device.pluginId
+                if not plugin_id:
+                    return {
+                        "success": False,
+                        "error": (f"Device {dev_id} ('{device.name}') is not owned by a "
+                                  f"plugin, so it has no plugin actions. Use the "
+                                  f"built-in device tools instead."),
+                    }
+
+            plugin = indigo.server.getPlugin(plugin_id)
+
+            # getPlugin() with a WRONG id does not raise — it returns an object
+            # whose isInstalled/isEnabled/isRunning are all False, which reads
+            # exactly like a real outage. An empty pluginFolderPath is the only
+            # thing that tells the two apart.
+            if not plugin.pluginFolderPath:
+                return {
+                    "success": False,
+                    "error": (f"No plugin is installed with id '{plugin_id}'. Check the "
+                              f"id — a typo here looks identical to a stopped plugin."),
+                    "suggestion": "Use list_plugins to see installed plugin ids",
+                }
+
+            if not plugin.isRunning():
+                return {
+                    "success": False,
+                    "error": (f"Plugin '{plugin_id}' is installed but not running "
+                              f"(enabled={plugin.isEnabled()}). Indigo would swallow the "
+                              f"action and report nothing."),
+                    "plugin": {"id": plugin_id, "installed": True,
+                               "enabled": plugin.isEnabled(), "running": False},
+                    "suggestion": "Enable or restart the plugin, then retry",
+                }
+
+            # ── Check the call against the plugin's own Actions.xml ─────────
+            declared = plugin_actions.read_plugin_actions(plugin.pluginFolderPath)
+            validated = declared["available"]
+            warnings: List[str] = []
+            action_meta = None
+
+            if validated:
+                verdict = plugin_actions.check_call(
+                    declared["actions"], action_type_id, dev_id, props
+                )
+                if not verdict["ok"]:
+                    return {
+                        "success": False,
+                        "error": verdict["error"],
+                        "plugin_id": plugin_id,
+                        "available_actions": plugin_actions.summarise_actions(
+                            declared["actions"]
+                        ),
+                    }
+                warnings = verdict["warnings"]
+                action_meta = verdict["action"]
+            else:
+                warnings.append(
+                    f"Could not check this call against the plugin's Actions.xml "
+                    f"({declared['reason']}) — dispatching unguarded, so a wrong "
+                    f"action id or a missing device would fail silently."
+                )
+
+            # ── Dispatch ───────────────────────────────────────────────────
+            # Audit trail in the Indigo event log: an action fired by an AI
+            # caller must be as visible afterwards as one fired from the UI.
+            target = f" on '{device.name}' ({dev_id})" if device is not None else ""
+            prop_desc = ", ".join(f"{k}={v!r}" for k, v in sorted((props or {}).items()))
+            indigo.server.log(
+                f"execute_device_action: '{action_type_id}'{target} via {plugin_id}"
+                + (f" [{prop_desc}]" if prop_desc else " [no props]")
+            )
+
+            kwargs: Dict[str, Any] = {"waitUntilDone": bool(wait_until_done)}
+            if dev_id is not None:
+                kwargs["deviceId"] = dev_id
+            if props:
+                kwargs["props"] = props
+
+            returned = plugin.executeAction(action_type_id, **kwargs)
+
+            result: Dict[str, Any] = {
+                "success": True,
+                "plugin_id": plugin_id,
+                "action_type_id": action_type_id,
+                "device_id": dev_id,
+                "device_name": device.name if device is not None else None,
+                "props_sent": dict(props or {}),
+                "wait_until_done": bool(wait_until_done),
+                "validated_against_actions_xml": validated,
+                # Most actions return nothing. A None here means "the plugin's
+                # callback returned nothing", NOT "nothing happened" — read the
+                # device's own state to confirm an effect.
+                "plugin_returned": self._plain(returned),
+                "note": ("Dispatched. A plugin action reports success by changing "
+                         "state, not by returning a value — re-read the device if "
+                         "you need proof the effect landed."),
+            }
+            if action_meta:
+                result["action"] = {
+                    "name": action_meta.get("name", ""),
+                    "needs_device": action_meta.get("device_action", False),
+                    "declared_props": action_meta.get("fields", []),
+                }
+            if warnings:
+                result["warnings"] = warnings
+
+            self.log_tool_outcome(
+                "execute_device_action", True,
+                f"{plugin_id}:{action_type_id}{target}",
+            )
+            return result
+
+        except Exception as e:
+            error_msg = f"Failed to execute '{action_type_id}' on '{plugin_id}': {e}"
+            self.logger.error(error_msg, exc_info=True)
+            self.log_tool_outcome("execute_device_action", False, error_msg)
+            return {"success": False, "error": error_msg}
+
+    def _resolve_device(self, device_id: Any):
+        """Accept a numeric id or an exact device name. Returns (device, error)."""
+        # bool subclasses int, so a stray JSON true would otherwise be device 1.
+        if isinstance(device_id, bool):
+            return None, f"Expected a device id or name, got {device_id!r}"
+        if isinstance(device_id, int) or (
+            isinstance(device_id, str) and device_id.strip().isdigit()
+        ):
+            did = int(str(device_id).strip())
+            if did not in indigo.devices:
+                return None, f"No device with id {did}"
+            return indigo.devices[did], ""
+        name = str(device_id).strip()
+        for dev in indigo.devices:
+            if dev.name == name:
+                return dev, ""
+        for dev in indigo.devices:
+            if dev.name.lower() == name.lower():
+                return dev, ""
+        return None, f"No device found matching '{name}'"
+
+    @staticmethod
+    def _plain(value):
+        """Make a plugin's return value JSON-safe (it may be an indigo.Dict)."""
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return value
+        try:
+            if hasattr(value, "items"):
+                return {str(k): PluginControlHandler._plain(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [PluginControlHandler._plain(v) for v in value]
+        except Exception:                                          # noqa: BLE001
+            pass
+        return str(value)
 
     def get_plugin_status(self, plugin_id: str) -> Dict[str, Any]:
         """
