@@ -5,7 +5,7 @@
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5
 # Date:        06-09-2026
-# Version:     2.25.0
+# Version:     2.25.1
 #
 # v2.25.0 (06-09-2026): execute_device_action — run a plugin's OWN Actions.xml
 # action, the ones under Device -> Actions that no built-in tool could reach.

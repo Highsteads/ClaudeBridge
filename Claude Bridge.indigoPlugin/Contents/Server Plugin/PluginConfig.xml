@@ -67,7 +67,9 @@ and leave this field blank.</Label>
     <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_url"
            defaultValue="">
         <Label>InfluxDB Host:</Label>
-        <Description>InfluxDB host (e.g. 192.168.x.x) — the IndigoSecrets.py key for this is INFLUXDB_HOST. Protocol prefix is stripped.</Description>
+    </Field>
+    <Field id="label_influx_url_info" type="label">
+        <Label>InfluxDB host (e.g. 192.168.x.x) — the IndigoSecrets.py key for this is INFLUXDB_HOST. Protocol prefix is stripped.</Label>
     </Field>
 
     <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_port"
@@ -132,12 +134,16 @@ and leave this field blank.</Label>
 
     <Field id="webhook_allowlist" type="textfield" defaultValue="">
         <Label>Egress allow-list:</Label>
-        <Description>Comma/newline-separated hosts, IPs or CIDRs the home may POST to. Forms: hooks.example.com, *.example.com, 203.0.113.5, 192.168.1.50/32. Blank = deny all. Unioned with IndigoSecrets.py WEBHOOK_ALLOWLIST.</Description>
+    </Field>
+    <Field id="label_webhook_allowlist_info" type="label">
+        <Label>Comma/newline-separated hosts, IPs or CIDRs the home may POST to. Forms: hooks.example.com, *.example.com, 203.0.113.5, 192.168.1.50/32. Blank = deny all. Unioned with IndigoSecrets.py WEBHOOK_ALLOWLIST.</Label>
     </Field>
 
     <Field id="webhook_http_allowlist" type="textfield" defaultValue="">
         <Label>Plain-HTTP allow-list:</Label>
-        <Description>Hosts/IPs permitted over plain http (no TLS) — for LAN receivers only. https is the default and is always allowed for allow-listed hosts.</Description>
+    </Field>
+    <Field id="label_webhook_http_allowlist_info" type="label">
+        <Label>Hosts/IPs permitted over plain http (no TLS) — for LAN receivers only. https is the default and is always allowed for allow-listed hosts.</Label>
     </Field>
 
     <Field id="separator3" type="separator"/>
@@ -188,6 +194,8 @@ and leave this field blank.</Label>
     </Field>
     <Field type="checkbox" id="auto_configure_claude_code" defaultValue="true">
         <Label>Auto-configure Claude Code:</Label>
-        <Description>When enabled (default), the plugin copies indigo_mcp_proxy.py to /Library/Application Support/Perceptive Automation/Scripts/ on startup, patches the Bearer token, and edits ~/.mcp.json and ~/.claude/settings.json so Claude Code can connect without manual setup. Disable if you manage these files yourself.</Description>
+    </Field>
+    <Field id="label_auto_configure_claude_code_info" type="label">
+        <Label>When enabled (default), the plugin copies indigo_mcp_proxy.py to /Library/Application Support/Perceptive Automation/Scripts/ on startup, patches the Bearer token, and edits ~/.mcp.json and ~/.claude/settings.json so Claude Code can connect without manual setup. Disable if you manage these files yourself.</Label>
     </Field>
 </PluginConfig>

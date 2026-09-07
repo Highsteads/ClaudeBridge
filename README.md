@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.25.0
+**Version:** 2.25.1
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -855,6 +855,14 @@ Claude Bridge.indigoPlugin/
 ---
 
 ## Changelog
+
+
+### 2.25.1 (2026-09-07)
+The settings dialog was stretched wider than its own window, so the help text beside each setting was cut off mid-sentence.
+
+The short help that can be attached to a setting is drawn on a single line and never wraps, so the longest one in the dialog decides how wide every row is — and the window cannot be widened past a fixed maximum. All four long ones have moved into ordinary description paragraphs, which do wrap.
+
+Two new checks fail the build if any help text or setting label grows long enough to do it again, and the same file also checks every dialog parses, that field ids are unique within each dialog and that every visibility binding resolves. No setting or behaviour changed.
 
 ### 2.25.0 (2026-09-06)
 Claude can now run a plugin's own actions — the ones under Device -> Actions.
