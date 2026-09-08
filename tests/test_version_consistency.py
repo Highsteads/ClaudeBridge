@@ -82,3 +82,39 @@ def test_generated_tool_table_is_current():
         "README tool table is stale or a tool is unclassified — run "
         "`python3 scripts/generate_tool_doc.py --write`\n"
         + (result.stdout or "") + (result.stderr or ""))
+
+
+def test_required_info_plist_keys_are_present():
+    """Six required keys, per Indigo's Developer's Guide.
+
+    CFBundleURLTypes is the one repeatedly missed — it becomes the plugin's
+    "About [PLUGIN]" menu item, and the Plugin Store expects it.
+    """
+    with open(PLIST, "rb") as fh:
+        keys = set(plistlib.load(fh))
+    required = {"PluginVersion", "ServerApiVersion", "CFBundleDisplayName",
+                "CFBundleIdentifier", "CFBundleVersion", "CFBundleURLTypes"}
+    assert required <= keys, f"missing: {sorted(required - keys)}"
+
+
+def test_cfbundleurltypes_has_the_shape_indigo_accepts():
+    """Presence is not enough — the SHAPE is what Indigo validates.
+
+    CFBundleURLTypes must be an array of dicts keyed CFBundleURLName. Written as a
+    bare string the plist still parses, still contains the key, and still passes a
+    presence check — but Indigo refuses the bundle at install with
+
+        InstallPlugin() caught exception: LowLevelBadParameterError
+
+    which names neither the key nor the file. Cost a failed install on 01-09-2026.
+    """
+    with open(PLIST, "rb") as handle:
+        plist = plistlib.load(handle)
+    entry = plist.get("CFBundleURLTypes")
+    assert isinstance(entry, list), (
+        f"CFBundleURLTypes must be an array, got {type(entry).__name__}")
+    assert entry, "CFBundleURLTypes must not be empty"
+    for item in entry:
+        assert isinstance(item, dict), (
+            f"each CFBundleURLTypes entry must be a dict, got {type(item).__name__}")
+        assert item.get("CFBundleURLName"), "each entry needs a non-empty CFBundleURLName"
