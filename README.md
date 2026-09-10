@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.25.1
+**Version:** 2.26.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -21,7 +21,7 @@ Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://cla
 │  Claude Code        │         │  go-between script   │         │  Indigo web  │
 │  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
 │                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (167 tools) │
+│                     │         │  key automatically   │         │  (168 tools) │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
@@ -170,7 +170,7 @@ it in a couple of round-trips.
 
 ## What it does
 
-Claude Bridge gives Claude Code **167 MCP tools**, enough to read and change
+Claude Bridge gives Claude Code **168 MCP tools**, enough to read and change
 anything on a running Indigo server. They fall into the groups below, and every
 tool is listed by name in [Available Tools](#available-tools) further down.
 
@@ -258,6 +258,10 @@ tool is listed by name in [Available Tools](#available-tools) further down.
   really came from your system. The whole feature ships switched off until
   you turn it on. There's a small example receiver in `examples/` to get you
   going in minutes.
+
+### Plugin-provided tools — other plugins bring their own
+
+Any Indigo plugin can add tools of its own to Claude Bridge by shipping one JSON file, `Contents/Resources/mcp-manifest.json`, in its bundle. Claude Bridge finds the file on its own, lists the tools to Claude under that plugin's prefix (the Dashboards plugin's come out as `dashboards_get_status`, `dashboards_set_camera` and so on), and forwards each call to the plugin, which does the work and answers. Nothing to configure on either side, and a plugin picked up the moment it starts. The format is the provider-manifest contract published by [mlamoure's Indigo MCP Server](https://github.com/mlamoure/indigo-mcp-server), so a plugin written for that server works here unchanged, and one written for Claude Bridge works there. Tools a plugin marks as writes are governed by one switch under Configure, *Allow plugin-provided tools to make changes*, on by default; read tools always work. How to make your own plugin a provider is at the end of this README.
 
 ### Persistent memory
 - `remember` / `recall` / `recall_topics` / `forget` — JSON-on-disk cross-
@@ -351,7 +355,7 @@ Anthropic API account with pay-as-you-go billing instead of a subscription.)
 it.** The plugin can hold its own API key from
 [console.anthropic.com](https://console.anthropic.com), but it only uses it for
 one thing: writing AI summaries inside the historical-analysis tool, which also
-needs an InfluxDB database set up — a niche feature. **All 167 tools work
+needs an InfluxDB database set up — a niche feature. **All 168 tools work
 without this key.** If you do set one up, it bills per use (pennies a month,
 as a rule), separately from your subscription.
 
@@ -383,7 +387,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 167 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 168 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and
@@ -466,7 +470,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 167 tools available.
+The `indigo-mcp` tools will appear on next session start. You should see 168 tools available.
 
 </details>
 
@@ -521,7 +525,7 @@ Network: http://<your-indigo-server-ip>:8176/message/com.clives.indigoplugin.cla
 
 ## Available Tools
 
-**167 tools, grouped by security scope.** This table is **auto-generated** from the
+**168 tools, grouped by security scope.** This table is **auto-generated** from the
 plugin's own tool registry (`mcp_server/mcp_handler.py`) cross-referenced with the
 deny-by-default scope classification (`mcp_server/security/scope_manager.py`), so it
 can never drift from the code. Regenerate with `python3 scripts/generate_tool_doc.py
@@ -529,6 +533,8 @@ can never drift from the code. Regenerate with `python3 scripts/generate_tool_do
 Read + Write tools, and `admin` is required for the **Admin** tools. For a friendlier
 overview organised by function (devices, heating, energy, …) see
 [What it does](#what-it-does) above.
+
+Tools that other plugins contribute (see [Plugin-provided tools](#plugin-provided-tools--other-plugins-bring-their-own)) are not in this table: they come and go with the plugins that ship them, and each is listed under its own prefix on top of the 168 below.
 
 > **A note on variable values.** The Read tools that return variables (`get_variable_by_id`,
 > `list_variables`, `home_status` and the like) return each variable's value in full, so any
@@ -734,6 +740,74 @@ _Destructive / irreversible / code-execution / lifecycle / physical-security. Re
 
 ---
 
+## Letting your plugin add tools
+
+A plugin becomes a provider with three things, and stays perfectly usable for people who have no MCP server at all: the manifest is inert data, the hidden action is only ever called by a server, and the broadcast is a no-op when nobody is listening.
+
+**1. The manifest**, at `Contents/Resources/mcp-manifest.json`:
+
+```json
+{
+  "manifest_version": 1,
+  "provider": {"plugin_id": "com.example.myplugin", "display_name": "My Plugin"},
+  "tools": [
+    {
+      "name": "get_status",
+      "description": "Say what the plugin is doing. Read-only.",
+      "write": false,
+      "timeout_seconds": 15,
+      "inputSchema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+      "name": "set_mode",
+      "description": "Change the operating mode. Saves the plugin's preferences.",
+      "write": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {"mode": {"type": "string", "enum": ["auto", "manual"]}},
+        "required": ["mode"]
+      }
+    }
+  ]
+}
+```
+
+`provider.plugin_id` must equal your bundle's `CFBundleIdentifier`, or the whole file is refused. Tool names are `^[a-z][a-z0-9_]{0,40}$` and unique; the AI sees them as `{prefix}_{name}`, where the prefix is the last dot-segment of your plugin id (an optional `tool_prefix` overrides it, `^[a-z][a-z0-9_]{0,31}$`). Prefixes are first come, first served across plugins. `write` defaults to `true`, so an undeclared tool is treated as a write and refused when the switch is off. `timeout_seconds` is clamped to 5–120, default 30. The description is what the AI decides from, so say whether the tool is read-only and what a write changes.
+
+**2. The hidden action** in `Actions.xml`, which Claude Bridge calls with `executeAction`:
+
+```xml
+<Action id="mcp_tool_invoke" uiPath="hidden">
+    <Name>MCP Tool Invocation Endpoint</Name>
+    <CallbackMethod>handle_mcp_tool_invoke</CallbackMethod>
+</Action>
+```
+
+Its callback receives `action.props["tool"]` (the bare name) and `action.props["arguments"]` (a JSON string, never an `indigo.Dict`), and must return a JSON string: `{"status": "ok", "result": ...}` on success, or `{"status": "error", "error": {"type": "validation"|"not_found"|"conflict"|"internal", "message": "...", "details": ...}}` on failure. Return errors in the envelope rather than raising; validate every argument yourself, because the call does not pass through your ConfigUI. Import the code that does the work inside the callback, so a fault in it can never stop your plugin starting. Note that every hidden action is also reachable over the Indigo web server with an API key; answer a request that arrives that way (it carries `request_body` and no `tool`) with an HTTP reply dict, not a tool.
+
+```python
+def handle_mcp_tool_invoke(self, action, dev=None, callerWaitingForResult=True):
+    import json
+    try:
+        from my_tools import dispatch            # lazy, on purpose
+        tool = action.props.get("tool", "")
+        arguments = json.loads(action.props.get("arguments", "{}"))
+        return dispatch(self, tool, arguments)   # returns the JSON-string envelope
+    except Exception as e:
+        return json.dumps({"status": "error", "error": {"type": "internal", "message": str(e)}})
+```
+
+**3. The broadcast**, one guarded line at the end of `startup()`, so your tools register the moment your plugin starts rather than at the server's next scan:
+
+```python
+try:
+    indigo.server.broadcastToSubscribers("mcp_tools_updated")
+except Exception:
+    pass
+```
+
+Keep the handler quick: it runs on your plugin's single callback thread, so a slow tool freezes your own plugin, and a call that overruns its timeout is abandoned and reported to the AI as a timeout. Never call back into Claude Bridge from a tool handler with `waitUntilDone=True`; the two plugins would wait on each other for ever. A client that was already connected sees a new provider's tools only when it starts a fresh session, because MCP clients cache the tool list at connect. The [Dashboards plugin](https://github.com/Highsteads/Dashboards) is a complete worked example, eight tools with tests.
+
 ## Why is there a go-between script?
 
 Claude Code and Indigo's web server expect slightly different things of each other, so a small script sits between them and translates. It answers Claude Code in the form it expects, attaches your Indigo access key to every request so you never have to think about it, holds the connection open and rebuilds it quietly if Indigo restarts, and irons out the formatting differences between the two sides. It is installed and configured for you, and the only time you would ever open it is if something in Troubleshooting below sends you there.
@@ -846,7 +920,7 @@ Claude Bridge.indigoPlugin/
 │           │   └── vector_store/           # Text search store
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
-│           └── tools/                      # 21 tool handler modules (167 tools)
+│           └── tools/                      # 21 tool handler modules (168 tools)
 │       ├── indigo_mcp_proxy.py             # Claude Code go-between script
 │       └── install.py                      # one-shot installer
 └── README.md
@@ -856,6 +930,15 @@ Claude Bridge.indigoPlugin/
 
 ## Changelog
 
+
+### 2.26.0 (2026-09-10)
+Other plugins can now bring their own tools to Claude Bridge.
+
+A plugin that ships a small JSON file in its bundle, `Contents/Resources/mcp-manifest.json`, has its tools listed to Claude under its own prefix and every call forwarded to it — no configuration here, no configuration there, and a plugin picked up the moment it starts. The format is the provider-manifest contract mlamoure published for his Indigo MCP Server, followed here from the published specification, so a plugin written for either server works with both. The first provider is the Dashboards plugin (from its 3.12.0), which offers eight `dashboards_` tools: its status, its setup check as data, the room folders read and set, the cameras listed, added and removed, and the last lines of its own log.
+
+Tools a plugin marks as writes are governed by one new switch under Configure, *Allow plugin-provided tools to make changes*, on by default and honoured at once; read tools always work. Each provider tool is classified read or write for the per-token scopes as it is registered, and never admin — the plugin decided what it does. Two new menu items print the providers found and rescan them on demand; a provider that appears, changes or vanishes is also noticed at the next tool listing. A plugin's own stopping is reported as exactly that, a hung one as a timeout rather than a hang, and a reply that breaks the contract as a protocol violation naming the plugin.
+
+The README's tool count read 167 in seven places while the generated table and the repo description said 168; it says 168 now. 54 tests for the new module; the built-in tool table is unchanged, because a plugin's tools are not built in.
 
 ### 2.25.1 (2026-09-07)
 The settings dialog was stretched wider than its own window, so the help text beside each setting was cut off mid-sentence.

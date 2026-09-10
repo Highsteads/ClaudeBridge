@@ -3,9 +3,9 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Opus 5
-# Date:        06-09-2026
-# Version:     2.25.1
+# Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5
+# Date:        10-09-2026
+# Version:     2.26.0
 #
 # v2.25.0 (06-09-2026): execute_device_action — run a plugin's OWN Actions.xml
 # action, the ones under Device -> Actions that no built-in tool could reach.
@@ -931,6 +931,13 @@ class Plugin(indigo.PluginBase):
         # effect while the gate still held the old value.
         self.allow_destructive_delete = self._as_bool(
             plugin_prefs.get("allow_destructive_delete", False))
+        # Plugin-provided tools (v2.26.0): may the tools another plugin marks as
+        # writes make changes? Read through the handler's supplier at every
+        # call, so a Configure save applies at once. Default on, as the
+        # provider contract documents.
+        self.external_tools_allow_writes = self._as_bool(
+            plugin_prefs.get("external_tools_allow_writes", True))
+        self._provider_broadcasts_subscribed = set()
         # Strip protocol from host (clients add their own) — accept either form in config
         _influx_url            = (INFLUXDB_HOST or plugin_prefs.get("influx_url", "")).strip()
         self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
@@ -1834,6 +1841,62 @@ class Plugin(indigo.PluginBase):
         else:
             indigo.server.log("Claude Bridge: scopes.json missing or invalid — using defaults")
 
+    # ── Plugin-provided MCP tools (v2.26.0) ─────────────────────────────
+
+    def subscribe_to_provider_broadcasts(self, provider_ids) -> None:
+        """Subscribe once per provider to its "mcp_tools_updated" broadcast, so
+        a provider that starts or updates re-registers its tools without a
+        Claude Bridge restart. A provider is only known after discovery, which
+        is why every rescan calls this rather than startup doing it once."""
+        for pid in provider_ids or ():
+            if pid in self._provider_broadcasts_subscribed:
+                continue
+            try:
+                indigo.server.subscribeToBroadcast(pid, "mcp_tools_updated", "on_mcp_tools_updated")
+                self._provider_broadcasts_subscribed.add(pid)
+            except Exception as exc:
+                self.logger.warning(f"\t⚠️  Could not subscribe to {pid} broadcasts: {exc}")
+
+    def on_mcp_tools_updated(self, arg=None) -> None:
+        """A provider says its tool set changed — usually it has just started."""
+        if not self.mcp_handler:
+            return
+        try:
+            result = self.mcp_handler.refresh_external_tools()
+            self.logger.debug(f"Plugin-provided tools refreshed on broadcast: {result}")
+        except Exception as exc:
+            self.logger.error(f"\t❌ Plugin-provided tool refresh failed: {exc}")
+
+    def print_external_tools_menu(self) -> None:
+        """Menu action: every provider, its tools and the write gate, to the log."""
+        if not self.mcp_handler:
+            indigo.server.log("Claude Bridge: MCP handler not initialized", isError=True)
+            return
+        lines = self.mcp_handler.external_tools.summary()
+        if not lines:
+            indigo.server.log("Claude Bridge: no plugin-provided MCP tools — no installed plugin "
+                              "ships Contents/Resources/mcp-manifest.json")
+            return
+        gate = ("allowed" if self.external_tools_allow_writes
+                else "REFUSED — untick 'Allow plugin-provided tools to make changes' under Configure")
+        indigo.server.log(f"Claude Bridge — plugin-provided MCP tools (writes {gate}):\n"
+                          + "\n".join(lines))
+
+    def rescan_external_tools_menu(self) -> None:
+        """Menu action: re-read every provider manifest now."""
+        if not self.mcp_handler:
+            indigo.server.log("Claude Bridge: MCP handler not initialized", isError=True)
+            return
+        try:
+            result = self.mcp_handler.refresh_external_tools()
+            msg = (f"Claude Bridge: rescanned plugin-provided tools — {len(result['tools'])} "
+                   f"tool(s) from {len(result['providers'])} provider(s)")
+            if result["removed"]:
+                msg += f", removed {', '.join(result['removed'])}"
+            indigo.server.log(msg + ". A connected client sees a new tool only from its next session.")
+        except Exception as e:
+            indigo.server.log(f"Claude Bridge: plugin-provided tool rescan failed: {e}", isError=True)
+
     def clear_cache_menu(self) -> None:
         """Drop every cached read-tool result."""
         if not self.mcp_handler:
@@ -2456,6 +2519,8 @@ class Plugin(indigo.PluginBase):
             self.enable_influxdb   = self._as_bool(values_dict.get("enable_influxdb", False))
             self.allow_destructive_delete = self._as_bool(
                 values_dict.get("allow_destructive_delete", False))
+            self.external_tools_allow_writes = self._as_bool(
+                values_dict.get("external_tools_allow_writes", True))
             _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
             self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
             self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))

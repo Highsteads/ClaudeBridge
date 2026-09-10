@@ -47,6 +47,17 @@
         <CallbackMethod>clear_webhooks_menu</CallbackMethod>
     </MenuItem>
 
+    <MenuItem id="sep_external_tools" isSeparator="true"/>
+
+    <MenuItem id="print_external_tools">
+        <Name>Print Plugin-Provided MCP Tools</Name>
+        <CallbackMethod>print_external_tools_menu</CallbackMethod>
+    </MenuItem>
+    <MenuItem id="rescan_external_tools">
+        <Name>Rescan Plugin-Provided MCP Tools</Name>
+        <CallbackMethod>rescan_external_tools_menu</CallbackMethod>
+    </MenuItem>
+
     <MenuItem id="sep3" isSeparator="true"/>
 
     <MenuItem id="toggleTimestamps">

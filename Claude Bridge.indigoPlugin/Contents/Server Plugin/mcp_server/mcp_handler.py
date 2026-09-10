@@ -42,6 +42,8 @@ from .tools.extended_tools import ExtendedToolsHandler
 from .tools.plugin_dev_tools import PluginDevToolsHandler
 from .tools.automation_detail import AutomationDetailHandler
 from .adapters.indidb import IndiDbStructureStore
+from .external_tools import ExternalToolManager, manifest_fingerprint
+from .security.scope_manager import register_dynamic_scope, unregister_dynamic_scopes
 from .common import device_capabilities
 
 
@@ -69,6 +71,12 @@ class MCPHandler:
     
     # MCP Protocol version we support
     PROTOCOL_VERSION = "2025-06-18"
+
+    # This plugin's own id — never a provider to itself (v2.26.0).
+    SELF_PLUGIN_ID = "com.clives.indigoplugin.claudebridge"
+    # tools/list checks for a new, changed or vanished provider manifest at
+    # most this often (one stat() per installed bundle).
+    EXTERNAL_RESCAN_MIN_INTERVAL = 60.0
 
     # Tools whose exception text can embed secrets/credentials/internal paths or
     # executed code. Their raw error is scrubbed from the client response (which
@@ -194,6 +202,23 @@ class MCPHandler:
         # (which then fails closed to admin) so a new tool can never silently
         # land in READ. See ScopeManager.audit_classification().
         self.scope_manager.audit_classification(list(self._tools.keys()))
+
+        # Plugin-provided tools (v2.26.0): other plugins' manifests, registered
+        # AFTER the audit so the audit judges the built-in set, and each
+        # external tool is classified read/write as it is registered.
+        self._builtin_tool_names = frozenset(self._tools)
+        self.external_tools = ExternalToolManager(
+            logger=self.logger,
+            self_plugin_id=self.SELF_PLUGIN_ID,
+            write_gate_supplier=self._external_writes_allowed,
+        )
+        self._external_lock        = threading.Lock()
+        self._external_fingerprint = None
+        self._external_checked_at  = 0.0
+        try:
+            self.refresh_external_tools()
+        except Exception as _ext_e:
+            self.logger.error(f"\t❌ Plugin-provided tool scan failed: {_ext_e}")
 
         self.logger.info(f"\t🚀 Claude Bridge ready ({len(self._tools)} tools, {len(self._resources)} resources)")
         self.logger.info("\t🌐 Endpoint: /message/com.clives.indigoplugin.claudebridge/mcp/")
@@ -816,6 +841,7 @@ class MCPHandler:
         params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Handle tools/list request."""
+        self._maybe_rescan_external_tools()
         # Convert tool functions to tool descriptions
         tools = []
         for name, info in self._tools.items():
@@ -1214,6 +1240,76 @@ class MCPHandler:
         
         return self._json_error(msg_id, -32002, f"Resource not found: {uri}")
     
+    # ── Plugin-provided tools (v2.26.0) ─────────────────────────────────
+
+    def _external_writes_allowed(self) -> bool:
+        """The Configure checkbox, read at every write call so a save applies
+        at once. With no owning plugin (tests) writes are allowed."""
+        if self.plugin is None:
+            return True
+        return bool(getattr(self.plugin, "external_tools_allow_writes", True))
+
+    def refresh_external_tools(self, plugin_list=None) -> Dict[str, Any]:
+        """Re-read every provider manifest and rebuild the external entries in
+        the registry. The registry dict is REBOUND whole rather than mutated,
+        so a tools/list iterating the old dict on the dispatch thread never
+        sees a change under its feet. Returns what changed."""
+        with self._external_lock:
+            entries   = self.external_tools.rescan(self._builtin_tool_names, plugin_list=plugin_list)
+            old_names = [n for n, t in self._tools.items() if t.get("external_provider")]
+            unregister_dynamic_scopes(old_names)
+            new_tools = {n: t for n, t in self._tools.items() if not t.get("external_provider")}
+            for name, entry in entries.items():
+                register_dynamic_scope(name, "write" if entry.get("write") else "read")
+                new_tools[name] = entry
+            self._tools = new_tools
+            try:
+                self._external_fingerprint = manifest_fingerprint(
+                    self.SELF_PLUGIN_ID, plugin_list=plugin_list)
+            except Exception:
+                self._external_fingerprint = None
+            self._external_checked_at = time.time()
+        providers = self.external_tools.provider_ids()
+        removed   = sorted(set(old_names) - set(entries))
+        if entries:
+            prefixes = ", ".join(sorted({m.prefix for m in self.external_tools.manifests}))
+            self.logger.info(f"\t🔌 Plugin-provided tools: {len(entries)} from "
+                             f"{len(providers)} provider(s) — {prefixes}")
+        elif old_names:
+            self.logger.info("\t🔌 Plugin-provided tools: none — the last provider has gone")
+        else:
+            self.logger.debug("\t🔌 Plugin-provided tools: none found")
+        # A provider is only known after discovery, so the owning plugin
+        # subscribes to each one's "mcp_tools_updated" broadcast from here.
+        if self.plugin is not None and hasattr(self.plugin, "subscribe_to_provider_broadcasts"):
+            try:
+                self.plugin.subscribe_to_provider_broadcasts(providers)
+            except Exception as exc:
+                self.logger.warning(f"\t⚠️  Provider broadcast subscription failed: {exc}")
+        return {"tools": sorted(entries), "providers": providers, "removed": removed}
+
+    def _maybe_rescan_external_tools(self) -> None:
+        """On tools/list: if a manifest appeared, vanished or changed since the
+        last look, rescan. One stat() per installed bundle, at most once per
+        EXTERNAL_RESCAN_MIN_INTERVAL, on the dispatch thread — no watcher
+        thread, nothing to stop, and a new provider shows up on the next
+        session's first listing."""
+        if getattr(self, "external_tools", None) is None:
+            return
+        now = time.time()
+        if now - self._external_checked_at < self.EXTERNAL_RESCAN_MIN_INTERVAL:
+            return
+        self._external_checked_at = now
+        try:
+            fp = manifest_fingerprint(self.SELF_PLUGIN_ID)
+        except Exception:
+            return
+        if fp != self._external_fingerprint:
+            try:
+                self.refresh_external_tools()
+            except Exception as exc:
+                self.logger.error(f"\t❌ Plugin-provided tool rescan failed: {exc}")
+
     def _register_tools(self):
         """Register all available tools."""
         # Search entities tool

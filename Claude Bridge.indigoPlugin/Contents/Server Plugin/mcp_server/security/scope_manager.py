@@ -158,6 +158,33 @@ ADMIN_TOOLS: Set[str] = {
     "raw_server_request",
 }
 
+# Plugin-provided tools (v2.26.0). They are registered at runtime from other
+# plugins' manifests, so they cannot appear in the static sets above. Each is
+# classified when it is registered — "read" or "write" from its manifest's
+# write flag, never "admin", because the provider decided what it does — and
+# the audit counts them as classified. A name in this map that also appears
+# in a static set is impossible by construction (the manager skips names that
+# collide with built-ins), and the static sets win if it ever happens.
+_DYNAMIC_SCOPES: Dict[str, str] = {}
+_DYNAMIC_ALLOWED = ("read", "write")
+
+
+def register_dynamic_scope(tool_name: str, scope: str) -> None:
+    """Classify a runtime-registered tool. Anything but read/write fails
+    closed to admin — a provider cannot grant itself a lower bar than the
+    manifest allows, and a typo must not open a write to a read token."""
+    _DYNAMIC_SCOPES[tool_name] = scope if scope in _DYNAMIC_ALLOWED else "admin"
+
+
+def unregister_dynamic_scopes(tool_names) -> None:
+    for name in list(tool_names or ()):
+        _DYNAMIC_SCOPES.pop(name, None)
+
+
+def dynamic_scope_names() -> Set[str]:
+    return set(_DYNAMIC_SCOPES)
+
+
 # Order matters: a name should never be in more than one set (audit enforces it),
 # but if it somehow is, the higher privilege wins.
 def required_scope_for(tool_name: str) -> str:
@@ -168,6 +195,8 @@ def required_scope_for(tool_name: str) -> str:
         return "write"
     if tool_name in READ_TOOLS:
         return "read"
+    if tool_name in _DYNAMIC_SCOPES:
+        return _DYNAMIC_SCOPES[tool_name]
     # Unclassified — fail closed. audit_classification() will have logged an
     # ERROR for this at startup; require admin so a new tool can never be
     # reachable by a read/write token until it is explicitly classified.
@@ -328,7 +357,8 @@ class ScopeManager:
         """
         names = set(tool_names or [])
         union = READ_TOOLS | WRITE_TOOLS | ADMIN_TOOLS
-        unclassified = sorted(names - union)
+        dynamic = names & dynamic_scope_names()
+        unclassified = sorted(names - union - dynamic)
         multi = sorted(
             n for n in names
             if (n in READ_TOOLS) + (n in WRITE_TOOLS) + (n in ADMIN_TOOLS) > 1
@@ -347,7 +377,8 @@ class ScopeManager:
             self.logger.info(
                 f"\tScope classification OK — {len(names)} tools "
                 f"(read={len(READ_TOOLS & names)}, write={len(WRITE_TOOLS & names)}, "
-                f"admin={len(ADMIN_TOOLS & names)})"
+                f"admin={len(ADMIN_TOOLS & names)}"
+                + (f", plugin-provided={len(dynamic)}" if dynamic else "") + ")"
             )
         return {"unclassified": unclassified, "multi_classified": multi, "stale": stale}
 

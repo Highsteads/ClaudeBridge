@@ -121,6 +121,17 @@ and leave this field blank.</Label>
         <Label>Per-token scopes (read / write / admin) are configured in scopes.json under the plugin's Preferences folder. Without scopes.json, every authenticated token gets full access (backward compatible). See Show Plugin Info menu for the path.</Label>
     </Field>
 
+    <Field id="separator_external_tools" type="separator"/>
+
+    <Field id="external_tools_label" type="label" fontSize="small" alignWithControl="false">
+        <Label>Plugin-provided tools (v2.26.0): any installed Indigo plugin that ships Contents/Resources/mcp-manifest.json has its tools listed to Claude under that plugin's own prefix, and every call is forwarded to the plugin. Discovery is automatic. Read tools always work; this switch decides whether the tools a plugin marks as writes may make changes. It applies at once, no restart.</Label>
+    </Field>
+
+    <Field id="external_tools_allow_writes" type="checkbox" defaultValue="true">
+        <Label>Allow plugin-provided tools to make changes:</Label>
+        <Description>Untick to refuse write tools from other plugins.</Description>
+    </Field>
+
     <Field id="separator_webhooks" type="separator"/>
 
     <Field id="webhooks_label" type="label" fontSize="small" alignWithControl="false">
