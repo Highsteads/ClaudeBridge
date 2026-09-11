@@ -216,4 +216,5 @@ _Destructive / irreversible / code-execution / lifecycle / physical-security. Re
 | `zwave_send_config_parameter` | Set a Z-Wave configuration parameter on a device. ADMIN. param_size is the byte width (1, 2 or 4). Use this to tune a sensor's behaviour (motion sensitivity, report intervals, etc.) without the Indigo GUI — check the device manual for parameter numbers. |
 | `zwave_start_network_optimize` | Start a Z-Wave network optimisation (mesh heal). ADMIN. Omit device_id to heal the whole network, or pass one to heal around that node. |
 | `zwave_stop_network_optimize` | Stop an in-progress Z-Wave network optimisation. ADMIN. |
+
 <!-- END TOOL TABLE -->

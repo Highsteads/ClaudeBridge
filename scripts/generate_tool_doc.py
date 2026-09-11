@@ -13,6 +13,7 @@
 # v1.1 (11-09-2026): the table moved out of the README into docs/tools.md, a page
 #   of the documentation site (GitHub Pages). The README is a front page now and
 #   carries the tier counts only. Same markers, same --write / --check contract.
+#   Also: a blank line before the END marker, or kramdown drops the last table.
 #
 # Usage:
 #   python3 scripts/generate_tool_doc.py            # print the table to stdout
@@ -185,7 +186,11 @@ def build_table(tools, scopes):
             desc = tools[name].replace("\n", " ").replace("|", "\\|").strip()
             lines.append(f"| `{name}` | {desc} |")
         lines.append("")
-    return "\n".join(lines).rstrip() + "\n", warnings
+    # The trailing BLANK line matters: the END marker follows the table, and
+    # kramdown (GitHub Pages) refuses to parse a table whose block also holds a
+    # line with no pipe in it — the whole admin table rendered as a paragraph
+    # until this was measured (11-09-2026). GitHub's README renderer forgave it.
+    return "\n".join(lines).rstrip() + "\n\n", warnings
 
 
 def inject(readme_src, table_md):
