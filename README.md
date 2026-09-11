@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.26.1
+**Version:** 2.26.2
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,11 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 2.26.2 (2026-09-11)
+The bundle now carries the standard GitHub record.
+
+Indigo plugins can carry a small note inside the bundle saying where their source lives on GitHub, spelt the way the Indigo Domotics and community plugins spell it. This one now has it, pointing at this repository. Nothing else changed.
+
 ### 2.26.1 (2026-09-11)
 The plugin's own About item pointed at the wrong page.
 
@@ -87,13 +92,6 @@ A plugin that ships a small JSON file in its bundle, `Contents/Resources/mcp-man
 Tools a plugin marks as writes are governed by one new switch under Configure, *Allow plugin-provided tools to make changes*, on by default and honoured at once; read tools always work. Each provider tool is classified read or write for the per-token scopes as it is registered, and never admin — the plugin decided what it does. Two new menu items print the providers found and rescan them on demand; a provider that appears, changes or vanishes is also noticed at the next tool listing. A plugin's own stopping is reported as exactly that, a hung one as a timeout rather than a hang, and a reply that breaks the contract as a protocol violation naming the plugin.
 
 The README's tool count read 167 in seven places while the generated table and the repo description said 168; it says 168 now. 54 tests for the new module; the built-in tool table is unchanged, because a plugin's tools are not built in.
-
-### 2.25.1 (2026-09-07)
-The settings dialog was stretched wider than its own window, so the help text beside each setting was cut off mid-sentence.
-
-The short help that can be attached to a setting is drawn on a single line and never wraps, so the longest one in the dialog decides how wide every row is — and the window cannot be widened past a fixed maximum. All four long ones have moved into ordinary description paragraphs, which do wrap.
-
-Two new checks fail the build if any help text or setting label grows long enough to do it again, and the same file also checks every dialog parses, that field ids are unique within each dialog and that every visibility binding resolves. No setting or behaviour changed.
 
 ## Vibe coding for Indigo
 

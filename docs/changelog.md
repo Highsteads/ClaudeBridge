@@ -8,6 +8,11 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 2.26.2 (2026-09-11)
+The bundle now carries the standard GitHub record.
+
+Indigo plugins can carry a small note inside the bundle saying where their source lives on GitHub, spelt the way the Indigo Domotics and community plugins spell it. This one now has it, pointing at this repository. Nothing else changed.
+
 ### 2.26.1 (2026-09-11)
 The plugin's own About item pointed at the wrong page.
 
