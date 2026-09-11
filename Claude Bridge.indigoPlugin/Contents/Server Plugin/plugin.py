@@ -4,8 +4,8 @@
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5
-# Date:        10-09-2026
-# Version:     2.26.0
+# Date:        11-09-2026
+# Version:     2.26.1
 #
 # v2.25.0 (06-09-2026): execute_device_action — run a plugin's OWN Actions.xml
 # action, the ones under Device -> Actions that no built-in tool could reach.

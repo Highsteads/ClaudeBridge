@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.26.0
+**Version:** 2.26.1
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,11 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 2.26.1 (2026-09-11)
+The plugin's own About item pointed at the wrong page.
+
+Indigo builds the *About Claude Bridge* menu item from the support address in the plugin bundle, and that address was the Highsteads organisation page rather than this plugin's repository. It now opens github.com/Highsteads/ClaudeBridge, where the documentation site, the releases and the issue tracker are one click away. Nothing else changed.
+
 ### 2.26.0 (2026-09-10)
 Other plugins can now bring their own tools to Claude Bridge.
 
@@ -89,17 +94,6 @@ The settings dialog was stretched wider than its own window, so the help text be
 The short help that can be attached to a setting is drawn on a single line and never wraps, so the longest one in the dialog decides how wide every row is — and the window cannot be widened past a fixed maximum. All four long ones have moved into ordinary description paragraphs, which do wrap.
 
 Two new checks fail the build if any help text or setting label grows long enough to do it again, and the same file also checks every dialog parses, that field ids are unique within each dialog and that every visibility binding resolves. No setting or behaviour changed.
-
-### 2.25.0 (2026-09-06)
-Claude can now run a plugin's own actions — the ones under Device -> Actions.
-
-Until now every plugin feature ended the same way: Claude could design it, build it, lint it and reason about it, and then a human had to sit at the Indigo client and click Device -> Actions to see whether it worked. Nothing in the bridge could reach a plugin's own `Actions.xml` actions. `execute_device_action` closes that, and it turns out Indigo has taken exactly the right arguments all along — `executeAction(actionTypeId, deviceId, props)` — so the wrapper is thin.
-
-What is not thin is the guard, because the underlying call fails silently in three separate ways and every one of them looks like success. A misspelt action id reaches no callback and returns nothing. An action declared with `deviceFilter` — a device action — called without a device does nothing whatsoever, again returning nothing. And a plugin that is installed but stopped swallows the action entirely while the caller sees no exception at all. So the tool reads the plugin's own `Actions.xml` first, checks the call against it, and refuses with the reason and a list of what it could have called instead. Where the XML cannot be read it says so and dispatches anyway, rather than blocking a call that would have worked.
-
-The middle one is the one that catches people out, so it is worth being exact about it. A `props` dict crosses the plugin boundary intact — measured against Timers and Pesters, `setTimerStartValue` with the device id moved the timer from 60 seconds to 43, with both props honoured. The identical call without the device id returned `None` and left it at 60. So when a plugin action seems to ignore what you sent it, the props are almost never the problem. The missing device is, and nothing raises to say so.
-
-Admin scope, since these actuate whatever the target plugin exposes: valves, locks, garage doors, sprinkler zones. Every dispatch is written to the Indigo event log with the device and the resolved props, so an action fired by an AI caller leaves the same trail as one fired by hand.
 
 ## Vibe coding for Indigo
 

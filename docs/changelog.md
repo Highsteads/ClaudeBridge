@@ -8,6 +8,11 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 2.26.1 (2026-09-11)
+The plugin's own About item pointed at the wrong page.
+
+Indigo builds the *About Claude Bridge* menu item from the support address in the plugin bundle, and that address was the Highsteads organisation page rather than this plugin's repository. It now opens github.com/Highsteads/ClaudeBridge, where the documentation site, the releases and the issue tracker are one click away. Nothing else changed.
+
 ### 2.26.0 (2026-09-10)
 Other plugins can now bring their own tools to Claude Bridge.
 

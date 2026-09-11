@@ -10,13 +10,13 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>https://github.com/Highsteads/</string>
+			<string>https://github.com/Highsteads/ClaudeBridge</string>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1.0.0</string>
 	<key>PluginVersion</key>
-	<string>2.26.0</string>
+	<string>2.26.1</string>
 	<key>ServerApiVersion</key>
 	<string>3.4</string>
 </dict>
