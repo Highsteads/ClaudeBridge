@@ -60,7 +60,10 @@ CLAUDE.md
 /indigo_mcp_proxy.py
 /IndigoSecrets_example.py
 /CAPABILITY_SUMMARY.md
-docs/
+
+# Local drafts (forum posts, comparison notes) — never published. docs/ is the
+# PUBLISHED documentation site (GitHub Pages) from 11-09-2026; drafts moved out.
+/drafts/
 
 # Third-party clones pulled in for comparison work (CliveS, 29-08-2026).
 # Other people's repositories — never ours to commit or publish.

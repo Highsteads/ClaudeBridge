@@ -7,15 +7,23 @@
 #              a live Indigo install (CI runners), so the suite stays portable.
 #              Asserts the live server agrees with the static registry: the
 #              "deployed == declared" check.
-# Author:      CliveS & Claude Fable 5
-# Date:        10-06-2026
-# Version:     1.0
+# Author:      CliveS & Claude Fable 5; Claude Fable 5.1 (1.1)
+# Date:        10-06-2026 (1.1: 11-09-2026)
+# Version:     1.1
+#
+# v1.1 (11-09-2026): since 2.26.0 the live tools/list also carries the tools
+#   other plugins provide (the Dashboards plugin's eight, here), each with
+#   "[provided by the <Name> plugin]" on the end of its description. Those are
+#   not in the static registry, so "deployed == declared" now means the BUILT-IN
+#   tools equal the registry and the health count equals registry + providers.
+#   Both tests had been red on this Mac since 2.26.0 shipped.
 
 import glob
 import importlib.util
 import json
 import os
 import plistlib
+import re
 import urllib.error
 import urllib.request
 
@@ -100,7 +108,13 @@ def test_live_initialize_reports_installed_version():
     assert body["result"]["serverInfo"]["version"] == expected
 
 
-def test_live_tools_list_matches_static_registry():
+_PROVIDED_RE = re.compile(r"\[provided by the .+ plugin\]$")
+
+
+def _live_tools():
+    """(built-in names, provider-tool names) from a fresh session's tools/list.
+    A provider tool is one another plugin contributed through its manifest;
+    the manager marks each with the suffix _PROVIDED_RE matches."""
     _, headers = _post_mcp({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2025-06-18",
@@ -109,11 +123,20 @@ def test_live_tools_list_matches_static_registry():
     sid = headers["Mcp-Session-Id"]
     body, _ = _post_mcp({"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
                         session_id=sid)
-    live_tools = {t["name"] for t in body["result"]["tools"]}
-    assert len(live_tools) == _registry_count()
+    tools = body["result"]["tools"]
     # Spot-check the surface: every tool advertises a schema + description.
-    for t in body["result"]["tools"]:
+    for t in tools:
         assert t["name"] and t["inputSchema"], f"malformed tool entry: {t}"
+    provided = {t["name"] for t in tools if _PROVIDED_RE.search(t.get("description", ""))}
+    builtin = {t["name"] for t in tools} - provided
+    return builtin, provided
+
+
+def test_live_tools_list_matches_static_registry():
+    builtin, provided = _live_tools()
+    assert len(builtin) == _registry_count(), (
+        f"{len(builtin)} built-in tools live against {_registry_count()} in the "
+        f"registry ({len(provided)} provider tools set aside)")
 
 
 def test_live_health_endpoint():
@@ -122,5 +145,6 @@ def test_live_health_endpoint():
     with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
         health = json.loads(resp.read().decode())
     assert health["status"] == "ok"
-    assert health["tools"] == _registry_count()
+    _, provided = _live_tools()
+    assert health["tools"] == _registry_count() + len(provided)
     assert health["protocol_version"] == "2025-06-18"

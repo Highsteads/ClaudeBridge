@@ -1,20 +1,25 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 # Filename:    generate_tool_doc.py
-# Description: Generate the README's MCP tool table from the live tool registry.
-#              Single source of truth is mcp_handler.py (tool name + description)
-#              cross-referenced with scope_manager.py (read/write/admin tier).
-#              No Indigo import — pure static AST parse, runs anywhere.
-# Author:      CliveS & Claude Opus 4.8
-# Date:        08-06-2026
-# Version:     1.0
+# Description: Generate the MCP tool reference (docs/tools.md) from the live
+#              tool registry. Single source of truth is mcp_handler.py (tool name
+#              + description) cross-referenced with scope_manager.py
+#              (read/write/admin tier). No Indigo import — pure static AST parse,
+#              runs anywhere.
+# Author:      CliveS & Claude Opus 4.8; Claude Fable 5.1 (1.1)
+# Date:        08-06-2026 (1.1: 11-09-2026)
+# Version:     1.1
+#
+# v1.1 (11-09-2026): the table moved out of the README into docs/tools.md, a page
+#   of the documentation site (GitHub Pages). The README is a front page now and
+#   carries the tier counts only. Same markers, same --write / --check contract.
 #
 # Usage:
 #   python3 scripts/generate_tool_doc.py            # print the table to stdout
-#   python3 scripts/generate_tool_doc.py --write    # inject into README.md between markers
-#   python3 scripts/generate_tool_doc.py --check     # exit 1 if README is stale or a tool is unclassified
+#   python3 scripts/generate_tool_doc.py --write    # inject into docs/tools.md between markers
+#   python3 scripts/generate_tool_doc.py --check     # exit 1 if docs/tools.md is stale or a tool is unclassified
 #
-# The table is written between these markers in README.md:
+# The table is written between these markers in docs/tools.md:
 #   <!-- BEGIN TOOL TABLE -->
 #   <!-- END TOOL TABLE -->
 
@@ -30,7 +35,8 @@ BUNDLE_SP = os.path.join(
 HANDLER_PATH = os.path.join(BUNDLE_SP, "mcp_server", "mcp_handler.py")
 SCOPE_PATH = os.path.join(BUNDLE_SP, "mcp_server", "security", "scope_manager.py")
 GATE_PATH = os.path.join(BUNDLE_SP, "mcp_server", "security", "delete_gate.py")
-README_PATH = os.path.join(REPO_ROOT, "README.md")
+DOC_PATH = os.path.join(REPO_ROOT, "docs", "tools.md")
+README_PATH = DOC_PATH   # kept for anything that imported the old name
 
 BEGIN_MARKER = "<!-- BEGIN TOOL TABLE -->"
 END_MARKER = "<!-- END TOOL TABLE -->"
@@ -183,11 +189,11 @@ def build_table(tools, scopes):
 
 
 def inject(readme_src, table_md):
-    """Replace content between the markers. Returns new README text."""
+    """Replace content between the markers. Returns the new page text."""
     if BEGIN_MARKER not in readme_src or END_MARKER not in readme_src:
         raise SystemExit(
-            f"README is missing the markers.\nAdd these two lines where the table "
-            f"should go:\n  {BEGIN_MARKER}\n  {END_MARKER}"
+            f"docs/tools.md is missing the markers.\nAdd these two lines where the "
+            f"table should go:\n  {BEGIN_MARKER}\n  {END_MARKER}"
         )
     pre = readme_src.split(BEGIN_MARKER)[0]
     post = readme_src.split(END_MARKER)[1]
@@ -195,12 +201,12 @@ def inject(readme_src, table_md):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Generate the README MCP tool table.")
-    ap.add_argument("--write", action="store_true", help="inject into README.md")
+    ap = argparse.ArgumentParser(description="Generate the MCP tool reference, docs/tools.md.")
+    ap.add_argument("--write", action="store_true", help="inject into docs/tools.md")
     ap.add_argument(
         "--check",
         action="store_true",
-        help="exit 1 if README is stale or any tool is unclassified",
+        help="exit 1 if docs/tools.md is stale or any tool is unclassified",
     )
     args = ap.parse_args()
 
@@ -219,24 +225,24 @@ def main():
         print(f"WARNING: {w}", file=sys.stderr)
 
     if args.check:
-        current = _read(README_PATH)
+        current = _read(DOC_PATH)
         expected = inject(current, table_md)
         stale = current != expected
         if warnings:
             print("FAIL: one or more tools are unclassified.", file=sys.stderr)
         if stale:
             print(
-                "FAIL: README tool table is stale — run "
+                "FAIL: docs/tools.md tool table is stale — run "
                 "`python3 scripts/generate_tool_doc.py --write`.",
                 file=sys.stderr,
             )
         sys.exit(1 if (stale or warnings) else 0)
 
     if args.write:
-        new = inject(_read(README_PATH), table_md)
-        with open(README_PATH, "w", encoding="utf-8") as f:
+        new = inject(_read(DOC_PATH), table_md)
+        with open(DOC_PATH, "w", encoding="utf-8") as f:
             f.write(new)
-        print(f"Wrote {len(tools)} tools into {README_PATH}")
+        print(f"Wrote {len(tools)} tools into {DOC_PATH}")
     else:
         print(table_md)
 

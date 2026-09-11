@@ -66,7 +66,8 @@ def test_cfbundleversion_is_the_bundle_layout_not_the_release():
 
 
 def test_generated_tool_table_is_current():
-    """The README's tool table must match the code that generates it.
+    """docs/tools.md (the README's tool table until 11-09-2026) must match the
+    code that generates it.
 
     `scripts/generate_tool_doc.py --check` already existed and nothing ran it,
     so the table could drift for as long as nobody happened to regenerate it.
@@ -79,7 +80,7 @@ def test_generated_tool_table_is_current():
     result = subprocess.run([sys.executable, script, "--check"],
                             cwd=REPO, capture_output=True, text=True)
     assert result.returncode == 0, (
-        "README tool table is stale or a tool is unclassified — run "
+        "docs/tools.md is stale or a tool is unclassified — run "
         "`python3 scripts/generate_tool_doc.py --write`\n"
         + (result.stdout or "") + (result.stderr or ""))
 

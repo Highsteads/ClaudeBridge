@@ -38,7 +38,7 @@ jobs:
           pip install ruff
           ruff check .
 
-      - name: Check README tool table is current
+      - name: Check the generated tool reference (docs/tools.md) is current
         run: python scripts/generate_tool_doc.py --check
 
       - name: Dependency vulnerability audit (advisory)
