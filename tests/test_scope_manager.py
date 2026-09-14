@@ -30,6 +30,7 @@ def test_buckets_are_pairwise_disjoint():
     "plugin_refresh_deps", "delete_device", "delete_schedule", "delete_trigger",
     "delete_action_group", "variable_delete", "remove_all_delayed_actions",
     "lock_device", "unlock_device", "execute_plugin_menu_item",
+    "execute_client_menu_item",
 ])
 def test_dangerous_tools_require_admin(tool):
     assert required_scope_for(tool) == "admin", f"{tool} must be admin-scoped"

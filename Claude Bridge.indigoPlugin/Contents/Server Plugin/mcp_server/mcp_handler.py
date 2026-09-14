@@ -3228,6 +3228,48 @@ class MCPHandler:
             "function": self._tool_execute_plugin_menu_item
         }
 
+        # ── Any client menu item via AppleScript ──────────────────────────
+        self._tools["execute_client_menu_item"] = {
+            "description": (
+                "Click any item in the Indigo client's own menu bar, given the full "
+                "path (e.g. path=['Interfaces','Z-Wave','Disable']). Use this for the "
+                "client commands that have no API at all — indigo.zwave has isEnabled() "
+                "and no setter, so this is the only way to make Indigo release the "
+                "Z-Wave stick for a controller backup. Pass list_only=true with a menu "
+                "or submenu path (or [] for the menu-bar titles) to READ a menu instead "
+                "of clicking it, which is how you find an item's current label: several "
+                "are toggles that rename themselves, and the Z-Wave one reads 'Disable' "
+                "when on and 'Enable' when off. Listing does not bring the client to the "
+                "front. Clicking does. Refuses Claude Bridge's own submenu and Quit. "
+                "Requires the Indigo GUI client running and System Events permission. "
+                "ADMIN scope."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Menu path, outermost first, e.g. ['Interfaces','Z-Wave',"
+                            "'Disable']. At least two levels to click. For list_only "
+                            "this names the menu to read, and [] returns the menu-bar titles."
+                        )
+                    },
+                    "list_only": {
+                        "type": "boolean",
+                        "description": "Read the menu's item names instead of clicking (default false)"
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "osascript timeout in seconds (default 15, max 60)"
+                    }
+                },
+                "required": ["path"]
+            },
+            "function": self._tool_execute_client_menu_item
+        }
+
         # ══════════════════════════════════════════════════════════════════
         # v2.5.0 — Extended IOM wrappers (35+ tools)
         # All implementations live in tools/extended_tools/extended_tools_handler.py
@@ -4174,6 +4216,22 @@ class MCPHandler:
             )
         except Exception as e:
             self.logger.error(f"execute_plugin_menu_item error: {e}")
+            return safe_json_dumps({"error": str(e)})
+
+    def _tool_execute_client_menu_item(
+        self,
+        path,
+        list_only: bool = False,
+        timeout: int = 15,
+    ) -> str:
+        try:
+            return safe_json_dumps(
+                self.scripting_shell_handler.execute_client_menu_item(
+                    path, list_only, timeout
+                )
+            )
+        except Exception as e:
+            self.logger.error(f"execute_client_menu_item error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     # ══════════════════════════════════════════════════════════════════════

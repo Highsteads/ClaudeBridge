@@ -45,7 +45,7 @@ Claude Bridge.indigoPlugin/
 │           │   └── vector_store/           # Text search store
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
-│           └── tools/                      # 21 tool handler modules (168 tools)
+│           └── tools/                      # 21 tool handler modules (169 tools)
 │       ├── indigo_mcp_proxy.py             # Claude Code go-between script
 │       └── install.py                      # one-shot installer
 └── README.md

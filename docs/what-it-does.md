@@ -5,7 +5,7 @@ nav_order: 3
 
 # What it does
 
-Claude Bridge gives Claude Code **168 MCP tools**, enough to read and change
+Claude Bridge gives Claude Code **169 MCP tools**, enough to read and change
 anything on a running Indigo server. They fall into the groups below, and every
 tool is listed by name in the [Tool reference](tools.md).
 

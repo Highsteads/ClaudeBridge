@@ -7,6 +7,8 @@ Tools:
                                of last expression if 'eval' mode requested)
   - execute_plugin_menu_item : invoke a plugin menu item via AppleScript GUI scripting
                                (only viable while the Indigo client GUI is running)
+  - execute_client_menu_item : the same, for ANY menu in the client's menu bar, given
+                               the full path (e.g. Interfaces -> Z-Wave -> Disable)
 
 execute_indigo_python runs in-process via exec() — the same pattern used by
 script_tools.run_script — so it has full access to `indigo.*` without IPC.
@@ -16,6 +18,16 @@ execute_plugin_menu_item uses macOS System Events to click a menu item under
 Plugins -> <Plugin Name>. This is the only known way to fire a third-party
 plugin's <MenuItem> callback from outside that plugin, since the public
 indigo.server.getPlugin() wrapper exposes no menu API.
+Scope: ADMIN.
+
+execute_client_menu_item generalises that to the whole menu bar, because plenty
+of the client's own commands have no API at all. The case that prompted it:
+indigo.zwave exposes isEnabled() and nothing that sets it, so Interfaces ->
+Z-Wave -> Disable is the ONLY way to make Indigo release the Z-Wave stick, which
+is what every controller-backup run needs. Listing a menu is as useful as
+clicking one, since several of these labels are toggles that rename themselves
+(the Z-Wave item reads "Disable" when on and "Enable" when off), so a caller
+that cannot read the menu cannot reliably drive it.
 Scope: ADMIN.
 """
 
@@ -70,6 +82,43 @@ def _is_self_plugin_name(name: str) -> bool:
     still kills the session running the tool.
     """
     return (name or "").strip().lower() in _SELF_MENU_NAMES
+
+
+# Menu paths execute_client_menu_item refuses outright, matched case-insensitively
+# on the whole path. Two kinds, and both are the same lesson as the self-restart
+# guard below: a general tool reaches every route the specific ones were fenced off
+# from, so the fences have to be rebuilt here rather than inherited.
+#   * Quitting the client removes the GUI this tool works through, so it is the one
+#     click that cannot be undone by another click.
+#   * The Plugins -> Claude Bridge submenu is handled separately by
+#     _path_targets_self(), which catches it at any depth.
+_FORBIDDEN_PATH_PREFIXES = (
+    ("file", "quit"),
+)
+
+
+def _is_forbidden_path(path) -> bool:
+    """True for a path this tool will not click whatever the caller says."""
+    lowered = tuple((seg or "").strip().lower() for seg in path)
+    for bad in _FORBIDDEN_PATH_PREFIXES:
+        if lowered[:len(bad)] == bad:
+            return True
+    # "Indigo 2025.2 -> Quit Indigo 2025.2" — the application menu, whose first
+    # segment carries the version, so it cannot be matched literally.
+    if len(lowered) >= 2 and lowered[0].startswith("indigo") and lowered[1].startswith("quit"):
+        return True
+    return False
+
+
+def _path_targets_self(path) -> bool:
+    """True if a menu path reaches Claude Bridge's own submenu, at any depth.
+
+    execute_plugin_menu_item refuses plugin_name='Claude Bridge' because reloading
+    the bridge kills the session running the tool. A full-path tool can reach the
+    identical item as ("Plugins", "Claude Bridge", "Reload"), so the same refusal
+    has to exist here — the guard has to cover every route to the capability.
+    """
+    return any(_is_self_plugin_name(seg) for seg in path)
 
 
 def _indigo_app_name() -> str:
@@ -335,6 +384,164 @@ class ScriptingShellHandler(BaseToolHandler):
         self.log_tool_outcome(
             "execute_plugin_menu_item", ok,
             f"{plugin_name} -> {menu_item_name}"
+            + (f" — ERROR: {stderr}" if not ok and stderr else ""),
+        )
+        return result
+
+    # ────────────────────────────────────────────────────────────────────────
+    # execute_client_menu_item
+    # ────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _menu_path_applescript(path) -> str:
+        """The System Events reference for a menu path, innermost first.
+
+        ["Interfaces", "Z-Wave", "Disable"] becomes
+
+            menu item "Disable" of menu "Z-Wave" of menu item "Z-Wave"
+            of menu "Interfaces" of menu bar item "Interfaces" of menu bar 1
+
+        Every level below the first contributes a menu/menu-item pair, because a
+        submenu and the item that opens it are two different objects with the
+        same name.
+        """
+        def esc(text: str) -> str:
+            return str(text).replace("\\", "\\\\").replace('"', '\\"')
+
+        ref = f'menu item "{esc(path[-1])}"'
+        for seg in reversed(path[1:-1]):
+            ref += f' of menu "{esc(seg)}" of menu item "{esc(seg)}"'
+        ref += f' of menu "{esc(path[0])}" of menu bar item "{esc(path[0])}" of menu bar 1'
+        return ref
+
+    def execute_client_menu_item(
+        self,
+        path,
+        list_only: bool = False,
+        timeout: int = 15,
+    ) -> Dict[str, Any]:
+        """
+        Click (or list) any item in the Indigo client's own menu bar.
+
+        path       — the full menu path, outermost first, e.g.
+                     ["Interfaces", "Z-Wave", "Disable"]. For list_only the path
+                     names the MENU to read rather than an item to click, e.g.
+                     ["Interfaces", "Z-Wave"], or [] for the menu-bar titles.
+        list_only  — read the menu instead of clicking it. Read-only, and the way
+                     to find out what a toggling label currently says.
+
+        Requires the Indigo GUI client to be running and System Events GUI
+        scripting permission granted to whatever invokes osascript.
+        """
+        if isinstance(path, str):
+            path = [path]
+        path = [str(seg).strip() for seg in (path or []) if str(seg).strip()]
+
+        self.log_incoming_request(
+            "execute_client_menu_item",
+            {"path": path, "list_only": bool(list_only)},
+        )
+
+        if not list_only and len(path) < 2:
+            return {"success": False,
+                    "error": ("path needs at least a menu and an item, e.g. "
+                              "[\"Interfaces\", \"Z-Wave\", \"Disable\"]")}
+        if list_only and len(path) > 2:
+            return {"success": False,
+                    "error": "list_only reads a menu or submenu, so path is at most two levels"}
+
+        if not list_only and _path_targets_self(path):
+            return {
+                "success": False,
+                "error": (
+                    "Refusing to click a Claude Bridge menu item from within its own "
+                    "MCP session — reloading or reconfiguring the bridge kills the "
+                    "session running this tool. Use the Indigo Plugins menu directly."
+                ),
+            }
+        if not list_only and _is_forbidden_path(path):
+            return {
+                "success": False,
+                "error": (
+                    "Refusing to quit the Indigo client: it is the GUI this tool works "
+                    "through, so nothing could start it again from here."
+                ),
+            }
+
+        try:
+            timeout = int(timeout)
+        except (TypeError, ValueError):
+            timeout = _MENU_ITEM_TIMEOUT_DEFAULT
+        timeout = max(1, min(timeout, _MENU_ITEM_TIMEOUT_MAX))
+
+        app = _indigo_app_name()
+
+        def esc(text: str) -> str:
+            return str(text).replace("\\", "\\\\").replace('"', '\\"')
+
+        if list_only:
+            # Read-only, so the client is NOT activated — no window is taken from
+            # whatever the user is doing just to enumerate a menu.
+            if not path:
+                target = "name of every menu bar item of menu bar 1"
+            elif len(path) == 1:
+                target = (f'name of every menu item of menu "{esc(path[0])}" '
+                          f'of menu bar item "{esc(path[0])}" of menu bar 1')
+            else:
+                target = (f'name of every menu item of menu "{esc(path[1])}" '
+                          f'of menu item "{esc(path[1])}" of menu "{esc(path[0])}" '
+                          f'of menu bar item "{esc(path[0])}" of menu bar 1')
+            script = f'''
+            tell application "System Events"
+                tell process "{esc(app)}"
+                    return {target}
+                end tell
+            end tell
+            '''
+        else:
+            script = f'''
+            tell application "{esc(app)}" to activate
+            delay 0.4
+            tell application "System Events"
+                tell process "{esc(app)}"
+                    click {self._menu_path_applescript(path)}
+                end tell
+            end tell
+            '''
+
+        try:
+            proc = subprocess.run(
+                [_OSASCRIPT, "-e", script],
+                capture_output=True, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return {"success": False,
+                    "error": f"osascript timed out after {timeout}s"}
+        except Exception as exc:
+            return self.handle_exception(exc, "execute_client_menu_item")
+
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
+        ok     = proc.returncode == 0
+
+        result: Dict[str, Any] = {
+            "success":   ok,
+            "app":       app,
+            "path":      path,
+            "list_only": bool(list_only),
+            "stdout":    stdout[:2000],
+            "stderr":    stderr[:2000],
+        }
+        if list_only and ok:
+            # AppleScript returns a comma-separated list, and separators render as
+            # "missing value", which is how a menu separator looks from here.
+            result["items"] = [seg.strip() for seg in stdout.split(",") if seg.strip()]
+        if not ok:
+            result["error"] = stderr or f"osascript exited {proc.returncode}"
+
+        self.log_tool_outcome(
+            "execute_client_menu_item", ok,
+            ("listed " if list_only else "clicked ") + " -> ".join(path or ["(menu bar)"])
             + (f" — ERROR: {stderr}" if not ok and stderr else ""),
         )
         return result

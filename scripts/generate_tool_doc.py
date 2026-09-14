@@ -25,6 +25,7 @@
 #   <!-- END TOOL TABLE -->
 
 import argparse
+import re
 import ast
 import os
 import sys
@@ -193,13 +194,29 @@ def build_table(tools, scopes):
     return "\n".join(lines).rstrip() + "\n\n", warnings
 
 
-def inject(readme_src, table_md):
+# The page opens by stating the count in prose, OUTSIDE the markers, so the
+# generator has to own that line as well. It did not until 14-09-2026: adding a
+# tool rewrote the table and the AUTO-GENERATED comment to 169 and left the
+# sentence above them reading 168, which is the same "count in several places,
+# only some of them maintained" fault the README's own 2.24.0 entry records.
+_HEADLINE_RE = re.compile(r"^\*\*\d+ tools, grouped by security scope\.\*\*", re.M)
+
+
+def inject(readme_src, table_md, total=None):
     """Replace content between the markers. Returns the new page text."""
     if BEGIN_MARKER not in readme_src or END_MARKER not in readme_src:
         raise SystemExit(
             f"docs/tools.md is missing the markers.\nAdd these two lines where the "
             f"table should go:\n  {BEGIN_MARKER}\n  {END_MARKER}"
         )
+    if total is not None:
+        readme_src, n = _HEADLINE_RE.subn(
+            f"**{total} tools, grouped by security scope.**", readme_src)
+        if n != 1:
+            raise SystemExit(
+                "docs/tools.md should open with one '**N tools, grouped by security "
+                f"scope.**' line for the generator to keep current, found {n}."
+            )
     pre = readme_src.split(BEGIN_MARKER)[0]
     post = readme_src.split(END_MARKER)[1]
     return f"{pre}{BEGIN_MARKER}\n{table_md}{END_MARKER}{post}"
@@ -231,7 +248,7 @@ def main():
 
     if args.check:
         current = _read(DOC_PATH)
-        expected = inject(current, table_md)
+        expected = inject(current, table_md, len(tools))
         stale = current != expected
         if warnings:
             print("FAIL: one or more tools are unclassified.", file=sys.stderr)
@@ -244,7 +261,7 @@ def main():
         sys.exit(1 if (stale or warnings) else 0)
 
     if args.write:
-        new = inject(_read(DOC_PATH), table_md)
+        new = inject(_read(DOC_PATH), table_md, len(tools))
         with open(DOC_PATH, "w", encoding="utf-8") as f:
             f.write(new)
         print(f"Wrote {len(tools)} tools into {DOC_PATH}")

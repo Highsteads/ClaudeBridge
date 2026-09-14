@@ -32,7 +32,7 @@ Anthropic API account with pay-as-you-go billing instead of a subscription.)
 it.** The plugin can hold its own API key from
 [console.anthropic.com](https://console.anthropic.com), but it only uses it for
 one thing: writing AI summaries inside the historical-analysis tool, which also
-needs an InfluxDB database set up — a niche feature. **All 168 tools work
+needs an InfluxDB database set up — a niche feature. **All 169 tools work
 without this key.** If you do set one up, it bills per use (pennies a month,
 as a rule), separately from your subscription.
 
@@ -64,7 +64,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 168 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 169 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and
@@ -144,7 +144,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 168 tools available.
+The `indigo-mcp` tools will appear on next session start. You should see 169 tools available.
 
 
 ---

@@ -130,7 +130,7 @@ WRITE_TOOLS: Set[str] = {
 # Destructive / irreversible / code-execution / lifecycle / physical-security — require 'admin'.
 ADMIN_TOOLS: Set[str] = {
     # Arbitrary code / GUI scripting / script files
-    "execute_indigo_python", "execute_plugin_menu_item", "run_script", "scaffold_automation_script",
+    "execute_indigo_python", "execute_plugin_menu_item", "execute_client_menu_item", "run_script", "scaffold_automation_script",
     "write_script", "create_script", "delete_script",
     # Plugin lifecycle
     "restart_plugin", "plugin_refresh_deps",

@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.26.2
+**Version:** 2.27.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -14,14 +14,14 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 ## How it works
 
-Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **168 tools** for reading and controlling your system.
+Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **169 tools** for reading and controlling your system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
 │  Claude Code        │         │  go-between script   │         │  Indigo web  │
 │  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
 │                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (168 tools) │
+│                     │         │  key automatically   │         │  (169 tools) │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
@@ -74,6 +74,17 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 2.27.0 (2026-09-14)
+Claude can now use any of the Indigo client's own menus, not just a plugin's.
+
+Claude Bridge could already click a plugin's menu item, because Indigo offers no other way to fire one from outside. That same gap turns out to run through a good deal of the client itself. `indigo.zwave` has an `isEnabled()` and nothing that sets it, so *Interfaces, Z-Wave, Disable* is the only way to make Indigo let go of the Z-Wave stick, and letting go of the stick is exactly what a controller backup needs before it can read it. The new `execute_client_menu_item` takes the whole path, so `['Interfaces', 'Z-Wave', 'Disable']` does what a person would do, and a backup, a verify and switching the interface back on afterwards now run with nobody at the keyboard.
+
+It reads menus as well as clicking them. Passing `list_only` returns the item names under any menu or submenu, which matters more than it sounds: several of these labels are toggles that rename themselves, and the Z-Wave one reads *Disable* while the interface is on and *Enable* while it is off, so anything that clicks a fixed label will sooner or later click the wrong one. Listing leaves the client where it is. Clicking brings it to the front, because System Events needs it there.
+
+Two things it will not do. It refuses any path through Claude Bridge's own submenu, however it is spelt, because reloading the bridge kills the session that asked for it. The plugin-menu tool already refused that by name, and a tool that takes a whole path reaches the identical item by another road, so the guard had to be built again here rather than inherited. It also refuses to quit the client, that being the one click nothing on this side could undo.
+
+15 tests, each guard checked by breaking it first and watching the suite go red. The tool table is generated, and it now keeps the sentence above itself current too: adding this tool moved the table and the generated marker to 169 and left the headline reading 168, which is the same fault the 2.26.0 note records finding in seven places at once.
+
 ### 2.26.2 (2026-09-11)
 The bundle now carries the standard GitHub record.
 
@@ -83,15 +94,6 @@ Indigo plugins can carry a small note inside the bundle saying where their sourc
 The plugin's own About item pointed at the wrong page.
 
 Indigo builds the *About Claude Bridge* menu item from the support address in the plugin bundle, and that address was the Highsteads organisation page rather than this plugin's repository. It now opens github.com/Highsteads/ClaudeBridge, where the documentation site, the releases and the issue tracker are one click away. Nothing else changed.
-
-### 2.26.0 (2026-09-10)
-Other plugins can now bring their own tools to Claude Bridge.
-
-A plugin that ships a small JSON file in its bundle, `Contents/Resources/mcp-manifest.json`, has its tools listed to Claude under its own prefix and every call forwarded to it — no configuration here, no configuration there, and a plugin picked up the moment it starts. The format is the provider-manifest contract mlamoure published for his Indigo MCP Server, followed here from the published specification, so a plugin written for either server works with both. The first provider is the Dashboards plugin (from its 3.12.0), which offers eight `dashboards_` tools: its status, its setup check as data, the room folders read and set, the cameras listed, added and removed, and the last lines of its own log.
-
-Tools a plugin marks as writes are governed by one new switch under Configure, *Allow plugin-provided tools to make changes*, on by default and honoured at once; read tools always work. Each provider tool is classified read or write for the per-token scopes as it is registered, and never admin — the plugin decided what it does. Two new menu items print the providers found and rescan them on demand; a provider that appears, changes or vanishes is also noticed at the next tool listing. A plugin's own stopping is reported as exactly that, a hung one as a timeout rather than a hang, and a reply that breaks the contract as a protocol violation naming the plugin.
-
-The README's tool count read 167 in seven places while the generated table and the repo description said 168; it says 168 now. 54 tests for the new module; the built-in tool table is unchanged, because a plugin's tools are not built in.
 
 ## Vibe coding for Indigo
 
@@ -163,7 +165,7 @@ You read the result, hit Enter to commit, done. No Googling
 
 ## What it does
 
-Claude Bridge gives Claude Code **168 MCP tools**, enough to read and change anything on a running
+Claude Bridge gives Claude Code **169 MCP tools**, enough to read and change anything on a running
 Indigo server: **70 read** tools (pure queries), **68 write** tools (they change Indigo state) and
 **30 admin** tools (deletes, code execution, plugin lifecycle, physical security). By area:
 
@@ -236,7 +238,7 @@ Anthropic API account with pay-as-you-go billing instead of a subscription.)
 it.** The plugin can hold its own API key from
 [console.anthropic.com](https://console.anthropic.com), but it only uses it for
 one thing: writing AI summaries inside the historical-analysis tool, which also
-needs an InfluxDB database set up — a niche feature. **All 168 tools work
+needs an InfluxDB database set up — a niche feature. **All 169 tools work
 without this key.** If you do set one up, it bills per use (pennies a month,
 as a rule), separately from your subscription.
 
@@ -270,7 +272,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 168 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 169 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and

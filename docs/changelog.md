@@ -8,6 +8,17 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 2.27.0 (2026-09-14)
+Claude can now use any of the Indigo client's own menus, not just a plugin's.
+
+Claude Bridge could already click a plugin's menu item, because Indigo offers no other way to fire one from outside. That same gap turns out to run through a good deal of the client itself. `indigo.zwave` has an `isEnabled()` and nothing that sets it, so *Interfaces, Z-Wave, Disable* is the only way to make Indigo let go of the Z-Wave stick, and letting go of the stick is exactly what a controller backup needs before it can read it. The new `execute_client_menu_item` takes the whole path, so `['Interfaces', 'Z-Wave', 'Disable']` does what a person would do, and a backup, a verify and switching the interface back on afterwards now run with nobody at the keyboard.
+
+It reads menus as well as clicking them. Passing `list_only` returns the item names under any menu or submenu, which matters more than it sounds: several of these labels are toggles that rename themselves, and the Z-Wave one reads *Disable* while the interface is on and *Enable* while it is off, so anything that clicks a fixed label will sooner or later click the wrong one. Listing leaves the client where it is. Clicking brings it to the front, because System Events needs it there.
+
+Two things it will not do. It refuses any path through Claude Bridge's own submenu, however it is spelt, because reloading the bridge kills the session that asked for it. The plugin-menu tool already refused that by name, and a tool that takes a whole path reaches the identical item by another road, so the guard had to be built again here rather than inherited. It also refuses to quit the client, that being the one click nothing on this side could undo.
+
+15 tests, each guard checked by breaking it first and watching the suite go red. The tool table is generated, and it now keeps the sentence above itself current too: adding this tool moved the table and the generated marker to 169 and left the headline reading 168, which is the same fault the 2.26.0 note records finding in seven places at once.
+
 ### 2.26.2 (2026-09-11)
 The bundle now carries the standard GitHub record.
 
