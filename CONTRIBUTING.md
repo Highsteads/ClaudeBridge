@@ -22,6 +22,10 @@ live Indigo install:
 CB_SP="$PWD/Claude Bridge.indigoPlugin/Contents/Server Plugin" python -m pytest tests -q
 ```
 
+The repo's bundle carries no vendored `Contents/Packages`, only the installed
+one does, so run the `pip install -r ...` above first or this override fails at
+import with a missing third-party module rather than a test failure.
+
 Lint (errors only — undefined names, unused imports; no style policing) and
 the README tool-table staleness check:
 
@@ -84,9 +88,27 @@ out the hard way:
    `tests/test_tool_registry_consistency.py` (a conscious decision, not a
    default). Mutating tools that stale cached reads get an `_INVALIDATION_MAP`
    entry of their own.
-5. **Docs**: regenerate the README table —
-   `python3 scripts/generate_tool_doc.py --write` — and mention the tool in
-   the matching "What it does" section of the README if it's user-visible.
+5. **Docs**: regenerate the tool reference —
+   `python3 scripts/generate_tool_doc.py --write`. It writes `docs/tools.md`
+   (not the README, which has not carried the table since 11-09-2026), and it
+   owns both the table and the "**N tools, grouped by security scope.**"
+   sentence above it. Mention the tool in `docs/what-it-does.md` if it's
+   user-visible.
+   **Then sweep the tool count by hand.** It is quoted in prose in about a
+   dozen places across `README.md` and `docs/`, and the generator owns none of
+   them. Search for the OLD number on a word boundary:
+
+   ```bash
+   grep -rnE "\b168\b" README.md docs/*.md | grep -v "^docs/changelog.md"
+   ```
+
+   Use the word boundary rather than `"168 tools"`: two of the lines read
+   ``168 `indigo-mcp` tools``, so a phrase search silently misses them, which is
+   the same near-miss the count bug is made of. Check each hit before editing —
+   `192.168` matches, and so does a genuine 168 in older prose. Leave
+   `docs/changelog.md` alone, its entries record what was true at the time. The
+   2.26.0 note exists because this was missed and the README read 167 in seven
+   places at once.
 6. **Test**: add a behavioural test (see `tests/test_dispatch.py` for the
    skeletal-handler pattern that needs no Indigo server), then run the full
    suite.
