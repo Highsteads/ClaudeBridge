@@ -26,7 +26,6 @@
 #   Both tests had been red on this Mac since 2.26.0 shipped.
 
 import filecmp
-import glob
 import json
 import os
 import plistlib
@@ -36,7 +35,7 @@ import urllib.request
 
 import pytest
 
-from conftest import SERVER_PLUGIN
+from conftest import SERVER_PLUGIN, indigo_install_folders, installed_server_plugin
 
 _TIMEOUT = 5
 _MCP_URL = "http://127.0.0.1:8176/message/com.clives.indigoplugin.claudebridge/mcp/"
@@ -44,8 +43,7 @@ _HEALTH_URL = "http://127.0.0.1:8176/message/com.clives.indigoplugin.claudebridg
 
 
 def _find_bearer_token():
-    base = "/Library/Application Support/Perceptive Automation"
-    for d in sorted(glob.glob(os.path.join(base, "Indigo *")), reverse=True):
+    for d in indigo_install_folders():
         secrets_path = os.path.join(d, "Preferences", "secrets.json")
         if os.path.isfile(secrets_path):
             try:
@@ -95,16 +93,6 @@ def _registry_count():
     return len(registry.load())
 
 
-def _installed_server_plugin():
-    base = "/Library/Application Support/Perceptive Automation"
-    for d in sorted(glob.glob(os.path.join(base, "Indigo *")), reverse=True):
-        sp = os.path.join(d, "Plugins", "Claude Bridge.indigoPlugin",
-                          "Contents", "Server Plugin")
-        if os.path.isdir(sp):
-            return sp
-    return None
-
-
 def _require_live_runs_bundle_under_test():
     """Skip a registry comparison when the live plugin runs different code.
 
@@ -112,7 +100,7 @@ def _require_live_runs_bundle_under_test():
     the deployed code IS the code under test. The registry lives in
     mcp_handler.py, so that file decides.
     """
-    installed = _installed_server_plugin()
+    installed = installed_server_plugin()
     if installed is None:
         pytest.skip("no installed Claude Bridge bundle to compare against")
     rel = os.path.join("mcp_server", "mcp_handler.py")

@@ -1,7 +1,9 @@
 """
 Lifecycle of the in-memory entity index: the first load, the periodic
-rebuild (every 300 s by default), and the out-of-band refresh after a tool
-changes entity structure.
+rebuild (every 300 s by default), the out-of-band refresh after a tool
+changes entity structure, and the rebuild-on-next-search after Indigo tells
+the plugin that a device, variable or action group was added, removed or
+renamed (mark_dirty / refresh_if_dirty).
 """
 
 import logging
@@ -14,6 +16,26 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
     from ...adapters.indigo_data_provider import IndigoDataProvider
 from .main import EntityIndex
+
+# The attributes of each Indigo object the index searches or reports. A change
+# to any of them makes the index stale; any other change (a device's states, a
+# variable's value) does not, and must not cost a rebuild.
+INDEX_FIELDS = {
+    "device":       ("name", "folderId", "enabled", "description", "model",
+                     "deviceTypeId", "pluginId"),
+    "variable":     ("name", "folderId", "readOnly"),
+    "action_group": ("name", "folderId", "description"),
+}
+
+
+def index_fields_changed(kind: str, orig: Any, new: Any) -> bool:
+    """True when an update to an Indigo object touched something the entity
+    index holds. Reads attributes only, so it is cheap enough for a callback
+    that fires on every sensor event."""
+    for field in INDEX_FIELDS[kind]:
+        if getattr(orig, field, None) != getattr(new, field, None):
+            return True
+    return False
 
 
 class EntityIndexManager:
@@ -64,6 +86,15 @@ class EntityIndexManager:
         # Set when a structural change lands during warmup, when there is no
         # store to refresh yet. Honoured once warmup completes.
         self._refresh_requested_during_warmup = False
+
+        # Set from Indigo's own change callbacks (deviceCreated, a rename and
+        # so on) and honoured by the next search. A plain bool: the callbacks
+        # fire constantly on a busy estate, so marking must cost nothing.
+        # Cleared at the START of every rebuild, so any rebuild that begins
+        # after the change covers it, and a change landing mid-rebuild marks
+        # the index again rather than being lost.
+        self._dirty = False
+        self._dirty_lock = threading.Lock()
     
     def start_async(self) -> None:
         """
@@ -222,6 +253,7 @@ class EntityIndexManager:
             return
 
         try:
+            self._dirty = False
             update_start = time.time()
 
             # Get all entity data
@@ -250,12 +282,43 @@ class EntityIndexManager:
             self.logger.error(f"\t❌ Entity index update failed: {e}")
             raise
     
+    def mark_dirty(self) -> None:
+        """Note that the index no longer matches Indigo. O(1) and never raises:
+        it runs on the plugin's device and variable callbacks."""
+        self._dirty = True
+
+    @property
+    def is_dirty(self) -> bool:
+        return self._dirty
+
+    def refresh_if_dirty(self) -> bool:
+        """Rebuild now if something changed since the last rebuild. Called by
+        search before it reads the index, so a search never answers from an
+        index Indigo has told us is out of date. Returns True when it rebuilt.
+
+        Concurrent searches share one rebuild: the second waits on the lock
+        and then finds the flag already clear. Before warmup has finished
+        there is nothing to rebuild yet; warmup reads everything anyway."""
+        if not self._dirty or not self._running or not self.entity_index:
+            return False
+        with self._dirty_lock:
+            if not self._dirty:
+                return False
+            try:
+                self.update_now()
+            except Exception:
+                # update_now logged it. Mark again so the next search retries
+                # instead of trusting an index that failed to rebuild.
+                self._dirty = True
+                return False
+            return True
+
     def refresh_async(self) -> None:
         """Trigger an out-of-band search-index rebuild WITHOUT blocking the caller.
 
         Called after a tool changes entity structure (create/delete/rename a
-        device/variable/action, or an arbitrary-exec tool) so search reflects the
-        change immediately instead of waiting up to update_interval seconds. A
+        device/variable/action) so search reflects the change immediately
+        instead of waiting up to update_interval seconds. A
         whole-index rebuild is simple and cheap. Coalesced: a burst of
         mutations spawns at most one in-flight rebuild.
         """
@@ -352,6 +415,7 @@ class EntityIndexManager:
             "running": self._running,
             "last_update": self._last_update_time,
             "update_interval": self.update_interval,
+            "dirty": self._dirty,
         }
 
         if self.entity_index:

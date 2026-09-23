@@ -21,26 +21,10 @@ from test_dispatch import _LOGGER
 
 # ── Boost.Python-alike containers ─────────────────────────────────────────────
 # The real indigo.Dict/indigo.List are NOT dict/list subclasses. That is the
-# whole reason the converter exists, so the fakes must not be subclasses either
-# or the tests would pass against a converter that only ever handled real dicts.
+# whole reason the converter exists, so the fakes (shared, in conftest.py) are
+# not subclasses either.
 
-class FakeIndigoDict:
-    def __init__(self, data):
-        self._d = dict(data)
-
-    def keys(self):
-        return self._d.keys()
-
-    def __getitem__(self, k):
-        return self._d[k]
-
-
-class FakeIndigoList:
-    def __init__(self, items):
-        self._items = list(items)
-
-    def __iter__(self):
-        return iter(self._items)
+from conftest import FakeIndigoDict, FakeIndigoList  # noqa: E402
 
 
 # ── the converter ─────────────────────────────────────────────────────────────

@@ -131,3 +131,54 @@ def test_audit_classification_flags_unclassified():
     report = mgr.audit_classification(list(sm.READ_TOOLS) + ["mystery_tool"])
     assert report["unclassified"] == ["mystery_tool"]
     assert report["multi_classified"] == []
+
+
+# ── H9: enable/disable_action_group fully removed ────────────────────────────
+
+def test_action_group_enable_disable_removed_from_scopes():
+    from mcp_server.security import scope_manager as sm
+    every = sm.READ_TOOLS | sm.WRITE_TOOLS | sm.ADMIN_TOOLS
+    assert "enable_action_group" not in every
+    assert "disable_action_group" not in every
+    # duplicating an action group is a real IOM op and must remain.
+    assert "duplicate" in sm.WRITE_TOOLS
+
+
+# ── Scope classification of the new tools ────────────────────────────────────
+
+def test_new_tool_scopes():
+    from mcp_server.security import scope_manager as sm
+    # Z-Wave management is ADMIN (config reprogram / physical pair / mesh traffic)
+    assert "zwave" in sm.ADMIN_TOOLS
+    # thermostat changes, cool setpoints included, are WRITE
+    assert "thermostat_control" in sm.WRITE_TOOLS
+    # the introspection tools are READ
+    for t in ("get_dependencies", "server_info"):
+        assert t in sm.READ_TOOLS, t
+
+
+def test_required_scope_resolves():
+    from mcp_server.security.scope_manager import required_scope_for
+    assert required_scope_for("zwave") == "admin"
+    assert required_scope_for("thermostat_control") == "write"
+    assert required_scope_for("server_info") == "read"
+
+
+# ── scopes.json is hand-edited, so it must survive an obvious mistake ────────
+
+def test_a_string_scope_is_not_exploded_into_characters(tmp_path):
+    """list("admin") is five scopes, none of them real — a token with a string
+    scope silently had NO usable permissions and nothing said why."""
+    import json
+
+    from mcp_server.security.scope_manager import ScopeManager
+
+    path = tmp_path / "scopes.json"
+    path.write_text(json.dumps({
+        "default_scopes": "read",
+        "tokens": {"tok-abc": {"name": "phone", "scopes": "admin"}},
+    }))
+
+    sm = ScopeManager(str(path))
+    assert sm._default == ["read"]
+    assert sm._tokens["tok-abc"]["scopes"] == ["admin"]

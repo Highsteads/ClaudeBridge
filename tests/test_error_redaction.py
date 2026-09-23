@@ -301,3 +301,50 @@ def test_run_script_error_keeps_its_type_and_traceback(tmp_path, monkeypatch):
     assert res["error"] == "KeyError: 'missing-key'"
     assert res["traceback"].rstrip().endswith("KeyError: 'missing-key'")
     assert res["stdout"] == "started\n"
+
+
+# ── return-vs-raise cluster: error results detected, not cached, scrubbed ────
+
+def test_result_ok_detects_error_payloads():
+    from mcp_server.mcp_handler import MCPHandler
+    assert MCPHandler._result_ok('{"success": true, "devices": []}') is True
+    assert MCPHandler._result_ok('{"success": false, "error": "boom"}') is False
+    assert MCPHandler._result_ok('{"error": "not found"}') is False
+    # A plain (non-JSON, non-dict) string is a normal result, not an error.
+    assert MCPHandler._result_ok("just some text") is True
+    assert MCPHandler._result_ok('{"success": true, "error": null}') is True
+
+
+def test_scrub_error_result_removes_raw_text():
+    from mcp_server.mcp_handler import MCPHandler
+    raw = '{"success": false, "error": "SMTP auth failed for user bob@example.com via mail.host:587"}'
+    scrubbed = json.loads(MCPHandler._scrub_error_result(raw))
+    assert scrubbed["success"] is False
+    assert "bob@example.com" not in scrubbed["error"]
+    assert "event log" in scrubbed["error"]
+
+
+# ── A sensitive tool's failure must not ship the secret by another name ──────
+
+def test_error_scrub_drops_traceback_and_output():
+    """Replacing only `error` left `traceback` carrying the same text verbatim."""
+    import json
+
+    from mcp_server.mcp_handler import MCPHandler
+
+    raw = json.dumps({
+        "success":   False,
+        "error":     "auth failed for sk-secret-123",
+        "traceback": "Traceback...\nRuntimeError: auth failed for sk-secret-123",
+        "stdout":    "printing sk-secret-123",
+        "stderr":    "sk-secret-123",
+        "path":      "/Library/.../Nightly.py",
+        "timed_out": True,
+    })
+    out = json.loads(MCPHandler._scrub_error_result(raw))
+
+    assert out["success"] is False
+    assert out["timed_out"] is True          # control flow survives
+    for leaked in ("traceback", "stdout", "stderr", "path"):
+        assert leaked not in out, f"{leaked} survived the scrub"
+    assert "sk-secret-123" not in json.dumps(out)

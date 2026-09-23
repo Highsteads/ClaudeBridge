@@ -5,7 +5,7 @@ nav_order: 6
 
 # Configuration
 
-Most people never open the Configure dialog: the installer sets up the connection, the plugin needs
+Most people never open the Configure dialog: the plugin sets up the connection itself, needs
 no API key and no extra Python packages, and the defaults are the safe ones. This page is what each setting does when
 you do.
 
@@ -21,7 +21,7 @@ you do.
 | Enable Event Webhooks, egress allow-list, plain-HTTP allow-list | The "home calls out" feature, off by default, and the only destinations it may ever post to. See [Security](security.md) |
 | Event Logging Level | How much the plugin says in the Indigo event log |
 | Allow Claude to delete devices, variables and automations | Off by default. While off, every delete is refused whatever token is in use |
-| Auto-configure Claude Code | On by default: at startup the plugin copies the go-between script into Indigo's `Scripts` folder, patches the access key into it, and keeps `~/.mcp.json` current |
+| Auto-configure Claude Code | On by default: at startup the plugin copies the go-between script into Indigo's `Scripts` folder, patches the access key into it, and keeps `~/.mcp.json` and `~/.claude/settings.json` current |
 
 ## Per-token scopes — `scopes.json`
 

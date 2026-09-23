@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
-# Filename:    test_proxy_v14.py
+# Filename:    test_proxy_reconnect.py
 # Description: indigo_mcp_proxy v1.4 self-healing — RemoteDisconnected-on-reused
 #              retry, proactive idle-reconnect, and transparent -32600 session
 #              re-handshake + replay. Also pins the safety guarantee that an
@@ -22,7 +22,7 @@ import pytest
 from conftest import SERVER_PLUGIN
 
 _PROXY_PATH = os.path.join(SERVER_PLUGIN, "indigo_mcp_proxy.py")
-_spec = importlib.util.spec_from_file_location("cb_proxy_v14", _PROXY_PATH)
+_spec = importlib.util.spec_from_file_location("cb_proxy_reconnect", _PROXY_PATH)
 proxy = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(proxy)
 

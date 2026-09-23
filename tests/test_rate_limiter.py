@@ -60,3 +60,31 @@ def test_reset_session_clears_the_bucket():
         rl.check("token-a", {"read"})
     rl.reset_session("token-a")
     rl.check("token-a", {"read"})            # allowance restored
+
+
+_LOG = logging.getLogger("test-v210")
+
+
+# ── H3: /health must not expose raw bearer tokens ────────────────────────────
+
+def test_rate_limiter_snapshot_masks_bearer_tokens():
+    from mcp_server.security import RateLimiter
+    rl = RateLimiter(per_minute=100, per_day=5000, logger=_LOG)
+    secret = "sk-live-SUPERSECRETTOKEN-abcdef"
+    rl.check(secret, {"read"})
+    snap = rl.snapshot()
+    # The raw token must NOT appear as a key…
+    assert secret not in snap
+    # …but a stable, non-reversible label must, carrying the counts.
+    assert len(snap) == 1
+    (masked_key, counts), = snap.items()
+    assert masked_key.startswith("token-")
+    assert secret[:8] not in masked_key
+    assert counts["minute"] == 1
+
+
+def test_rate_limiter_snapshot_keeps_anonymous_readable():
+    from mcp_server.security import RateLimiter
+    rl = RateLimiter(per_minute=100, per_day=5000, logger=_LOG)
+    rl.check("anonymous", {"read"})
+    assert "anonymous" in rl.snapshot()

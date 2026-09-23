@@ -491,6 +491,15 @@ Tool count 86 → 136. Three batches of work and one security fix, released toge
 - **Fewer false alarms from the convention sweep.** The missing-loop-guard rule read the parameter name literally, missed annotated signatures, and knew only one way of writing the guard. It now recognises three, and only complains when the callback actually writes something back — a read-only mirror can't loop, so it no longer gets flagged.
 - **A credential could reach the log.** Fixed.
 
+### 2.6.1 (2026-05-27)
+Released as part of 2.6.2. The convention sweep's missing-loop-guard rule stopped reading the parameter name literally, learned three ways of writing the guard, and only complains when the callback writes something back.
+
+### 2.6.0 (2026-05-27)
+Released as part of 2.6.2. Seven plugin-development helpers: compare a plugin's installed copy with its source, force its dependencies to reinstall, read the versions of the libraries it bundles, check its XML, run `node --check` over the scripts in its HTML pages, sweep its `plugin.py` for convention slips, and query the SQL Logger history for one device. Tool count 129 → 136.
+
+### 2.5.0 (2026-05-27)
+Released as part of 2.6.2. 43 new tools covering the parts of Indigo no tool reached yet: device, variable, schedule, trigger and action group housekeeping, the sprinkler set, fan mode and fan speed, server odds and ends, control pages and a plugin update check. Tool count 86 → 129.
+
 ### 2.4.3 (2026-05-25)
 - **The plugin's own device no longer restarts for nothing.** It was re-establishing communication on any edit to the device, when the server name is the only field you can actually change.
 

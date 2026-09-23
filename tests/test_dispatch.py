@@ -225,3 +225,12 @@ def test_enable_device_alias_resolves():
     assert seen["value"] is True
     fn(ctx, 42, value=False, enable=True)
     assert seen["value"] is False, "explicit value wins over the alias"
+
+
+# ── payload-bytes telemetry ───────────────────────────────────────────────────
+
+def test_telemetry_records_response_bytes(tmp_path):
+    h = _make_handler(tmp_path, tools={"list_devices": _tool(lambda **kw: "hello")})
+    h._handle_tools_call(1, {"name": "list_devices", "arguments": {}})
+    entry = h._tool_call_log[0]
+    assert entry["bytes"] == len("hello")

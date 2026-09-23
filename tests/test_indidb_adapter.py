@@ -364,13 +364,82 @@ def test_store_handles_missing_file():
 
 def test_live_database_smoke():
     """Parse the real database if this machine has one (skipped elsewhere)."""
-    base = "/Library/Application Support/Perceptive Automation"
     import glob
-    candidates = sorted(glob.glob(os.path.join(base, "Indigo *", "Databases",
-                                               "*.indiDb")), reverse=True)
+    from conftest import indigo_install_folders
+    candidates = sorted((db for d in indigo_install_folders()
+                         for db in glob.glob(os.path.join(d, "Databases", "*.indiDb"))),
+                        reverse=True)
     if not candidates:
         pytest.skip("no live Indigo database on this machine")
     parsed_live = parse_indidb(candidates[0])
     counts = parsed_live.counts()
     assert counts["triggers"] > 0 and counts["schedules"] > 0
     build_reverse_index(parsed_live)
+
+
+# ── indidb: anomaly counter ──────────────────────────────────────────────────
+
+BROKEN_TRIGGER = """\
+        <Trigger type="dict">
+            <Name type="string">Corrupt No-ID Trigger</Name>
+            <Class type="integer">501</Class>
+        </Trigger>
+"""
+
+
+@pytest.fixture()
+def broken_db(tmp_path):
+    content = SYNTHETIC_DB.replace(
+        "<TriggerList type=\"vector\">",
+        "<TriggerList type=\"vector\">\n" + BROKEN_TRIGGER)
+    path = tmp_path / "Broken.indiDb"
+    path.write_text(content, encoding="utf-8")
+    return str(path)
+
+
+def test_parser_counts_skipped_records(broken_db):
+    parsed = parse_indidb(broken_db)
+    assert parsed.skipped_records == 1
+    # The good trigger still parses.
+    assert TRIG_MOTION in parsed.triggers
+
+
+def test_store_surfaces_skipped_in_freshness(broken_db):
+    store = IndiDbStructureStore(lambda: broken_db, stat_throttle_seconds=0.0)
+    freshness = store.freshness()
+    assert freshness["available"] is True
+    assert freshness["skipped_records"] == 1
+    assert "skipped" in freshness["note"]
+
+
+def test_clean_parse_reports_no_skips(tmp_path):
+    path = tmp_path / "Clean.indiDb"
+    path.write_text(SYNTHETIC_DB, encoding="utf-8")
+    store = IndiDbStructureStore(lambda: str(path), stat_throttle_seconds=0.0)
+    freshness = store.freshness()
+    assert "skipped_records" not in freshness
+
+
+# ── indidb: path in the cache key ────────────────────────────────────────────
+
+def test_store_invalidates_on_database_switch(tmp_path):
+    db_a = tmp_path / "A.indiDb"
+    db_b = tmp_path / "B.indiDb"
+    db_a.write_text(SYNTHETIC_DB, encoding="utf-8")
+    # Same-LENGTH name so both files have identical size — the point of the
+    # test is that only the path distinguishes them.
+    db_b.write_text(SYNTHETIC_DB.replace("Motion Turns On Lamp",
+                                         "Motion Turns Off Fan"),
+                    encoding="utf-8")
+    # Same mtime AND size would previously satisfy the (mtime,size)-only key.
+    same_time = time.time() - 100
+    os.utime(db_a, (same_time, same_time))
+    os.utime(db_b, (same_time, same_time))
+    assert os.path.getsize(db_a) == os.path.getsize(db_b)
+
+    current = {"path": str(db_a)}
+    store = IndiDbStructureStore(lambda: current["path"],
+                                 stat_throttle_seconds=0.0)
+    assert store.get_structure("trigger", TRIG_MOTION)["Name"] == "Motion Turns On Lamp"
+    current["path"] = str(db_b)  # server switches databases
+    assert store.get_structure("trigger", TRIG_MOTION)["Name"] == "Motion Turns Off Fan"

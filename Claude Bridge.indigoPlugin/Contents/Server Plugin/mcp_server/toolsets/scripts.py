@@ -70,7 +70,6 @@ def delete_script(ctx, name):
 
 
 @tool("run_script", scope="admin", invalidates={"*"}, sensitive=True, redact=True,
-      refresh_search=True,
       description=("Execute a Python script from the Python Scripts folder in the Indigo Python "
                    "context, with full access to the indigo module. Use for triggering "
                    "automation logic, one-off tasks, or testing scripts. Returns stdout/stderr."
@@ -82,7 +81,6 @@ def run_script(ctx, name=None, wait_seconds=None, job_id=None):
 
 
 @tool("execute_indigo_python", scope="admin", invalidates={"*"}, sensitive=True, redact=True,
-      refresh_search=True,
       description=("Run arbitrary Python in this plugin's Indigo context. Has full access to the "
                    "`indigo` module (devices, variables, triggers, thermostat.setHeatSetpoint, "
                    "etc). mode='exec' runs a statement block and returns captured stdout/stderr. "

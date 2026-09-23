@@ -57,12 +57,29 @@ def test_item_prefixes_are_unambiguous(resources):
                 assert not a.startswith(b), f"{a} is shadowed by {b}"
 
 
-def test_automation_resources_reuse_the_tool_handlers(resources):
-    """A resource rendering automations its own way is a second contract."""
-    import inspect
-    for uri, attr in (("indigo://triggers/{trigger_id}", "automation_detail_handler"),
-                      ("indigo://schedules/{schedule_id}", "automation_detail_handler"),
-                      ("indigo://triggers", "schedule_control_handler"),
-                      ("indigo://schedules", "schedule_control_handler")):
-        source = inspect.getsource(resources[uri]["function"])
-        assert attr in source, f"{uri} does not go through self.{attr}"
+def test_automation_resources_reuse_the_tool_handlers():
+    """A resource rendering automations its own way is a second contract.
+
+    This read each resource function's source for the handler's name; it now
+    calls each one against recording handlers and checks which was used.
+    """
+    import json
+    from unittest.mock import MagicMock
+
+    h = object.__new__(MCPHandler)
+    h._resources = {}
+    h._register_resources()
+    h.logger = MagicMock()
+    h.automation_detail_handler = MagicMock()
+    h.automation_detail_handler.get_details.return_value = {"via": "automation_detail"}
+    h.schedule_control_handler = MagicMock()
+    h.schedule_control_handler.list_triggers.return_value = {"via": "list_triggers"}
+    h.schedule_control_handler.list_schedules.return_value = {"via": "list_schedules"}
+
+    fn = {uri: h._resources[uri]["function"] for uri in EXPECTED}
+    assert json.loads(fn["indigo://triggers"]()) == {"via": "list_triggers"}
+    assert json.loads(fn["indigo://schedules"]()) == {"via": "list_schedules"}
+    assert json.loads(fn["indigo://triggers/{trigger_id}"]("7")) == {"via": "automation_detail"}
+    h.automation_detail_handler.get_details.assert_called_with("trigger", 7, include_scripts=True)
+    assert json.loads(fn["indigo://schedules/{schedule_id}"]("9")) == {"via": "automation_detail"}
+    h.automation_detail_handler.get_details.assert_called_with("schedule", 9, include_scripts=True)

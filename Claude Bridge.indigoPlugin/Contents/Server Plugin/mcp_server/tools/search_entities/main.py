@@ -3,7 +3,7 @@ Search entities handler for natural language search of Indigo entities.
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from typing import TYPE_CHECKING
 
@@ -24,7 +24,8 @@ class SearchEntitiesHandler(BaseToolHandler):
         self, 
         data_provider: "IndigoDataProvider",
         entity_index: EntityIndex,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        freshen: Optional[Callable[[], Any]] = None,
     ):
         """
         Initialize the search entities handler.
@@ -33,10 +34,14 @@ class SearchEntitiesHandler(BaseToolHandler):
             data_provider: Data provider for accessing entity data
             entity_index: In-memory entity index to search
             logger: Optional logger instance
+            freshen: Called before every search; rebuilds the index when
+                Indigo has reported an added, removed or renamed entity
+                (EntityIndexManager.refresh_if_dirty)
         """
         super().__init__(tool_name="search_entities", logger=logger)
         self.data_provider = data_provider
         self.entity_index = entity_index
+        self._freshen = freshen
         self.query_parser = QueryParser()
         self.result_formatter = ResultFormatter()
     
@@ -72,6 +77,10 @@ class SearchEntitiesHandler(BaseToolHandler):
             # Concise query logging
             query_short = query[:50] + "..." if len(query) > 50 else query
             self.info_log(f"Searching: '{query_short}'")
+
+            # Rebuild first if Indigo has told us the index is out of date.
+            if self._freshen is not None:
+                self._freshen()
 
             # Parse query to determine search parameters
             search_params = self.query_parser.parse(query, device_types, entity_types)

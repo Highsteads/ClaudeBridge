@@ -34,46 +34,22 @@ second bill.
 
 ## Installation
 
-### Quick Install (recommended)
-
-Clone the repo and run the installer — it handles everything except enabling the plugin in Indigo:
-
-```bash
-git clone https://github.com/Highsteads/ClaudeBridge.git
-cd ClaudeBridge
-python3 "Claude Bridge.indigoPlugin/Contents/Server Plugin/install.py"
-```
-
-The script:
-- Copies the plugin bundle to Indigo's Plugins directory
-- Copies the proxy script to Indigo's `Scripts` directory
-- Reads your Bearer token from Indigo's `secrets.json` and patches the proxy automatically
-- Creates/updates `~/.mcp.json` and `~/.claude/settings.json`
-
-Then do these two final steps manually:
-
-1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
-   *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
-
-2. **Restart Claude Code** — you should see 69 `indigo-mcp` tools available
-
-> **Credentials policy:** All sensitive values are read from
-> `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and
-> the plugin's PluginConfig dialog is a fallback only. Keys this plugin reads:
-> `CLAUDEBRIDGE_BEARER_TOKEN` and (optional) `WEBHOOK_ALLOWLIST`.
-> If a value is missing from BOTH sources, the plugin logs an ERROR pointing
-> here and skips that feature. See `IndigoSecrets_example.py` for the template.
-
----
-
-### Manual Install
-
 #### 1. Install the Plugin
 
 1. Go to the [Releases page](https://github.com/Highsteads/ClaudeBridge/releases) and download `Claude.Bridge.indigoPlugin.zip`
 2. Unzip the downloaded file — you will get `Claude Bridge.indigoPlugin`
 3. Double-click `Claude Bridge.indigoPlugin` — Indigo will install it automatically
 4. In the Indigo client: **Plugins → Manage Plugins → Enable** Claude Bridge
+5. **Restart Claude Code** — you should see 69 `indigo-mcp` tools available
+
+Each time it starts, the plugin sets Claude Code up for you: it copies the go-between script
+(`indigo_mcp_proxy.py`) into Indigo's `Scripts` folder, writes your Indigo access key into it, and
+adds an `indigo-mcp` entry to `~/.mcp.json` and `~/.claude/settings.json`. The key comes from
+Indigo's own `Preferences/secrets.json`, or from `CLAUDEBRIDGE_BEARER_TOKEN` in `IndigoSecrets.py`
+if that file has none. The dotfiles are written for the macOS user Indigo runs as. The event log
+says what it changed, or that everything was already up to date. Steps 4 to 6 below are only
+needed if you untick **Auto-configure Claude Code**, or run Claude Code as another user or on
+another Mac.
 
 #### 2. Configure the Plugin
 
@@ -92,7 +68,7 @@ The plugin auto-creates a Claude Bridge device on first startup.
 No manual "New Device" step is needed. If you need to create it manually:
 **Devices → New Device → Plugin: Claude Bridge → Type: Claude Bridge**
 
-#### 4. Install the Proxy Script
+#### 4. Install the Proxy Script (only if you set Claude Code up by hand)
 
 Save `indigo_mcp_proxy.py` (from the bundle's `Contents/Server Plugin/` folder) to:
 ```
@@ -104,7 +80,7 @@ Edit the `BEARER_TOKEN` constant at the top of the script — use the first valu
 /Library/Application Support/Perceptive Automation/Indigo <your version>/Preferences/secrets.json
 ```
 
-#### 5. Register with Claude Code
+#### 5. Register with Claude Code (only if you set Claude Code up by hand)
 
 Add to `~/.mcp.json`:
 ```json
@@ -127,7 +103,7 @@ Add to `~/.claude/settings.json`:
 
 #### 6. Restart Claude Code
 
-The `indigo-mcp` tools will appear on next session start. You should see 69 tools available.
+The `indigo-mcp` tools will appear on the next session start.
 
 
 ---
@@ -136,14 +112,14 @@ The `indigo-mcp` tools will appear on next session start. You should see 69 tool
 
 The go-between script speaks the standard MCP protocol over stdio, so any client that can run a
 local MCP server can use it. The Claude desktop app's local-connector configuration takes the same
-command and arguments the installer writes into `~/.mcp.json`. Claude Code is what the plugin is
+command and arguments the plugin writes into `~/.mcp.json`. Claude Code is what the plugin is
 developed and tested with; the desktop app has not been through the same testing here, so treat it
 as "should work" rather than "known to work", and say so in an issue if it does not.
 
 ## Connecting Claude Code
 
 Claude Code connects via a lightweight Python proxy script (`indigo_mcp_proxy.py`) that handles
-authentication and protocol translation. The **Quick Install** script above sets this up automatically.
+authentication and protocol translation. The plugin sets this up automatically when it starts.
 
 ### Find Your Endpoint URL
 

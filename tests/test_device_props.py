@@ -201,27 +201,71 @@ def test_device_dict_returns_empty_dict_rather_than_raising():
     assert device_dict(object()) == {}
 
 
-def test_data_provider_serialises_through_device_dict():
-    """Guard the wiring: no bare dict(dev) may creep back into the provider."""
-    import inspect
+# The two wiring guards below used to grep the modules' source for
+# "device_dict" and "device_address(dev)". They now run the code over devices
+# with the live ShellyDirect shape (24-09-2026).
 
-    from mcp_server.adapters import indigo_data_provider
+class _Devices:
+    """indigo.devices as the provider and the audit use it: iterating yields
+    devices, indexing takes an id or a device, `in` takes an id."""
 
-    import re
+    def __init__(self, devices):
+        self._by_id = {d.id: d for d in devices}
 
-    src = inspect.getsource(indigo_data_provider)
-    assert "device_dict" in src
-    # Word-boundary match so device_dict(dev) does not look like dict(dev).
-    bare = re.findall(r"(?<![\w_])dict\((?:dev|partial\[0\])\)", src)
-    assert not bare, f"bare {bare} found — must go through device_dict"
+    def __iter__(self):
+        return iter(list(self._by_id.values()))
+
+    def __contains__(self, key):
+        return key in self._by_id
+
+    def __getitem__(self, key):
+        return self._by_id[getattr(key, "id", key)]
 
 
-def test_audit_uses_the_resolved_address():
-    """Guard the wiring in find_conflicts."""
-    import inspect
+def _two_shellies():
+    a, b = _shelly_like(), _shelly_like()
+    b.id, b.name = 2, "Colour Lamp Plug"
+    for dev in (a, b):
+        dev.enabled = True
+    return a, b
 
-    from mcp_server.tools.audit import audit_handler
 
-    src = inspect.getsource(audit_handler)
-    assert "device_address(dev)" in src
-    assert 'addr = (getattr(dev, "address", "") or "").strip()' not in src
+def test_data_provider_serialises_through_device_dict(monkeypatch):
+    """Every way the provider hands out a device must carry the repaired props."""
+    import logging
+
+    from mcp_server.adapters import indigo_data_provider as idp
+
+    a, _b = _two_shellies()
+    monkeypatch.setattr(idp.indigo, "devices", _Devices([a]), raising=False)
+    provider = idp.IndigoDataProvider(logger=logging.getLogger("t"))
+    served = {
+        "get_device": provider.get_device(1),
+        "get_all_devices_unfiltered": provider.get_all_devices_unfiltered()[0],
+        "get_device_by_name (exact)": provider.get_device_by_name("Conservatory Lamp Plug"),
+        "get_device_by_name (any case)": provider.get_device_by_name("conservatory lamp plug"),
+        "get_device_by_name (partial)": provider.get_device_by_name("Conservatory"),
+    }
+    for how, data in served.items():
+        assert data["pluginPropsSource"] == "globalProps", how
+        assert data["pluginProps"]["ip_address"] == "192.168.1.50", how
+
+
+def test_audit_uses_the_resolved_address(monkeypatch):
+    """find_conflicts sees two devices clashing on a props-held IP."""
+    import logging
+    from types import SimpleNamespace
+
+    from mcp_server.tools.audit import audit_handler as ah
+
+    a, b = _two_shellies()
+    fake = SimpleNamespace(devices=_Devices([a, b]), variables={}, triggers={})
+    monkeypatch.setattr(ah, "indigo", fake)
+    monkeypatch.setattr(ah, "_scripts_dirs", lambda: [])
+    monkeypatch.setattr(ah, "_iter_script_files", lambda dirs: iter(()))
+    result = ah.AuditHandler(data_provider=None, logger=logging.getLogger("t")).find_conflicts()
+    assert result["success"] is True
+    assert result["summary"]["shared_device_addresses"] == 1
+    clash = result["device_conflicts"]["shared_addresses"][0]
+    assert clash["address"] == "192.168.1.50"
+    assert {d["addressSource"] for d in clash["devices"]} == {"pluginProps"}

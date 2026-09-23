@@ -4,6 +4,6 @@ action groups.
 """
 
 from .main import EntityIndex
-from .entity_index_manager import EntityIndexManager
+from .entity_index_manager import EntityIndexManager, index_fields_changed
 
-__all__ = ["EntityIndex", "EntityIndexManager"]
+__all__ = ["EntityIndex", "EntityIndexManager", "index_fields_changed"]

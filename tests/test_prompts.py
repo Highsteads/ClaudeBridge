@@ -1,11 +1,13 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
-# Filename:    test_v211_tools.py
-# Description: Tests for the v2.11.0 API-coverage batch — MCP prompts, and the
-#              scope classification of the new Z-Wave / setpoint / read tools.
-# Author:      CliveS & Claude Fable 5
-# Date:        03-07-2026
+# Filename:    test_prompts.py
+# Description: The MCP prompts: listed with the required shape, arguments filled in.
+# Author:      CliveS & Claude Opus 5.5
+# Date:        24-09-2026
 # Version:     1.0
+#
+# Moved unchanged from the release-named files in the 3.0 spring clean:
+#   test_v211_tools.py (v2.11.0)
 
 
 # ── MCP prompts (were empty; now populated) ──────────────────────────────────
@@ -36,23 +38,3 @@ def test_prompt_get_fills_arguments():
 def test_prompt_get_unknown_returns_none():
     from mcp_server.prompts import get_prompt
     assert get_prompt("does_not_exist", {}) is None
-
-
-# ── Scope classification of the new tools ────────────────────────────────────
-
-def test_new_tool_scopes():
-    from mcp_server.security import scope_manager as sm
-    # Z-Wave management is ADMIN (config reprogram / physical pair / mesh traffic)
-    assert "zwave" in sm.ADMIN_TOOLS
-    # thermostat changes, cool setpoints included, are WRITE
-    assert "thermostat_control" in sm.WRITE_TOOLS
-    # the introspection tools are READ
-    for t in ("get_dependencies", "server_info"):
-        assert t in sm.READ_TOOLS, t
-
-
-def test_required_scope_resolves():
-    from mcp_server.security.scope_manager import required_scope_for
-    assert required_scope_for("zwave") == "admin"
-    assert required_scope_for("thermostat_control") == "write"
-    assert required_scope_for("server_info") == "read"

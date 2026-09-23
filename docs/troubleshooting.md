@@ -16,6 +16,9 @@ nav_order: 10
 
 **Search returns 0 results**
 → Use simple device name terms ("conservatory", "lamp"). The search is substring-based.
+→ A device renamed a moment ago is found under its new name at once: Indigo tells the plugin about
+the rename and the next search rebuilds the index. The states shown in search results can be up to
+five minutes old; ask for the device itself for a live reading.
 
 **Device control says "expected number"**
 → Using old cached schema. Restart Claude Code to refresh tool definitions.

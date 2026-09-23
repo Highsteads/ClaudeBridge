@@ -69,3 +69,32 @@ def test_shortcut_is_skipped_when_a_filter_follows(monkeypatch):
     names, _ = _search(hits, "hall lamp", state_filter={"onState": True})
     assert seen["n"] == 2
     assert names[0] == "Hall Lamp"      # the exact name still ranks first
+
+
+# ── The shortcut must not pre-empt the type filter either (09-Aug-2026 review) ─
+# QueryParser over-fetches so the filters see candidates 2..50. Truncating to
+# the one exact name first threw them away, and an empty answer came back when
+# that single hit failed the filter. This was an AST check on the text of
+# search(); it now runs the search.
+
+def _classify_by_kind(monkeypatch):
+    from mcp_server.tools.search_entities import main as m
+    monkeypatch.setattr(m.DeviceClassifier, "classify_device",
+                        staticmethod(lambda d: d.get("kind")))
+
+
+def test_shortcut_is_skipped_when_a_type_filter_follows(monkeypatch):
+    _classify_by_kind(monkeypatch)
+    hits = [dict(_hit(1, "Hall Lamp"), kind="sensor"),
+            dict(_hit(2, "Hall Lamp Plug"), kind="relay")]
+    names, _ = _search(hits, "hall lamp", device_types=["relay"])
+    assert names == ["Hall Lamp Plug"], (
+        "the exact-name shortcut ran ahead of the type filter and discarded the relay")
+
+
+def test_an_empty_device_types_list_is_no_filter(monkeypatch):
+    _classify_by_kind(monkeypatch)
+    hits = [dict(_hit(1, "Porch Light"), kind="dimmer"),
+            dict(_hit(2, "Porch Sensor"), kind="sensor")]
+    names, _ = _search(hits, "porch", device_types=[])
+    assert len(names) == 2, "an empty device_types list stripped every device"

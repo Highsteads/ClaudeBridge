@@ -176,6 +176,7 @@ class MCPHandler:
             data_provider=self.data_provider,
             entity_index=self.entity_index_manager.get_entity_index(),
             logger=self.logger,
+            freshen=self.entity_index_manager.refresh_if_dirty,
         )
         
         # Get devices by type handler
@@ -940,8 +941,9 @@ class MCPHandler:
                         f"Cache: dropped {dropped} entries after {tool_name}"
                     )
                 # If the tool changed entity STRUCTURE (added/removed/renamed a
-                # device/variable/action, or ran arbitrary code), refresh the
-                # search index now instead of waiting up to update_interval.
+                # device/variable/action), refresh the search index now. Changes
+                # made any other way, arbitrary code included, reach it through
+                # the plugin's Indigo change callbacks (mark_dirty).
                 if spec is not None and spec.refresh_search and self.entity_index_manager:
                     self.entity_index_manager.refresh_async()
 

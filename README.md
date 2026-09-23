@@ -253,28 +253,20 @@ second bill.
 
 ## Installation
 
-### Quick install (recommended)
-
-Clone the repo and run the installer — it handles everything except enabling the plugin in Indigo:
-
-```bash
-git clone https://github.com/Highsteads/ClaudeBridge.git
-cd ClaudeBridge
-python3 "Claude Bridge.indigoPlugin/Contents/Server Plugin/install.py"
-```
-
-The script:
-- Copies the plugin bundle to Indigo's Plugins directory
-- Copies the proxy script to Indigo's `Scripts` directory
-- Reads your Bearer token from Indigo's `secrets.json` and patches the proxy automatically
-- Creates/updates `~/.mcp.json` and `~/.claude/settings.json`
-
-Then do these two final steps manually:
-
-1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
+1. Go to the [Releases page](https://github.com/Highsteads/ClaudeBridge/releases) and download `Claude.Bridge.indigoPlugin.zip`
+2. Unzip the downloaded file — you will get `Claude Bridge.indigoPlugin`
+3. Double-click `Claude Bridge.indigoPlugin` — Indigo will install it automatically
+4. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
+5. **Restart Claude Code** — you should see 69 `indigo-mcp` tools available
 
-2. **Restart Claude Code** — you should see 69 `indigo-mcp` tools available
+That is all. Each time it starts, the plugin sets Claude Code up for you: it copies the
+go-between script into Indigo's `Scripts` folder, writes your Indigo access key into it (from
+Indigo's own `secrets.json`, or `CLAUDEBRIDGE_BEARER_TOKEN` in `IndigoSecrets.py`), and adds an
+`indigo-mcp` entry to `~/.mcp.json` and `~/.claude/settings.json`. It does this for the macOS user
+Indigo runs as, which is the one you use Claude Code as on the Indigo Mac. If you would rather
+manage those files yourself, untick **Auto-configure Claude Code** under
+**Plugins → Claude Bridge → Configure**.
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and
@@ -285,10 +277,9 @@ Then do these two final steps manually:
 
 ---
 
-The manual route — download the release, double-click the bundle, install the go-between script
-and register it with Claude Code by hand — is on the
-[Getting started](https://highsteads.github.io/ClaudeBridge/getting-started.html) page, along
-with connecting the Claude desktop app and what to ask first.
+Setting Claude Code up by hand (with auto-configure off, or on another Mac), connecting the Claude
+desktop app, and what to ask first are on the
+[Getting started](https://highsteads.github.io/ClaudeBridge/getting-started.html) page.
 
 ---
 

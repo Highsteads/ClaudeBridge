@@ -51,12 +51,13 @@ webhook_allowlist.json
 # Logs
 *.log
 
-# Claude Code context file — local only
+# Claude Code context file — local only, and its dated backups
 CLAUDE.md
+CLAUDE.md.bak*
 
-# Local-only files: the canonical proxy/secrets-template copies live inside the
-# plugin bundle (root copies are an unpublished working convenience), and the
-# capability summary is superseded by the README's What-it-does sections.
+# The proxy and secrets template live only inside the plugin bundle; the root
+# copies and the capability summary were removed in the 3.0 spring clean. Kept
+# ignored so a stray copy can never be committed.
 /indigo_mcp_proxy.py
 /IndigoSecrets_example.py
 /CAPABILITY_SUMMARY.md

@@ -1,10 +1,11 @@
 name: tests
 
 # The suite runs standalone — tests/conftest.py stubs the `indigo` module and
-# falls back to the repo bundle when no live Indigo install exists, so plain
-# ubuntu runners work. Only pytest is installed: the plugin needs nothing beyond
-# the standard library, and running the suite on a bare Python proves it
-# (tests/test_no_third_party_deps.py checks every import as well).
+# tests the bundle in the repo, so plain ubuntu runners work. Only pytest is
+# installed: the plugin needs nothing beyond the standard library, and running
+# the suite on a bare Python proves it (tests/test_no_third_party_deps.py checks
+# every import as well). The suite also runs generate_tool_doc.py --check
+# (tests/test_version_consistency.py), so docs/tools.md needs no step of its own.
 
 on:
   push:
@@ -32,12 +33,9 @@ jobs:
           pip install pytest
 
       - name: Run test suite
-        run: python -m pytest tests -q
+        run: python -m pytest -q
 
       - name: Lint (ruff — errors only, see ruff.toml)
         run: |
           pip install ruff
           ruff check .
-
-      - name: Check the generated tool reference (docs/tools.md) is current
-        run: python scripts/generate_tool_doc.py --check

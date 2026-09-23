@@ -1,840 +1,10 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 # Filename:    plugin.py
-# Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
-#              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5; Claude Opus 5.5 (2.27.1-2.27.3)
-# Date:        23-09-2026
+# Description: Claude Bridge - exposes Indigo to Claude over the Model Context Protocol (MCP)
+# Author:      CliveS & Claude Opus 5.5
+# Date:        24-09-2026
 # Version:     2.27.3
-#
-# v2.27.3 (23-09-2026): the deep review's bug list.
-#   - search_entities returned ONE result whenever the top hit scored >= 0.95,
-#     and any name merely containing the query scores 1.0, so "kitchen" gave
-#     1 of 14 devices. The shortcut now needs a name EQUAL to the query.
-#   - Argument coercion moved from the proxy (blind: "21.50" -> 21.5,
-#     '{"a":1}' -> dict, code="42" -> int) to the server, against each tool's
-#     schema (common/arg_coercion.py). Proxy 1.6 passes arguments untouched.
-#   - device_control refuses a name that matches several devices instead of
-#     switching the first one listed.
-#   - get_plugin_status reports `running` and is no longer TTL-cached; the
-#     bundle-scan cache is 30 s not an hour; restart_plugin says "not found"
-#     for a mistyped id instead of "not enabled".
-#   - energy_daily_summary / energy_compare read daily_history.json; the
-#     "[Daily]" log lines they parsed were never written.
-#   - No billed Anthropic call at plugin start: the key is checked only when
-#     InfluxDB is on, or from the Test Connections button, via models.list.
-#   - device_history with no columns reads the returned rows once instead of
-#     a full-window null scan per column; identifiers quoted.
-#   - query_event_log keeps the first second of a window, caps a null
-#     line_count at 2000, accepts 20.0.
-#   - Shortened stdout/stderr/traceback carry a *_truncated flag; run_script
-#     errors keep their type and a traceback.
-#
-# v2.27.2 (23-09-2026): a failed execute_indigo_python / run_script now keeps
-# its traceback, stdout and stderr, with known credential VALUES replaced by
-# [redacted NAME] (new mcp_server/security/secret_redactor.py) instead of the
-# whole payload becoming "see the event log" — 85 failures in ten weeks each
-# cost a second call, and the event log never held the traceback anyway.
-# Falls back to the old scrub if the values cannot be read. A long traceback
-# now keeps its TAIL, where the exception line is. search_entities accepts
-# plural/alias entity_types ("devices", "action_groups") and its schema lists
-# the valid values — 18 of 129 calls had failed on exactly that.
-#
-# v2.27.1 (23-09-2026): every subprocess call now decodes its output as UTF-8
-# (encoding="utf-8", errors="replace"). Inside the plugin host the default
-# text encoding is ASCII, so execute_plugin_menu_item raised "'ascii' codec
-# can't decode byte 0xe2" on the first em-dash in a menu's output (Device
-# Health Monitor -> Scan Now, 18-09-2026). Fixed at all five call sites: both
-# menu tools, system_tools._run, and the two node calls in plugin_dev_tools.
-#
-# v2.25.0 (06-09-2026): execute_device_action — run a plugin's OWN Actions.xml
-# action, the ones under Device -> Actions that no built-in tool could reach.
-# Every plugin feature used to end with a human clicking that menu to validate
-# it. Indigo's executeAction has taken (actionTypeId, deviceId, props) all
-# along; what stopped it being usable is that it fails SILENTLY three ways —
-# unknown action id, device action called with no device, owning plugin not
-# running — so the tool checks the call against the plugin's own Actions.xml
-# and refuses instead. Measured the same day: setTimerStartValue with the
-# device id moved a timer 60 -> 43 seconds, the identical call without it
-# returned None and changed nothing. That, not "props are lost in cross-plugin
-# serialisation", is the real Email+ trap.
-#
-# v2.22.0 (26-08-2026): find_automation_references now reads the script
-# folders. It answered from the .indiDb action steps and the server's own
-# dependency graph, and nothing else — so a device driven entirely from a
-# Python script came back with nothing to show, which reads as "nothing
-# references this" rather than "I never looked there". The tool description
-# had claimed the scan all along. Live case: the Kitchen Spot Lights reported
-# one trigger and no scripts while five scripts drove them by ID, and
-# dependency_map found all five. Both folders are now scanned, by numeric ID
-# and by quoted name, and each hit carries its line numbers. The folder walk
-# moved to common/script_refs.py so dependency_map and audit_variables share
-# one copy instead of three. No role is guessed for a script hit — a wrong
-# role would be worse than none. Plugins that hard-code an ID are still not
-# covered and the reply now says so on every call.
-#
-# v2.21.0 (20-08-2026): find_orphaned_plugin_data now sees what it always
-# claimed to. It scanned Preferences/Plugins SUBDIRECTORIES only, so the
-# per-plugin .indiPref FILES were invisible — and that is where most plugins
-# keep everything. A live sweep found 13 orphan prefs files, two of them
-# holding plaintext credentials, plus three LaunchAgents whose script had
-# gone. Prefs files are scanned, Indigo's own built-ins are listed apart
-# from orphans, and stale LaunchAgents are reported — a plugin's managed
-# helper agent outlives the plugin and keeps running.
-#
-# v2.20.2 (09-08-2026): the security and data-integrity subset of the review's
-# low-severity findings. runtime_config.snapshot() returned the Anthropic key
-# and the InfluxDB password in the clear to any diagnostic caller, and
-# is_influx_enabled() read the STRING "false" as enabled. A batteryLow state
-# arriving as "False" made every healthy sensor report as flat, and a 255
-# "unknown" sentinel was reported as 255%, which sorts as healthy in a
-# low-battery sweep. Two notes saved in the same millisecond shared an id, so
-# deleting one deleted the other. audit_home counted every boolean variable
-# sitting at "false" as an empty variable, which made the figure track the
-# state of the house rather than anything wrong. A string scope in scopes.json
-# exploded into one scope per character, leaving that token with none.
-# Tests 503 -> 511.
-#
-# v2.20.1 (09-08-2026): the medium-severity batch of the same review. The
-# InfluxDB settings could not be configured from the dialog at all — the port
-# field was dead (its secret defaulted to a truthy 8086, so the `secret or
-# dialog` chain never reached the dialog) and the host field demanded an
-# http:// prefix that its own description tells you to leave off and the code
-# strips anyway. Bools were accepted as entity IDs in three more handlers, and
-# folder 0 is a real destination, so a stray `false` was a silent target.
-# Unknown state-filter operators matched everything instead of nothing. A
-# sensitive tool's failure scrubbed `error` while shipping the same text in
-# `traceback`. The exec proxy wrote HTML error pages into the client's JSON-RPC
-# stream and never answered the request id. A deleted webhook kept delivering
-# queued events. `or` chains read a legitimate zero — a flat battery, no sun —
-# as "unavailable". A failed search warmup left search empty and silent for the
-# life of the plugin. Tests 489 -> 503.
-#
-# v2.20.0 (09-08-2026): the three high-severity findings of a full 20-lens
-# review. (1) The Configure dialog could not be SAVED without an Anthropic API
-# key, though the field, its tooltip, its help text and startup() all call that
-# key optional — so anyone without an IndigoSecrets.py was locked out of every
-# other setting, webhooks and log level included, until they invented a key the
-# plugin does not need. The validator simply predated the key becoming optional.
-# (2) The exec lock refused nothing. It is reentrant and Indigo dispatches every
-# call on one thread, so the next caller was always the thread that wedged it and
-# its acquire() succeeded instantly — the v2.17.0 fail-fast never fired once, a
-# second run swapped stdout out from under the still-live worker, and the real
-# stdout could be lost until a reload. The wedge record now carries the abandoned
-# thread and liveness decides, so a runaway is refused while it runs and clears
-# itself the moment it ends. (3) analyze_historical_data's entity-name validator
-# answered a validation ERROR with "all valid", handing raw client-supplied names
-# to the InfluxQL builder; the fail-closed fix had landed in a twin nothing calls.
-# Tests 481 -> 489.
-#
-# v2.19.2 (07-08-2026): a toggle was reporting `value: 0`, which reads as
-# "toggle to 0" and is nothing of the sort. The control-pages skill instructs
-# authors to put `<DeviceActionValue>0</DeviceActionValue>` on EVERY device
-# action, so every generated page carries one on its toggles and turn-ons, and
-# v2.19.1 surfaced it whenever it was present. Only brightness-style actions
-# (set brightness, brighten by, dim by) actually use the field, so the value is
-# now reported only for those. Presentation, not correctness — but a number
-# that means nothing is worse than no number, because the reader assumes it
-# means something. Tests 479 → 481.
-#
-# v2.19.1 (07-08-2026): 2.19.0 could tell you what was ON a control page but not
-# what any of it DID, which is half the question. The cause was Indigo's own
-# constant: FULL_PAGE_FLAGS sounds like everything, but the second argument to
-# calc_getPage_flags is `ignore_actions` and it is set True, so the server
-# withholds every ActionGroup. Each element came back reporting no action at
-# all — including a light that demonstrably toggles.
-#
-# Found by importing a generated page and reading it back, not by review. The
-# whole suite was green and stayed green, because the tests asserted the flag
-# constant the code used rather than the behaviour it produced. A page fetched
-# with 65536 instead returns the steps, so get_control_page now reports
-# `on_tap` per element (action class, action, target device, and the value for
-# a set-brightness step), decoded through the code tables in
-# adapters/indidb/schema.py — those were verified against live runtime enum
-# dumps in v2.12.4, so reusing them beats keeping a second copy that can drift.
-#
-# Also surfaces `client_action`. ClientActionType 1014 is how a thermostat or
-# dimmer gets its popup, so without it a setpoint control looked identical to a
-# read-only sensor tile. Absent or 0 is omitted rather than reported as a
-# behaviour, and `shows_state_text` now appears for elements displaying a value.
-#
-# Tests 469 → 479, and one of the new ones found a bug in this very change:
-# ActionSteps arriving as a string was being iterated CHARACTER BY CHARACTER
-# into ten "undecodable" steps. Same str-is-iterable trap indigo_plain.to_plain
-# already guards, missed here on the first pass.
-#
-# Live-verified against a real imported page: light "on tap -> toggle (code 6)",
-# radiator "client: popup controls | shows state text", the four sensors
-# "display only".
-#
-# v2.19.0 (06-08-2026): get_control_page had been promising something it could
-# never deliver. It carried a branch reaching for `cp.controls` — "surface the
-# controls if the IOM exposes them on this version" — and no Indigo version has
-# ever exposed that attribute, so it returned an empty list every single time.
-# A user with a real control page got back a name, a folder and a description
-# while learning nothing whatever about what was on the page, and the empty
-# result was indistinguishable from a page with nothing on it.
-#
-# The reason is structural rather than a missing accessor: control pages are the
-# one part of Indigo the object model never covered. The scripting guide says so
-# outright — they "didn't make it into v1" — and indigo.ControlPage carries the
-# page's own properties and nothing else. The layout is reachable ONLY through
-# the raw server request added in 2.18.0, which is exactly what Perceptive
-# Automation's own utils.py uses to render a page.
-#
-# So the tool now returns the real layout: every element with its type,
-# position, size, caption, image, action class, live displayed value, and the
-# device / variable / action group it points at. Elements whose target no longer
-# exists are flagged and counted, which is the reason to read a page at all — a
-# control left behind by a deleted device still draws, and nothing in Indigo
-# tells you it is dead. Page width and height were missing too, and are back.
-#
-# NEW common/control_page.py holds the decoding. Its numeric codes are
-# transcribed from PA's own utils.py (which ships as readable source) rather
-# than inferred from observed data, and it is kept free of any indigo import so
-# the decoding is testable with no Indigo present. An unrecognised code reports
-# itself as unknown(N) rather than being labelled as something it is not.
-#
-# Scope stays READ despite the underlying call being ADMIN as raw_server_request.
-# That classification is about raw_server_request's open-ended surface — any
-# Get* name — whereas this is one fixed call against a validated page id
-# returning data the tool already claimed to return.
-#
-# Tests 452 → 469, against a REAL captured page rather than a hand-written
-# fixture. Mutation testing earned its keep: dropping the collection guard in
-# the reference check SURVIVED the first suite, because every test fed it
-# elements with no target at all. A video control has a target but no
-# addressable collection, and without that guard it reaches getattr(indigo,
-# None) and raises — a crash on any page containing a camera. Test added, mutant
-# killed.
-#
-# v2.18.0 (06-08-2026): the API-coverage audit had a blind spot, and it hid the
-# only part of the Indigo API this plugin had never reached. audit_api_coverage
-# walked the command namespaces (indigo.device, indigo.server, …) and nothing
-# else, so it reported "362 live vs 362 baseline — 0 new, 0 removed" while five
-# undocumented callables sat at the TOP level, outside every namespace it looked
-# in: rawServerRequest, rawServerCommand, their two PacketXml siblings, and
-# acquireCallbackCompleteHandler. A clean audit meant "nothing changed in the
-# namespaces", never "nothing is left to add" — and it had been read as the
-# latter. The walker now covers top-level functions too (classes and modules
-# excluded, so indigo.Dict and the leaked stdlib imports cannot churn the
-# baseline), and all seven live names are in the frozen baseline so a genuinely
-# new one shows up after the next Indigo upgrade.
-#
-# The gap was worth closing on its own, but measuring it settled a bigger
-# question: of 448 namespace callables this plugin already used 446, everything
-# except indigo.host.browserOpen and the indigo.utils helpers. There is no
-# harvest left in the documented API. The raw server functions are the whole
-# remainder.
-#
-# NEW TOOL raw_server_request (ADMIN) exposes the read side of that: it reaches
-# the server's own command set through indigo.rawServerRequest, which is how
-# Perceptive Automation's own utils.py fetches a control page's layout
-# (rawServerRequest("GetControlPage", {"ID": id, "GetPageFlags": 65538}) —
-# live-verified here, 32 page elements). It is UNDOCUMENTED and UNSUPPORTED, so
-# treat it as fragile across Indigo upgrades. Only "Get*" names are permitted
-# and indigo.rawServerCommand, which mutates, is not reachable through the tool
-# at all; a name that is not a Get is refused rather than tried, because the
-# blast radius of guessing at an undocumented command name is unknown. It is
-# classified ADMIN despite being read-only — scoped by what it can REACH, not by
-# what today's guard permits. Replies come back as indigo.Dict/indigo.List,
-# which are Boost.Python types rather than dict/list subclasses, so the JSON
-# encoder would serialise a nested one to {} via its __dict__ fallback and lose
-# it silently; new common/indigo_plain.to_plain deep-converts an arbitrary reply
-# (the existing _deps_to_plain only knows the one getDependencies shape).
-#
-# Tests 439 → 452. The walker test and the guard test were both verified failing
-# first — the walker against the pre-fix code, the guard against a mutant with
-# the refusal removed.
-#
-# v2.17.1 (04-08-2026): the bundled MCP proxy (indigo_mcp_proxy.py v1.5) now
-# waits out a boot race instead of failing the attach. A client that starts
-# before Indigo's web server — the ordinary case after a Mac reboot, where the
-# app is up seconds ahead of Indigo — had its POST refused, got JSON-RPC -32603
-# back on the initialize handshake, and gave up with "Could not attach to MCP
-# server indigo-mcp". The handshake now waits up to 45s for IWS, and only while
-# the failure is "nothing is listening yet"; a bad token or an IWS error still
-# fails immediately, and a tools/call never waits at all. Measured here: a
-# 23-second gap between the app attaching and IWS answering.
-#
-# v2.17.0 (25-07-2026): FULL-SWEEP FIX BATCH from a systematic three-agent audit
-# (no reported symptom — the sweep found these). Three clusters.
-#
-# SILENT WRONG ANSWERS. log_message never actually worked: it passed the level
-# as a STRING, which Indigo silently ignores and logs as Info, so every
-# WARNING/DEBUG was an Info line while the tool returned {"level": "WARNING"}.
-# The v2.10.1 changelog claims this was fixed — it wasn't: that fix landed in
-# indigo_data_provider.log_message, which has ZERO callers, and the regression
-# test only asserted the dead module's dict. Level mapping now has ONE home
-# (common/log_levels.py), the dead duplicate is gone (including its abstract
-# declaration, which is what allowed two implementations to drift), and the test
-# asserts what indigo.server.log actually receives — verified failing against the
-# 2.16.2 code before the fix. scaffold_automation_script emitted that SAME broken
-# helper into every script it generated, with level="ERROR" on the top-level
-# exception handler, so a scaffolded script logged its own traceback at Info;
-# it now emits the corrected estate-standard helper. query_event_log defaulted
-# the range start to TODAY when only `before` was given, so "everything before a
-# past date" returned an empty list that read as "nothing happened" — the window
-# is now anchored on the END of the range, capped at 14 days, reports the span
-# actually scanned, and rejects an inverted range instead of answering it.
-# rename_device / enable_device / reset_energy_accumulator echoed the request as
-# truth; they now re-read and report the ACTUAL value plus a `confirmed` flag
-# (a write to a device owned by another plugin can fail without raising).
-# zwave_start_network_optimize passed an unvalidated dev.address as nodeId —
-# empty on most of the estate, and nodeId=None is the WHOLE-NETWORK form, so
-# "optimise this node" silently became a full mesh heal reported as "node None".
-#
-# WHOLE-PLUGIN FREEZES. Indigo dispatches every callback and every IWS handler
-# on ONE thread, so a slow tool call freezes everything, not just its request.
-# The exec lock was the worst: the worker acquired it and released it in a
-# finally, so an abandoned runaway script held it forever — every later exec call
-# then blocked for its full 60s/120s budget and returned a misleading "your
-# script exceeded the limit" about a script that never ran. The caller now
-# acquires with a short timeout and fails fast with an honest message naming the
-# stuck run; the worker restores stdout only if it is still its own, so a
-# late-finishing worker can't clobber a healthy stream; the wedge is reported by
-# /health (status: degraded). Also capped: execute_plugin_menu_item's
-# caller-supplied timeout (uncapped = a one-hour freeze), analyze_historical_data
-# (one Anthropic call plus up to 15 Influx attempts per device, each rebuilding
-# the client and re-running a 30s connection test — ~900s/device; now one
-# memoised session, a capped fallback sweep, maxItems 10, and a 120s deadline
-# that NAMES what it skipped), plugin_node_check_html and find_large_files.
-# device_history reported "hours": 24 while `limit` had cut the window to the
-# last few minutes — it now returns truncated + the ts span actually covered.
-# osascript was still called by bare name: the 2.16.2 absolute-path sweep
-# covered vm_stat/sysctl/uptime/node but missed it.
-#
-# STALENESS. The tool cache was invalidated only by ClaudeBridge's OWN mutating
-# tools, so a light switched at the wall, by a Z-Wave association, by a trigger
-# or by another plugin kept reading as its old state for up to the full TTL —
-# even though deviceUpdated had the change in hand. Device/variable callbacks now
-# bump per-domain counters (O(1), safe under a sensor storm) and a cached entry
-# whose stamp is behind is a miss. VectorStore-Refresh threads are tracked and
-# joined before the store closes, and a refresh requested during warmup is
-# replayed rather than dropped. Plus: the two bare `except Exception: pass` on
-# the events-queue path now log, the hardcoded Perceptive Automation/Scripts path
-# is derived, .gitignore's Contents/Packages/ rule was root-anchored and did NOT
-# match inside the bundle, an unparseable Influx timestamp returned datetime.now()
-# (rendering a malformed row as a present-moment event) and now drops the row,
-# Phase-2 prefs coerce all three values before applying any, and find_conflicts
-# stopped walking every script file twice. Suite 424 -> 439.
-#
-# v2.16.2 (25-07-2026): BUG FIX to 2.16.1 — the new hw.memsize read never ran
-# inside the plugin host. `_run(["sysctl", ...])` used the BARE binary name, and
-# Indigo's plugin-host PATH omits /usr/sbin, so it raised FileNotFoundError,
-# _run() swallowed it to "", and the total silently degraded to the fallback
-# estimate: system_health still read 7.5 GB on an 8 GB Mac after 2.16.1. This is
-# the documented absolute-path gotcha (Dashboards v2.21.0 hit it on the same two
-# binaries) and 2.16.1 simply failed to apply it. vm_stat / sysctl / uptime now
-# resolve through a module-level `_bin()` that prefers the absolute path and
-# falls back to the bare name only if that path is missing. Caught because the
-# 2.16.1 "live verification" ran under plain python3, where PATH is normal — the
-# wrong context. +2 tests pinning that every binary is absolute; 422 -> 424.
-#
-# v2.16.1 (25-07-2026): BUG FIX — system_health reported RAM wrongly. Total was
-# derived by summing vm_stat's free/active/inactive/wired buckets, which omits
-# COMPRESSED memory: on the 8 GB Indigo Mac that read 4.7 GB, and it drifted
-# further the busier the machine got, because compression rises under pressure
-# — wrong exactly when you most want the truth. free_gb was wrong a second way,
-# reporting "Pages free" (the free list) rather than available memory, so a
-# healthy Mac looked like it had 0.1 GB left. Total now comes from hw.memsize,
-# and used follows macOS's own definition ((anonymous - purgeable) + wired +
-# compressed), so the figures match Activity Monitor. Added used_pct, mirroring
-# what the disk block already returns. If sysctl is unavailable the fallback
-# page sum now INCLUDES the compressor (lands at 7.5 of 8 GB rather than 4.7 —
-# vm_stat never accounts for the ~0.5 GB the kernel reserves, so it stays an
-# estimate). Found while diagnosing the 25-Jul PCIe kernel panic, where the
-# tool understated the machine by nearly half while feeding a hardware-sizing
-# decision. New tests/test_parse_ram.py — the first test cover for the system
-# tools. Suite 410->422.
-#
-# v2.16.0 (23-07-2026): SIMPLIFICATION — capability awareness now reads the
-# device's LIVE supports* attributes instead of a vendored catalogue. Indigo
-# exposes what a device can do as live booleans on the device object
-# (dev.supportsRGB etc.); the v2.14.0 vendored catalogue was a cache of
-# exactly those flags — redundant, staler, and only covered CliveS's own
-# estate. Reading live works on ANY install, for ANY device, always current,
-# with zero data to maintain. Same behaviour kept: set_color / setpoint
-# REFUSALS (refuse only on an explicit live False) + a capabilities block on
-# get_device_by_id/by_name. REMOVED: common/device_catalog (module +
-# vendored snapshot), scripts/generate_catalog_snapshot.py, and the
-# list_uncataloged_devices tool (167->166 — it existed only to find gaps in
-# the now-removed catalogue). New common/device_capabilities.py. The separate
-# indigo-device-catalogue repo + Dashboards (which serves a catalogue to the
-# browser, a consumer that CAN'T read live attributes) are UNTOUCHED — a
-# served catalogue still earns its keep there, just not inside a plugin that
-# can read live. Suite 414->408.
-#
-# v2.15.0 (23-07-2026): NEW list_uncataloged_devices tool (READ) — the gap
-# report for the capability catalogue: plugin-owned device TYPES with no
-# vendored profile, duplicates collapsed (19 Shelly plugs of one type = one
-# uncatalogued type + device_count + example), built-in/interface devices
-# excluded. Helps keep our catalogue current. Concept from Simon's
-# indigo-mcp-lite. 166->167 tools. Suite 413->414.
-#
-# v2.14.0 (23-07-2026): DEVICE-CATALOGUE CAPABILITY AWARENESS. Claude Bridge
-# now knows what a device can actually DO, from CliveS's own
-# indigo-device-catalogue (our data, no external dependency, vendored as a
-# no-I/O snapshot). New common/device_catalog: profile_for by (pluginId,
-# deviceTypeId) over a DENSE capability map (explicit True AND False per
-# flag). Two effects: (1) advisory REFUSALS — set_color refuses RGB/white/
-# white-temperature, and set_heat/cool_setpoint refuse a setpoint, when the
-# catalogue says the device can't do it, with a message naming what it DOES
-# support (e.g. an FGD212 dimmer refuses RGB: "it supports on/off, status
-# requests") instead of firing and relaying a cryptic failure; (2) device
-# detail (get_device_by_id / get_device_by_name) gains a
-# catalog_capabilities block. DISCIPLINE: refuse ONLY on an explicit
-# catalogue False — uncataloged/unreadable devices and unpinned flags pass
-# straight through; the catalogue only ever adds knowledge, never blocks
-# control it lacks data for. Also fixed the catalogue generator: the merged
-# catalog.json stripped False flags (only-true, for the Dashboards renderer);
-# the vendored snapshot now reads the DENSE by-class files so refusals can
-# fire. Regenerated live against the estate (52 current profiles). Concept
-# borrowed from Simon's indigo-mcp-lite v2026.9.0; data and code our own.
-# Suite 396->413. No new tools (rides existing control + detail tools).
-#
-# v2.13.2 (23-07-2026): battery_pct (common/battery.py) no longer misreads
-# binary battery conventions as percentages. Ecowitt and UniversalZWaveSensor
-# publish `battery` as a 0/1 OK/LOW flag with a batteryLow companion state —
-# a reading of 0/1 now defers to batteryLow (LOW -> flags as 1%, OK -> no
-# battery %). A bare 0 with no batteryLow means unknown/USB-powered (z2m
-# FP300s) and is ignored. find_low_battery/home_status/audit_home dropped
-# from 8 false-positive-laden entries to the 3 genuine lows, live-verified.
-#
-# v2.13.1 (23-07-2026): device_history tool DESCRIPTION now teaches the two
-# SQL Logger traps up front — columns are stored lowercase (batterysoc, not
-# batterySoc; unknown names error listing the valid set) and rows are sparse
-# (only changed values written — forward-fill before deriving trends). Saves
-# every client the 300-wasted-rows first hit. Description-only change.
-#
-# v2.13.0 (23-07-2026): mcp-lite v2026.8.0 BORROW BATCH (patterns harvested
-# from Simon's rewrite, clean-room). (1) SEARCH SYNONYM LAYER — new
-# vector_store/synonyms.py: ~30 UK-flavoured word groups expanded at QUERY
-# time ("telly"->tv/television, "lounge"->living room, "rad"->radiator/trv);
-# variants score at 0.9x so a literal match always outranks an expansion.
-# Complements type_aliases (deviceTypeId bridge) with word-level recall — no
-# embeddings, no dependencies. (2) device_history HARDENING: unknown columns
-# now a hard ERROR naming the valid (lowercase) set — silently dropping them
-# used to return walls of bare ts rows; PRAGMA query_only=ON second
-# read-only layer; and the ts-filtered window (+ per-column probe loop) is
-# now PK-RANGED via rowid binary search — the un-indexed ts scans were the
-# same full-table-scan-holding-the-read-lock pattern that wedged the server
-# on 15-Jul (Dashboards), just latent at smaller scale. (3) indidb parser
-# ANOMALY COUNTER: records skipped for missing/unparseable IDs are counted,
-# logged, and surfaced as skipped_records in structure_source — a degraded
-# parse is visible, never silent. (4) indidb cache key now includes the DB
-# PATH so a server database switch invalidates without a plugin restart.
-# Suite 380->396 (test_v2130_borrows.py).
-#
-# v2.12.4 (23-07-2026): decode-table corrections found comparing against
-# Simon's indigo-mcp-lite v2026.8.0 and settled by LIVE RUNTIME ENUM DUMPS:
-# (1) indidb CONDITION_LOGIC was INVERTED — 1=AND(all), 0=OR(any); every
-# compound condition since v2.12.0 rendered with the wrong logic word
-# (proven by a trigger with two disjoint time windows storing Logic 0).
-# (2) kDeviceAction Lock=28/Unlock=29 (was 29=lock — misread from
-# LockManager trigger NAMES "Lock <person> Front Door Unlock Code"; those
-# PIN triggers unlock); added 0/1/2 all-off/lights-on/lights-off + 30 open/
-# 31 close. (3) NEW decoders for action Class 3 (kThermostatAction —
-# setpoints/modes, 15 codes) and Class 9 (kUniversalAction — beep/status/
-# energy, 4 codes): these steps previously rendered "unknown" AND were
-# invisible to the reverse index, so a trigger whose only action was a
-# setpoint change showed no acts_on link in find_automation_references /
-# investigate_event. Suite 380 green.
-#
-# v2.12.3 (21-07-2026): FOREIGN DEVICE PROPS — `dev.pluginProps` is EMPTY for
-# devices owned by another plugin when read from this plugin's host. Measured
-# live: 197 of 221 devices estate-wide returned {} from `pluginProps`, while
-# `dev.globalProps[dev.pluginId]` was correct for 204 of them (the remaining 15
-# genuinely have no plugin props). `dict(dev)` carried the same empty copy, so
-# every tool that serialised a device inherited the hole — and an empty read
-# looks exactly like "this property is not set", which is the dangerous part.
-# It produced a duplicate-IP audit reporting "no duplicates" over a live clash
-# that was corrupting energy data, and nearly a wrong severity call on a plugin
-# review finding.
-# * New `mcp_server/common/device_props.py`: `device_props()` /
-#   `device_props_with_source()` read globalProps[pluginId] first, then
-#   pluginProps, then ownerProps last (ownerProps can be STALE — it lagged
-#   several saved-prop versions on an ApplianceMonitor device the same day).
-#   Every read is exception-safe; junk input returns empty, never raises.
-# * `device_dict()` replaces bare `dict(dev)` at all six serialisation sites in
-#   indigo_data_provider, so search_entities(detail='full'), get_device_by_id,
-#   get_device_by_name and the vector store all get repaired props. It also
-#   records `pluginPropsSource` ("globalProps"/"pluginProps"/"ownerProps"/
-#   "empty") so an empty result is stated rather than inferred.
-# * `device_address()` + `resolvedAddress`: find_conflicts' shared-address
-#   check read only the native `dev.address`, and ALL 19 ShellyDirect devices
-#   have an empty one (137 devices estate-wide do) — it was blind to every one
-#   of them. It now resolves the address from plugin props too and reports
-#   `addressSource`.
-# Tests 352 -> 377 (tests/test_device_props.py, 25 new).
-#
-# v2.12.2 (21-07-2026): shared plugin_utils.py refreshed to v1.3 — the
-# estate-wide propagation of the four Appliance Monitor deep-review fixes.
-# * install_timestamp_filter() is idempotent — a second call used to stack a
-#   second filter, so every log line came out with two timestamps.
-# * `import indigo` is soft, so the module imports outside the Indigo host and
-#   can be exercised by offline tests.
-# * A malformed log call keeps its arguments in the log instead of dropping
-#   them, so a %-placeholder mismatch is visible.
-# * New shared as_bool() — a pref re-serialised as the string "false" is
-#   truthy, which is exactly the wrong answer.
-# This plugin loads plugin_utils from the Perceptive Automation root in
-# preference to its bundle copy, and that root copy was still on v1.1 — so
-# install_timestamp_filter resolved to None and log timestamps were silently
-# off. The root copy is now v1.3 as well.
-#
-# v2.12.1 (17-07-2026): dispatch hardening — unknown tool arguments are now
-# REJECTED with -32602 naming both the unknown and the valid argument names.
-# Previously an unrecognised kwarg either TypeError'd or (when a client strips
-# non-schema properties before sending) silently vanished so the parameter's
-# DEFAULT ran instead — live-hit 17-Jul: enable_device called with enable=false
-# re-ENABLED the device and reported success. enable_device also gained
-# `enable` as a documented alias of `value` (explicit value wins). Sweep of the
-# other boolean-default tools found them fail-safe (delete_children=False,
-# ignore_conditions=False, restart=False etc. all default to doing LESS).
-# Tests 349 -> 352 (test_dispatch.py: unknown-arg rejection, known-arg
-# dispatch, alias resolution).
-#
-# v2.12.0 (03-07-2026): AUTOMATION INTROSPECTION feature batch (clean-room
-# reimplementation of the concepts in mlamoure's indigo-mcp-server v2026.6.0,
-# grounded in our own first-hand .indiDb schema harvest). New read-only
-# adapters/indidb/ (streaming iterparse of the live database via
-# indigo.server.getDbFilePath(), (mtime,size)-cached with stat throttle,
-# torn-read tolerant) + role-tagged reverse index (watches / condition_reads /
-# acts_on / sets / executes + heuristic script/plugin-config id matches,
-# cycle-safe AG->AG chain expansion). 8 new tools (158->166):
-# get_trigger_details / get_schedule_details / get_action_group_details (full
-# action steps, conditions, embedded scripts — the parts the IOM never
-# exposes), find_automation_references (file scan merged with server
-# getDependencies, source-labelled), investigate_event (ranks likely causes
-# of a device change: temporal proximity + structural evidence over the
-# dated event logs), update_trigger (writable event attrs + before/after
-# snapshot + not-applied warning; kStateChange/kVarChange enum coercion),
-# update_schedule / update_action_group (name+description — schedule TIMING
-# attrs live-confirmed read-only on 2025.2). enable/disable_trigger+schedule
-# gain delay_seconds/duration_seconds (native IOM auto-revert). Suite 307->347.
-#
-# v2.11.1 (03-07-2026): deferred-medium cleanup (the low-priority/heavier items
-# parked from the v2.10.x reviews). state_filter eq/ne are now numeric-aware
-# (a stringy '72.5' state matches an eq:72.5 filter — ordering ops already were);
-# tool_cache has a generation guard so a mutation landing WHILE a read computes
-# no longer lets the read reinstate a stale entry after the invalidation (TOCTOU);
-# vector-store search now refreshes out-of-band after a structure-changing tool
-# (delete/rename/create device/variable/action, run_script, execute_indigo_python)
-# instead of waiting for the interval, and set_update_interval no longer
-# permanently kills the background refresh (cleared the stop flag); execute_indigo_
-# python + run_script run in a worker thread with a join timeout (60s / 120s) so a
-# runaway script frees the IWS thread instead of wedging it; backup pruning is
-# timestamp-anchored so pruning script 'foo' can't delete sibling 'foo.bar' backups;
-# get_devices_by_type takes a limit (default 200) + reports total_matched/truncated.
-# Suite 304->309. Assessed-but-not-fixed (genuinely marginal/by-design) documented
-# in the STATE plan doc.
-#
-# v2.11.0 (03-07-2026): API-coverage feature batch (compared CB's tool surface
-# against the full live indigo.* IOM + the first-hand reference). 11 new tools
-# (147->158): Z-Wave management — zwave_send_config_parameter (set a config
-# parameter without the GUI — the ZEN58 pain point), zwave_start/stop_network_
-# optimize (mesh heal), zwave_enter_inclusion_mode / enter_exclusion_mode /
-# exit_inclusion_exclusion_mode (physically add/remove devices, all ADMIN);
-# trigger_get_dependencies (parity with schedule/action_group); increase/
-# decrease_cool_setpoint (parity with heat); get_reflector_status; get_indigo_paths
-# (install/logs/DB paths). NEW: MCP prompts — CB advertised the capability but
-# shipped none; now 5 guided templates (house_state, energy_day_review,
-# battery_sweep, recover_wedged_plugin, zwave_tune_sensor) via mcp_server/prompts.py.
-# NEW resource indigo://logs/recent (last 200 event-log lines, all plugins, via
-# getEventLogList). Suite 299->304. api_baseline confirmed current (362==362).
-#
-# v2.10.1 (03-07-2026): deep-review medium batch (14 verified mediums from the
-# 14 deferred modules; ~half of the reviewed mediums refuted or latent). Battery
-# reads now cover the `battery` custom state + native dev.batteryLevel, not just
-# `batteryLevel` — find_low_battery / home_status were missing 43 of the estate's
-# 55 battery devices (all the z2m sensors). Config gates webhooks_enabled +
-# auto_configure_claude_code use _as_bool not bool() (bool("false") is True →
-# fail-open). log_message maps its level string to a real logging int (a string
-# was silently ignored → WARNING/DEBUG logged as Info).
-#   *** CORRECTION (v2.17.0, 25-07-2026): that log_message claim was WRONG. The
-#   mapping was added to indigo_data_provider.log_message, which has NO callers —
-#   the live tool path (mcp_handler -> ScriptToolsHandler.log_message) went on
-#   passing the raw string for another six versions, and the accompanying test
-#   only asserted the dead module's dict, so the suite stayed green. Genuinely
-#   fixed in 2.17.0. Left here rather than rewritten: a changelog entry that
-#   quietly claims a fix it never shipped is exactly what cost this investigation
-#   its time, and the correction is worth more than a tidy line. ***
-# update_variable writes ""
-# for JSON null, not "None". execute_schedule_now coerces ignore_conditions
-# properly (string "false" no longer bypasses conditions). action_execute_group
-# rejects a delay honestly (Indigo's actionGroup.execute has no delay param — it
-# raised TypeError). get_plugin_by_id returns not-found for a bogus id (getPlugin
-# returns a live-looking object for anything). restart_plugin passes
-# waitUntilDone=False (was blocking the IWS thread). energy_compare clamps its
-# period args (was an unbounded filesystem walk). audit_variables fails CLOSED on
-# a getDependencies error (was toward 'unreferenced' → unsafe delete hint).
-# find_conflicts also matches the indigo.device.<method>(id) idiom it was missing.
-# tool cache invalidates list_subscriptions on subscribe/unsubscribe and
-# list_variable_folders on create_variable_folder. Anthropic client bounded
-# (timeout=30, max_retries=1). Suite 292→299. Deferred (documented): latent
-# uncalled paths + heavier refactors — see the STATE plan doc.
-#
-# v2.10.0 (03-07-2026): deep-review fix batch (9 verified highs + the
-# return-vs-raise cluster). Tools return an {"error":...} payload instead of
-# raising, so the dispatch now inspects the result: error results are no longer
-# cached and replayed for the TTL, no longer counted as successes in telemetry,
-# and secret-bearing tools' raw error text is actually scrubbed (the old
-# except-only scrub never fired). /health no longer leaks raw bearer tokens
-# (rate_limiter.snapshot masks keys). fire_claude_event now passes trigger_data
-# so the eventData payload actually reaches triggers (Events.xml corrected to the
-# real %%e:"name"%% syntax). plugin_refresh_deps refuses to self-restart CB.
-# execute_indigo_python / run_script serialise their global stdout swap (was
-# thread-unsafe). dimmer_brighten_by/dim_by call the real brighten()/dim() IOM
-# methods. schedule/action_group_get_dependencies deep-convert so dependents
-# actually appear (were always empty). energy_daily_summary/energy_compare no
-# longer fabricate all-zero kWh totals from a [Daily] log line Sigen never emits
-# — they null the totals and say so. install.py resolves the Indigo version
-# folder dynamically and refuses to run from the installed bundle (self-delete
-# guard). REMOVED enable_action_group / disable_action_group (149 -> 147): the
-# IOM has no such capability, so both failed 100%. Suite 283 -> 292.
-#
-# v2.9.1 (15-06-2026): device_history now returns timestamps in LOCAL time
-# (DST-aware) instead of the SQL Logger's raw UTC, so they match
-# device.lastChanged / indigo.server.getTime(). The SQL Logger stores ts in
-# UTC; the tool converts on output via SQLite datetime(ts,'localtime') while the
-# WHERE/ORDER BY still use the raw UTC column (time-window filter unaffected).
-# Result now carries "ts_timezone": "local". Fixes a real-world misread where raw
-# UTC rows were taken as local and produced a false sensor-dropout conclusion.
-#
-# v2.9.0 (10-06-2026): API-coverage capability batch — 10 new tools (139 -> 149)
-# found by walking the live indigo.* namespaces and diffing against the tool
-# registry. device_turn_on/off gained delay= and duration= (Indigo-native timed
-# actions — "fan on for 10 minutes" in one call, guarded coercion per estate
-# rule); device_remove_delayed_actions cancels ONE device's pending timed
-# action. New: reset_energy_accumulator, beep_device, ping_device,
-# all_lights_off/on + all_devices_off (native-protocol broadcasts, honestly
-# labelled — plugin-owned devices don't hear them), delete_device_folder +
-# delete_variable_folder (refuse non-empty unless delete_children=true; ADMIN),
-# audit_api_coverage (diffs live API against the frozen 362-callable baseline in
-# system_tools/api_baseline.py so an Indigo upgrade reveals unbridged
-# capabilities). /health per-tool telemetry now includes avg/max response BYTES
-# (the client-side cost driver). +14 tests (283 local incl. live e2e).
-#
-# v2.8.6 (10-06-2026): Repo-audit hygiene release — no functional surface change.
-# requirements.txt pruned from ~20 declared packages to the 4 the code imports
-# (anthropic, pydantic, influxdb, jinja2 — the rest were never imported and
-# bloated every user install); dead stub modules removed
-# (openai_client/parallel_embeddings.py + langsmith_config.py, zero callers);
-# 37 lint errors fixed (unused imports/variables, placeholder-less f-strings);
-# tool cache now sweeps expired entries on touch instead of only on re-read;
-# webhooks.json 0600 re-asserted at load (covers a restore-from-backup);
-# setup.py renamed install.py (it never was a setuptools script). NEW process
-# guard-rails: GitHub Actions CI (pytest + ruff F-rules + README tool-table
-# staleness check + advisory pip-audit), registry↔scope↔cache consistency
-# tests, dispatch-path + handler smoke tests (suite 176 → 213), repo/bundle
-# duplicate-copy sync test, CONTRIBUTING.md with the add-a-tool recipe.
-# Docs corrected to the true 139-tool count (CAPABILITY_SUMMARY + README).
-#
-# v2.8.5 (09-06-2026): MCP transport reliability, round 2 — the stdio proxy
-# (indigo_mcp_proxy.py v1.4) now self-heals the two drop modes that survived
-# v1.3. (1) A stale keep-alive that surfaces at getresponse() as
-# http.client.RemoteDisconnected — zero bytes back, so the server never
-# processed the request — is retried on a fresh connection even for a
-# tools/call; plus a proactive idle-reconnect (drop a keep-alive idle longer
-# than 10s before writing) removes the common "first call after an idle gap"
-# race. (2) The "-32600 Missing or invalid Mcp-Session-Id" reply after an IWS
-# reload — returned as a 200 JSON body, so no retry path ever saw it — now
-# triggers a transparent re-handshake: replay the cached initialize for a fresh
-# session id, then replay the original call once. Ambiguous post-send failures
-# on a fresh connection are still NOT retried, so no side effect ever runs
-# twice. Proxy-only — plugin runtime unchanged; live on the next proxy relaunch.
-#
-# v2.8.4 (09-06-2026): deep-review cleanup batch. Removed ~1,700 lines of dead
-# code (the unwired vector_store semantic_keywords/parallel_keywords/validation
-# modules + the never-used AuthManager + the phantom access_mode config). Strict
-# tri-state verify_ssl (only a real bool False disables TLS); device_id/enable_device
-# stringy-bool coercion; boolean variables stored as Indigo "true"/"false"; the
-# resources/list+read endpoints now require the 'read' scope (were ungated); a few
-# more schedule mutators added to the cache-invalidation map; the entity-search
-# 0.95 exact-match short-circuit no longer reports a phantom truncation; variable
-# values are truncated in the event log (a secret in a variable is no longer dumped
-# in full). Read tools still return full variable values — documented in the README.
-#
-# v2.8.3 (09-06-2026): MCP transport reliability — the stdio proxy
-# (indigo_mcp_proxy.py v1.3) now retries a tools/call after a stale keep-alive
-# drop when the failure happened before the request was sent (so it never
-# executed and is safe to replay). Fixes the intermittent "Connection error
-# (not retried) — Broken pipe / Connection reset" on the first MCP call after a
-# long idle gap or a plugin reload. Root cause: the proxy reuses a persistent
-# keep-alive connection; IWS closes it when idle (and a reload kills it), and a
-# tools/call on the dead socket was never retried. Proxy-only — plugin runtime
-# unchanged; the fix is live on the next proxy relaunch.
-#
-# v2.8.2 (09-06-2026): correctness + hardening release from an 18-lens multi-agent
-# deep review (Opus 4.8). Audit tools now scan BOTH Indigo script folders and
-# check IDs, names AND getDependencies (audit_variables no longer reports live
-# variables as unreferenced); write_script refuses to overwrite when its backup
-# fails and writes atomically; energy self-sufficiency ignores partial days and
-# is clamped; minimal-field device search no longer strips state readings;
-# type-filtered search over-fetches before truncating; secret-bearing tool errors
-# are scrubbed from client responses; the MCP-Protocol-Version check is enforced
-# independently of the session-reconnect window; webhook global-cap drops no
-# longer quarantine healthy subscriptions; a corrupt scoped webhook id fails
-# closed; the webhook feature gate defaults closed; enable_influxdb is coerced on
-# config save. (Deferred: dwell re-check at fire time, no-bearer scope tightening
-# — both documented.)
-#
-# v2.8.1 (09-06-2026): robustness fixes from a multi-agent adversarial review of
-# the webhook subsystem (the SSRF firewall itself held — no egress bypass found
-# across 16 attack classes). Fixed: any_change can no longer be silently combined
-# with a state condition; max_fires now counts only successful deliveries (a
-# flapping receiver no longer self-deletes); the delivery queue is bounded
-# (drop+count when full) and pre-send drops no longer rewrite the store on every
-# event; stop() join budget now exceeds the socket timeout (no orphan worker on
-# reload); disabling the feature cancels pending dwell timers; deleting a wildcard
-# subscription cancels its dwell timers; from_dict coerces entity_id; verify_ssl
-# =False now logs a clear MITM warning. 63 webhook tests incl. an adversarial
-# egress battery.
-# v2.8.0 (09-06-2026): NEW — outbound Event Webhooks (the "home calls Claude/you"
-# feature). The plugin can POST a signed JSON event to an APPROVED external URL
-# when a device/variable condition transitions into match. 3 ADMIN tools
-# (webhook_create/list/delete), an in-memory engine under mcp_server/webhooks/
-# (transition detection, dwell timers, persistence, non-blocking IP-pinning
-# dispatcher with HMAC-SHA256 signing), and a default-deny SSRF egress firewall
-# (mcp_server/security/egress_guard.py — re-validates at send time, pins the
-# connection to the vetted IP, blocks private/loopback/link-local/metadata unless
-# an explicit CIDR opts the range in). Ships DARK (off by default). Reference
-# receiver at examples/webhook_receiver.py. Implemented independently (concept
-# inspired by mlamoure's indigo-mcp-server, which ships no licence). 60+ tests.
-# v2.7.3 (08-06-2026): search_entities now bridges category keywords to device
-# types — "light" finds a z2mLight named "Lounge Lamp", "plug" a shellyRelay,
-# "motion" an occupancy sensor — via a new curated type_aliases.py folded into
-# the existing in-memory text store's scoring as an additive tier (never lowers
-# an existing name/description score; aliases are computed at scoring time, never
-# stored, never leak into results). Curated against this estate's 53 deviceTypeIds
-# with a device-class fallback for unknown types. NB CB search has always been
-# keyless difflib text search (no OpenAI/embeddings) — this just improves recall.
-# v2.7.2 (08-06-2026): set_color now accepts a 'color' string — a hex code
-# (#RRGGBB / #RGB) or a CSS/X11 colour name (148 names, British 'grey' spellings)
-# — as an alternative to explicit red/green/blue channels (new color_names.py,
-# no runtime matplotlib dependency). Added scripts/generate_tool_doc.py: the
-# README's 136-tool table is now auto-generated from the tool registry +
-# scope_manager classification (grouped by read/write/admin), with a --check
-# mode that fails if the table is stale or any tool is unclassified.
-# v2.7.1 (08-06-2026): plugin_scanner now reports PluginVersion (what Indigo
-# displays) instead of CFBundleVersion, which is the bundle layout version and
-# stays at 1.0.0 — get_plugin_status / list_plugins previously showed 1.0.0 for
-# every plugin. Falls back to CFBundleVersion if PluginVersion is absent.
-# v2.6.6 (29-05-2026): Fixed check_plugin_updates (getPluginList returns PluginInfo objects).
-# v2.6.5 (29-05-2026): Fixed VectorStoreManager.stop() race — it early-returned
-# `if not self._running`, but _running is only set True AFTER the async warmup
-# finishes, so a restart landing mid-warmup (the usual case) orphaned the
-# VectorStore-AsyncWarm daemon thread mid IOM-walk. stop() now always signals +
-# joins the (now stored) warmup thread. Also bounded the Anthropic connection
-# test in startup() to timeout=10s/max_retries=0 (was the unbounded SDK default
-# connect=5s/read=600s/2 retries on the startup thread). Both shrink
-# ClaudeBridge's restart shutdown/startup window. Whether they shorten the
-# ~4m37s IWS dead zone is being re-measured — the dead zone itself is upstream
-# in Indigo's IWS↔host channel (see repo CLAUDE.md "Known open issue").
-#
-# v2.6.4 (28-05-2026): plugin_node_check_html now resolves the node binary via
-# an absolute path (_resolve_node: shutil.which, then /opt/homebrew/bin etc.).
-# Indigo's plugin-host PATH omits Homebrew dirs on Apple Silicon, so the bare
-# ["node", ...] lookup always failed with "node not found on PATH" even though
-# node was installed. Also fixed a second latent bug the PATH failure had
-# masked: the check ran `node --check -e <code>`, which node rejects ("either
-# --check or --eval can be used, not both") — now writes each block to a temp
-# .js file and `node --check`s that. Tool works end-to-end (verified live).
-#
-# v2.6.3 (27-05-2026): Added prepare_to_sleep / wake_up observability hooks
-# harvested from the 27-May plugin_base.py sweep. ClaudeBridge is
-# request/response over IWS with no persistent connections to manage, so
-# these hooks log only — no operational change. Value is diagnostic: future
-# "MCP unreachable between X and Y" investigations can correlate the gap
-# with the Mac sleeping rather than hunting for a fault.
-#
-# v2.6.2 (27-05-2026): Defensive change. Vector store startup moved to a
-# daemon thread via VectorStoreManager.start_async() so any future heavy work
-# inside it can never block MCPHandler.__init__. NOT the fix for the
-# post-restart MCP latency — investigation found VectorStore is a
-# lightweight in-memory text-search store (no embeddings), so it was never
-# the bottleneck. The 3-5 minute post-restart latency remains an open issue
-# (cause appears to be IWS-layer or pre-startup() routing; no plugin log
-# lines appear during the dead zone, including the very first one inside
-# startup(), suggesting startup() either isn't running or its logger isn't
-# routing). is_warming_up property exposed for diagnostics.
-#
-# v2.6.1 (27-05-2026): plugin_lint missing_loop_guard rule refined — no longer
-# requires the `new_dev` exact identifier (now matches any param name including
-# annotated `newDev: indigo.Device`), recognises three guard idioms (pluginId
-# match, id-in-set, per-id equality), and only flags when deviceUpdated
-# actually writes back to the device (replaceOnServer/updateStateOnServer/etc).
-# Read-only mirrors no longer produce false positives. False positive against
-# Claude Bridge itself (its own deviceUpdated is read-only and guarded) gone.
-#
-# v2.6.0 (27-05-2026): +7 plugin-development helper tools wrapping common dev
-# workflows: plugin_diff_source_vs_installed (drift detection), plugin_refresh_deps
-# (delete pip success marker, optional restart), plugin_show_packages_versions
-# (read Contents/Packages/*.dist-info), plugin_validate_xml (Devices/Actions/
-# Events/MenuItems/PluginConfig naming-rule check), plugin_node_check_html
-# (node --check on inline JS in bundled HTML — catches stale-paste bugs),
-# plugin_lint (CliveS-plugin convention sweep against plugin.py), device_history
-# (focused SQL Logger sqlite query). Total tool count 129 → 136. New handler:
-# mcp_server/tools/plugin_dev_tools/plugin_dev_tools_handler.py
-#
-# v2.5.0 (27-05-2026): +43 new MCP tools wrapping previously-unexposed IOM
-# surface — device CRUD (delete/duplicate/move/enable/rename/toggle, dimmer
-# brighten/dim), variable delete + move, schedule CRUD (delete/duplicate/
-# execute_now/remove_delayed_actions/get_dependencies), trigger delete + move,
-# action group CRUD (delete/duplicate/enable/disable/get_dependencies),
-# sprinkler suite (7 tools), thermostat fan mode, speedcontrol index +/-,
-# server tools (speak/sunrise/sunset/lat-lon/web-server-url/getDeprecatedElems/
-# removeAllDelayedActions), control pages list+get, cross-plugin update sweep.
-# Total tool count 86 → 129. All implementations in tools/extended_tools/.
-#
-# v2.4.2 (23-05-2026): Millisecond timestamp [HH:MM:SS.mmm] prefix on every
-# log line via plugin_utils.install_timestamp_filter() — matches Device
-# Activity Monitor convention. New "Toggle Timestamps in Log" menu item.
-#
-# v2.4.0 (22-05-2026):
-# - New tools (6):
-#   * fire_trigger              — execute an Indigo trigger directly by ID/name
-#                                 (indigo.trigger.execute). Complements fire_indigo_event
-#                                 which goes via the claudeEvent plugin-event channel.
-#   * get_reflector_url         — return Indigo Reflector remote-access URL
-#   * create_device_folder      — idempotent device folder creation
-#   * create_variable_folder    — idempotent variable folder creation
-#   * execute_indigo_python     — run arbitrary Python in this plugin's context
-#                                 via in-process exec() (same pattern as run_script
-#                                 but for ad-hoc code strings). ADMIN scope.
-#   * execute_plugin_menu_item  — click a plugin's menu item via AppleScript GUI
-#                                 scripting (the only known way to drive a third-
-#                                 party plugin's <MenuItem> from outside). ADMIN scope.
-# - scope_manager: fire_trigger / create_*_folder classified as WRITE;
-#   execute_indigo_python / execute_plugin_menu_item classified as ADMIN.
-#
-# v2.3.3 (18-05-2026):
-# - run_script now pre-injects `indigo` into the script's globals before exec,
-#   matching Indigo's own GUI action runner. Scripts no longer need an explicit
-#   `import indigo` at the top — bare references like `indigo.devices.iter(...)`
-#   work directly. (Discovered while running an ad-hoc device-create script
-#   for the MQTTExplorerBridge plugin.)
-#
-# v2.3.0 (10-05-2026):
-# - Version is now read dynamically from Info.plist via self.pluginVersion
-#   (no separate Python constant — Info.plist is the single source of truth)
-# - Added log_startup_banner() via bundled plugin_utils.py
-# - Added showPluginInfo menu item + callback
-# - Implemented triggerStartProcessing / triggerStopProcessing lifecycle and
-#   fixed two broken self.triggerEvent() call sites (the method does not exist
-#   on PluginBase — was raising AttributeError, swallowed silently).  Indigo
-#   custom 'claudeEvent' triggers now actually fire.
-# - Added deviceUpdated self-loop guard at top (loop risk: plugin
-#   subscribeToChanges + writes own mcpServer device states)
-# - Bearer token rotated out of indigo_mcp_proxy.py source — replaced with
-#   placeholder; real value now in IndigoSecrets.py CLAUDEBRIDGE_BEARER_TOKEN
-# - Standardised secrets handling: per-key try/except for ANTHROPIC_API_KEY,
-#   CLAUDEBRIDGE_BEARER_TOKEN, INFLUXDB_*; PluginConfig fallback per key;
-#   ERROR-log if neither source set
-# - PluginConfig.xml: help-text labels explaining IndigoSecrets.py policy added to
-#   every credentials section; auto_configure_claude_code checkbox added
-# - fire_claude_event data serialisation fixed (was collapsing 0/False to "")
 
 try:
     import indigo
@@ -894,12 +64,16 @@ CLAUDEBRIDGE_BEARER_TOKEN = _get_secret("CLAUDEBRIDGE_BEARER_TOKEN")
 WEBHOOK_ALLOWLIST         = _get_secret("WEBHOOK_ALLOWLIST", [])
 
 # Import our modules
-from mcp_server import runtime_config
+from mcp_server import client_setup, orphan_prefs, runtime_config
 from mcp_server.adapters.indigo_data_provider import IndigoDataProvider
+from mcp_server.common.entity_index import index_fields_changed
 from mcp_server.mcp_handler import MCPHandler
 from mcp_server.webhooks import SubscriptionStore, SubscriptionManager, WebhookDispatcher
 from mcp_server.webhooks.allowlist_loader import load_allowlist
 from mcp_server.tools.webhooks import WebhookHandler
+# The bundled copy, imported directly: it always carries as_bool, whereas the
+# shared master loaded above for the banner may be an older one on another Mac.
+from plugin_utils import as_bool
 
 
 ################################################################################
@@ -926,7 +100,7 @@ class Plugin(indigo.PluginBase):
             plugin_id, plugin_display_name, plugin_version, plugin_prefs, **kwargs
         )
 
-        self.timestamp_enabled = bool(plugin_prefs.get("timestampEnabled", True))
+        self.timestamp_enabled = as_bool(plugin_prefs.get("timestampEnabled"), True)
         if install_timestamp_filter:
             self._ts_filter = install_timestamp_filter(self, enabled=self.timestamp_enabled)
         else:
@@ -943,14 +117,14 @@ class Plugin(indigo.PluginBase):
         # Default False and read the SAME way at every site — a pref that is
         # only refreshed on restart would let a Configure save appear to take
         # effect while the gate still held the old value.
-        self.allow_destructive_delete = self._as_bool(
-            plugin_prefs.get("allow_destructive_delete", False))
+        self.allow_destructive_delete = as_bool(
+            plugin_prefs.get("allow_destructive_delete"), False)
         # Plugin-provided tools (v2.26.0): may the tools another plugin marks as
         # writes make changes? Read through the handler's supplier at every
         # call, so a Configure save applies at once. Default on, as the
         # provider contract documents.
-        self.external_tools_allow_writes = self._as_bool(
-            plugin_prefs.get("external_tools_allow_writes", True))
+        self.external_tools_allow_writes = as_bool(
+            plugin_prefs.get("external_tools_allow_writes"), True)
         self._provider_broadcasts_subscribed = set()
 
         # Phase 2: rate limit / cache (with safe parsing)
@@ -998,16 +172,19 @@ class Plugin(indigo.PluginBase):
         self.plugin_file_handler.setLevel(self.log_level)
         logging.getLogger("Plugin").setLevel(self.log_level)
 
-    @staticmethod
-    def _as_bool(value) -> bool:
-        """Coerce a pref/config value to bool. A saved dialog re-serialises a
-        checkbox as the string 'true'/'false'/'0'/'1', so bool('false') would
-        wrongly be True — handle the string forms explicitly."""
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in ("1", "true", "yes", "on")
-        return bool(value)
+    def _purge_orphan_prefs(self) -> None:
+        """Drop stored settings whose Configure field no longer exists — the
+        old Anthropic key and InfluxDB login among them. The allowed set comes
+        from PluginConfig.xml; only the count is logged, never a value."""
+        try:
+            removed = orphan_prefs.purge_orphan_prefs(
+                self.pluginPrefs, os.path.join(os.getcwd(), "PluginConfig.xml"))
+        except Exception as exc:
+            self.logger.warning(f"\tCould not tidy old settings: {exc}")
+            return
+        if removed:
+            self.logger.info(f"Removed {len(removed)} stored setting(s) left over from "
+                             f"Configure fields that no longer exist")
 
     def _get_mcp_client_urls(self) -> list:
         """
@@ -1102,6 +279,7 @@ class Plugin(indigo.PluginBase):
         Called after __init__ when the plugin is starting up.
         """
         self.logger.info(f"Claude Bridge v{self.pluginVersion} ready")
+        self._purge_orphan_prefs()
 
         # Publish runtime config to the in-process store so downstream MCP
         # modules can read it without anything going through os.environ (see
@@ -1158,11 +336,17 @@ class Plugin(indigo.PluginBase):
             # ~/.claude/settings.json edits).  Opt-in via PluginConfig — defaults
             # to True so existing users keep their current setup, but lets a user
             # disable silent dotfile rewriting if they manage these themselves.
-            # _as_bool, not raw truthiness: a saved dialog stores this as the string
+            # as_bool, not raw truthiness: a saved dialog stores this as the string
             # "false", which is truthy — so a user who unticked it would still get
             # their ~/.mcp.json / settings.json rewritten on every startup.
-            if self._as_bool(self.pluginPrefs.get("auto_configure_claude_code", True)):
-                self._setup_claude_code_integration()
+            if as_bool(self.pluginPrefs.get("auto_configure_claude_code"), True):
+                client_setup.setup_claude_code_integration(
+                    self.logger,
+                    bundle_dir     = os.getcwd(),
+                    install_folder = indigo.server.getInstallFolderPath(),
+                    home           = os.path.expanduser("~"),
+                    fallback_token = CLAUDEBRIDGE_BEARER_TOKEN,
+                )
             else:
                 self.logger.info("Claude Code auto-configure disabled in PluginConfig — skipping ~/.mcp.json and ~/.claude/settings.json updates")
 
@@ -1170,12 +354,16 @@ class Plugin(indigo.PluginBase):
             # 'Enable Event Webhooks' pref) before subscriptions go live.
             self._init_webhooks()
 
-            # Subscribe to device and variable changes: they feed the webhooks
-            # and keep the tool cache honest (see _note_cache_change).
+            # Subscribe to device, variable and action group changes: they feed
+            # the webhooks, keep the tool cache honest (see _note_cache_change)
+            # and tell the search index when it is out of date (see
+            # _mark_index_dirty). Action groups change rarely, so that
+            # subscription costs next to nothing.
             try:
                 indigo.devices.subscribeToChanges()
                 indigo.variables.subscribeToChanges()
-                self.logger.info("\t✅ Subscribed to device and variable change events")
+                indigo.actionGroups.subscribeToChanges()
+                self.logger.info("\t✅ Subscribed to device, variable and action group change events")
             except Exception as _sub_e:
                 self.logger.warning(f"\t⚠️  Could not subscribe to changes: {_sub_e}")
 
@@ -1184,140 +372,6 @@ class Plugin(indigo.PluginBase):
             self.mcp_handler = None
             self.logger.error("\t❌ MCP server unavailable - plugin restart required")
             return
-
-    def _setup_claude_code_integration(self) -> None:
-        """
-        Copy the bundled proxy script to the standard Indigo Scripts directory,
-        patch the Bearer token, and update ~/.mcp.json and ~/.claude/settings.json
-        so Claude Code can connect without any manual Terminal steps.
-        Called from startup() after MCP handler is ready.
-        """
-        import json as _json
-        import re as _re
-        import shutil as _shutil
-        from pathlib import Path as _Path
-
-        # Standard Indigo scripts directory — created if it doesn't exist.
-        # Derived, not hardcoded: getInstallFolderPath() returns the VERSIONED
-        # folder, and the two script folders sit at its parent. The old literal
-        # path silently created a bogus Scripts folder on a non-default install
-        # root, deployed the proxy (carrying the live bearer token) into it,
-        # pointed ~/.mcp.json at that dead path, and logged success.
-        scripts_dir = _Path(os.path.dirname(indigo.server.getInstallFolderPath())) / "Scripts"
-
-        bundle_proxy  = _Path(os.getcwd()) / "indigo_mcp_proxy.py"
-        dest_proxy    = scripts_dir / "indigo_mcp_proxy.py"
-        secrets_path  = _Path(indigo.server.getInstallFolderPath()) / "Preferences/secrets.json"
-        mcp_json_path = _Path.home() / ".mcp.json"
-        settings_path = _Path.home() / ".claude/settings.json"
-
-        server_entry  = {"command": "python3", "args": [str(dest_proxy)]}
-        changed       = []
-
-        # 1. Copy proxy script from bundle and patch Bearer token
-        # Token resolution order: Indigo IWS Preferences/secrets.json (master,
-        # written by Indigo) -> CLAUDEBRIDGE_BEARER_TOKEN from IndigoSecrets.py.
-        if bundle_proxy.exists():
-            scripts_dir.mkdir(parents=True, exist_ok=True)
-            _shutil.copy2(bundle_proxy, dest_proxy)
-
-            token   = ""
-            patched = False
-            if secrets_path.exists():
-                try:
-                    iws_secrets = _json.loads(secrets_path.read_text())
-                    # Validate shape/content before trusting element 0 — a non-list
-                    # or an empty/blank/non-string entry falls through cleanly to
-                    # the IndigoSecrets.py fallback rather than patching in junk.
-                    if (isinstance(iws_secrets, list) and iws_secrets
-                            and isinstance(iws_secrets[0], str) and iws_secrets[0].strip()):
-                        token = iws_secrets[0].strip()
-                except Exception as _e:
-                    self.logger.warning(f"\tIWS secrets.json read failed: {_e}")
-            if not token:
-                token = CLAUDEBRIDGE_BEARER_TOKEN
-            if not token:
-                self.logger.error(
-                    "[Config] No bearer token available to patch into the MCP proxy. "
-                    "Indigo IWS Preferences/secrets.json is empty AND "
-                    "CLAUDEBRIDGE_BEARER_TOKEN is not set in IndigoSecrets.py. "
-                    "Claude Code will not be able to authenticate. "
-                    "Generate an IWS bearer token in Indigo (Server -> Web Server -> "
-                    "Manage Authentication) or add CLAUDEBRIDGE_BEARER_TOKEN to "
-                    "/Library/Application Support/Perceptive Automation/IndigoSecrets.py."
-                )
-            else:
-                try:
-                    text     = dest_proxy.read_text(encoding="utf-8")
-                    # Callable replacement so a token containing backslashes,
-                    # '\g<...>' or quotes is inserted LITERALLY — a plain re.sub
-                    # replacement string would interpret backreferences and
-                    # silently corrupt the token.
-                    # subn, not sub: a rename of the BEARER_TOKEN line would make
-                    # this a silent no-op, deploying the placeholder while the log
-                    # said the proxy was configured. Every MCP call would then 401
-                    # with nothing pointing here.
-                    new_text, count = _re.subn(
-                        r'^(BEARER_TOKEN\s*=\s*")[^"]*(")',
-                        lambda m: m.group(1) + token + m.group(2),
-                        text, flags=_re.MULTILINE
-                    )
-                    if count:
-                        dest_proxy.write_text(new_text, encoding="utf-8")
-                        patched = True
-                    else:
-                        self.logger.error(
-                            "[Config] BEARER_TOKEN line not found in the bundled MCP "
-                            "proxy — the token was NOT patched in and Claude Code will "
-                            "fail to authenticate. The proxy's token line has been "
-                            "renamed or removed."
-                        )
-                except Exception as _e:
-                    self.logger.error(f"[Config] Bearer token patch failed: {_e}")
-
-            # The deployed proxy now holds the live bearer token — tighten perms
-            # so it is not group/world readable (was inheriting umask 0o640).
-            try:
-                _os.chmod(dest_proxy, 0o600)
-            except Exception as _e:
-                self.logger.warning(f"\tCould not chmod deployed proxy to 0o600: {_e}")
-
-            # Only claim the proxy was configured when the token actually went in.
-            # Reporting success on the no-token and patch-failed paths is how a
-            # broken deployment looks healthy.
-            if patched:
-                changed.append("proxy script")
-        else:
-            self.logger.warning("\tindigo_mcp_proxy.py not found in bundle — skipping proxy setup")
-
-        # 2. Update ~/.mcp.json
-        try:
-            mcp_data = _json.loads(mcp_json_path.read_text()) if mcp_json_path.exists() else {}
-            if mcp_data.get("mcpServers", {}).get("indigo-mcp") != server_entry:
-                mcp_data.setdefault("mcpServers", {})["indigo-mcp"] = server_entry
-                mcp_json_path.write_text(_json.dumps(mcp_data, indent=2) + "\n")
-                changed.append("~/.mcp.json")
-        except Exception as _e:
-            self.logger.warning(f"\t⚠️  Could not update ~/.mcp.json: {_e}")
-
-        # 3. Update ~/.claude/settings.json
-        try:
-            settings_data = _json.loads(settings_path.read_text()) if settings_path.exists() else {}
-            enabled = settings_data.get("enabledMcpjsonServers", [])
-            if "indigo-mcp" not in enabled:
-                enabled.append("indigo-mcp")
-                settings_data["enabledMcpjsonServers"] = enabled
-                settings_path.parent.mkdir(parents=True, exist_ok=True)
-                settings_path.write_text(_json.dumps(settings_data, indent=2) + "\n")
-                changed.append("~/.claude/settings.json")
-        except Exception as _e:
-            self.logger.warning(f"\t⚠️  Could not update ~/.claude/settings.json: {_e}")
-
-        if changed:
-            self.logger.info(f"\t✅ Claude Code integration configured: {', '.join(changed)}")
-            self.logger.info("\t   Restart Claude Code to activate the indigo-mcp tools")
-        else:
-            self.logger.info("\t✅ Claude Code integration already up to date")
 
     # ────────────────────────────────────────────────────────────────────────
     # Outbound webhook subsystem (event subscriptions). Ships dark — gated on the
@@ -1333,10 +387,10 @@ class Plugin(indigo.PluginBase):
         """(Re)read the enabled flag + static allow-list from prefs and
         IndigoSecrets.WEBHOOK_ALLOWLIST. After a config-dialog save Indigo returns
         these as STRINGS, so coerce defensively (the standing pref-type gotcha)."""
-        # _as_bool, not bool(): after a config-dialog save Indigo re-serialises the
+        # as_bool, not bool(): after a config-dialog save Indigo re-serialises the
         # checkbox as the string "false", and bool("false") is True — which would
         # silently turn this dark-by-default egress feature ON.
-        self.webhooks_enabled = self._as_bool(self.pluginPrefs.get("webhooks_enabled", False))
+        self.webhooks_enabled = as_bool(self.pluginPrefs.get("webhooks_enabled"), False)
         static = list(WEBHOOK_ALLOWLIST) if isinstance(WEBHOOK_ALLOWLIST, (list, tuple)) else []
         cfg = self.pluginPrefs.get("webhook_allowlist", "") or ""
         static += [h.strip() for h in str(cfg).replace("\n", ",").split(",") if h.strip()]
@@ -2055,12 +1109,62 @@ class Plugin(indigo.PluginBase):
         except Exception:
             pass   # deliberately silent: worst case is a stale read, not a fault
 
+    def _mark_index_dirty(self) -> None:
+        """Tell the search index it no longer matches Indigo; the next search
+        rebuilds it. Same rules as _note_cache_change: never raises, never
+        expensive. This replaced a full rebuild after every
+        execute_indigo_python and run_script call (about 1,600 in ten weeks),
+        almost none of which had changed a name."""
+        try:
+            handler = self.mcp_handler
+            manager = getattr(handler, "entity_index_manager", None) if handler is not None else None
+            if manager is not None:
+                manager.mark_dirty()
+        except Exception:
+            pass   # deliberately silent: the 300 s rebuild is the safety net
+
+    def deviceCreated(self, dev: indigo.Device) -> None:
+        super().deviceCreated(dev)
+        self._mark_index_dirty()
+        self._note_cache_change("device")
+
+    def deviceDeleted(self, dev: indigo.Device) -> None:
+        super().deviceDeleted(dev)
+        self._mark_index_dirty()
+        self._note_cache_change("device")
+
+    def variableCreated(self, var: indigo.Variable) -> None:
+        super().variableCreated(var)
+        self._mark_index_dirty()
+        self._note_cache_change("variable")
+
+    def variableDeleted(self, var: indigo.Variable) -> None:
+        super().variableDeleted(var)
+        self._mark_index_dirty()
+        self._note_cache_change("variable")
+
+    def actionGroupCreated(self, group) -> None:
+        super().actionGroupCreated(group)
+        self._mark_index_dirty()
+
+    def actionGroupDeleted(self, group) -> None:
+        super().actionGroupDeleted(group)
+        self._mark_index_dirty()
+
+    def actionGroupUpdated(self, origGroup, newGroup) -> None:
+        super().actionGroupUpdated(origGroup, newGroup)
+        if index_fields_changed("action_group", origGroup, newGroup):
+            self._mark_index_dirty()
+
     def variableUpdated(self, origVar: indigo.Variable, newVar: indigo.Variable) -> None:
         """
-        Called when an Indigo variable value changes. Marks the tool cache
-        stale and hands the change to the outbound webhooks.
+        Called when an Indigo variable changes. Marks the tool cache stale,
+        marks the search index stale on a rename or move, and hands the change
+        to the outbound webhooks.
         """
         super().variableUpdated(origVar, newVar)
+        if index_fields_changed("variable", origVar, newVar):
+            self._mark_index_dirty()
         if origVar.value != newVar.value:
             # Tell the tool cache the world moved. Without this, list_variables /
             # get_variable_by_id kept serving the pre-change value for a full TTL
@@ -2089,7 +1193,15 @@ class Plugin(indigo.PluginBase):
             # webhooks. This is the ONLY place an mcpServer device reaches.
             if newDev.deviceTypeId == "mcpServer":
                 self._handle_mcp_server_device_update(origDev, newDev)
+            # Safe inside the guard: marking the index writes nothing to Indigo.
+            if index_fields_changed("device", origDev, newDev):
+                self._mark_index_dirty()
             return
+
+        # A rename, move, enable/disable or type change makes the search index
+        # stale. A state change does not, and is most of what arrives here.
+        if index_fields_changed("device", origDev, newDev):
+            self._mark_index_dirty()
 
         # Tell the tool cache the world moved — a light switched at the wall, by
         # a Z-Wave association, by a trigger, or by another plugin. Nothing else
@@ -2188,12 +1300,12 @@ class Plugin(indigo.PluginBase):
             self.plugin_file_handler.setLevel(self.log_level)
             logging.getLogger("Plugin").setLevel(self.log_level)
 
-            # Coerce the checkboxes via _as_bool: a saved dialog can hand back
+            # Coerce the checkboxes via as_bool: a saved dialog can hand back
             # the string 'false', and bool('false') is True.
-            self.allow_destructive_delete = self._as_bool(
-                values_dict.get("allow_destructive_delete", False))
-            self.external_tools_allow_writes = self._as_bool(
-                values_dict.get("external_tools_allow_writes", True))
+            self.allow_destructive_delete = as_bool(
+                values_dict.get("allow_destructive_delete"), False)
+            self.external_tools_allow_writes = as_bool(
+                values_dict.get("external_tools_allow_writes"), True)
 
             # Phase 2 — apply rate-limit / cache changes live (no restart needed).
             # Coerce ALL three before assigning any: a single try around both the

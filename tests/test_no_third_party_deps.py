@@ -21,7 +21,7 @@ from conftest import SERVER_PLUGIN
 # packages and modules, and the shared files plugin.py loads by path.
 _ALLOWED = {
     "indigo",
-    "mcp_server", "plugin_utils", "indigo_mcp_proxy", "install",
+    "mcp_server", "plugin_utils", "indigo_mcp_proxy",
     "IndigoSecrets", "conftest",
 }
 

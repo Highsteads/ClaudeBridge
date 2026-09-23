@@ -7,60 +7,69 @@ now one decorated function.
 ## Running the tests
 
 No Indigo install is needed — `tests/conftest.py` stubs the `indigo` module
-and resolves the plugin bundle automatically (a live installed copy if one
-exists, otherwise the bundle inside this repo).
+and tests the plugin bundle in this repo. From the repo root:
 
 ```bash
 pip install pytest
-python -m pytest tests -q
+python3 -m pytest -q
 ```
 
-The plugin needs nothing beyond the standard library and Indigo itself, so
-pytest is the only thing to install. `tests/test_no_third_party_deps.py` fails
-the suite if a module in the bundle ever imports anything else.
+`pytest.ini` points pytest at `tests/`. The plugin needs nothing beyond the
+standard library and Indigo itself, so pytest is the only thing to install.
+`tests/test_no_third_party_deps.py` fails the suite if a module in the bundle
+ever imports anything else.
 
-To force the suite to run against this repo's bundle even on a machine with a
-live Indigo install:
+To run the suite against another copy of the bundle, such as the one Indigo
+has installed, point `CB_SP` at its `Server Plugin` folder:
 
 ```bash
-CB_SP="$PWD/Claude Bridge.indigoPlugin/Contents/Server Plugin" python -m pytest tests -q
+CB_SP="/Library/Application Support/Perceptive Automation/Indigo 2025.2/Plugins/Claude Bridge.indigoPlugin/Contents/Server Plugin" python3 -m pytest -q
 ```
 
-Lint (errors only — undefined names, unused imports; no style policing) and
-the tool-reference and tool-count staleness check:
+Lint (errors only — undefined names, unused imports; no style policing):
 
 ```bash
 pip install ruff
 ruff check .
-python3 scripts/generate_tool_doc.py --check
 ```
 
-All three run in CI on every push and pull request
-(`.github/workflows/test.yml`) and must be green.
+The suite also runs `scripts/generate_tool_doc.py --check`
+(`tests/test_version_consistency.py`), so a stale `docs/tools.md` or tool
+count fails it. CI (`.github/workflows/test.yml`) runs pytest and ruff on every
+push and pull request, and both must be green.
+
+Tests are named for what they test (`test_device_battery.py`,
+`test_tool_cache.py`, `test_webhooks.py`), not for the release that added
+them. Shared doubles — `FakeDevice`, `FakeIndigoDict`, `FakeIndigoList` — and
+`load_plugin_module()`, which imports `plugin.py` itself against the stub, live
+in `tests/conftest.py`. Test what the code does: run it and check the result,
+rather than reading its source text for a pattern.
 
 ## Repo layout
 
 ```
 Claude Bridge.indigoPlugin/Contents/Server Plugin/
-├── plugin.py               # Indigo plugin lifecycle + IWS endpoints + secrets loading
+├── plugin.py               # Indigo plugin lifecycle + IWS endpoints + change callbacks
 ├── indigo_mcp_proxy.py     # stdio→HTTP bridge that Claude Code launches
 └── mcp_server/
     ├── mcp_handler.py      # MCP protocol dispatch (rate limit, scopes, gate, cache)
     ├── registry.py         # the @tool decorator and everything derived from it
     ├── toolsets/           # every built-in tool, one module per domain
     ├── tools/<category>/   # the handler classes the tools call
+    ├── client_setup.py     # Claude Code auto-setup, run at plugin start
+    ├── orphan_prefs.py     # deletes settings of removed Configure fields
     ├── security/           # scope manager, rate limiter, egress firewall
     ├── webhooks/           # outbound event webhook engine
     └── common/             # tool cache, entity (search) index, helpers
-tests/                      # pytest suite — runs standalone, <10 s
+tests/                      # pytest suite — runs standalone, about 10 s
 scripts/generate_tool_doc.py # writes docs/tools.md and every tool count from the registry
+docs/                        # the documentation site; docs/changelog.md is the version history
 ```
 
-The canonical copies of `indigo_mcp_proxy.py` and `IndigoSecrets_example.py`
-live inside the bundle (`Contents/Server Plugin/`) — edit those. Unpublished
-root-level working copies may exist on a maintainer's machine;
-`tests/test_bundle_sync.py` keeps them honest where present and skips on a
-fresh clone.
+`indigo_mcp_proxy.py` and `IndigoSecrets_example.py` exist only inside the
+bundle (`Contents/Server Plugin/`). There is no installer script: a user
+double-clicks the bundle, and the plugin deploys the proxy and sets Claude
+Code up itself when it starts (`mcp_server/client_setup.py`).
 
 ## Adding a new MCP tool
 
@@ -100,7 +109,10 @@ def list_widgets(ctx, limit=50):
    delete preference; `sensitive=True` to scrub a failure whole;
    `redact=True` to keep a failure but blank secret values;
    `refresh_search=True` when it adds, removes or renames devices, variables
-   or action groups. The buckets are listed in `registry.py`.
+   or action groups, so search sees the change at once. (A change made any
+   other way — in the Indigo client, or by `execute_indigo_python` — reaches
+   the index through the plugin's Indigo change callbacks, which mark it for a
+   rebuild on the next search.) The buckets are listed in `registry.py`.
 5. **Docs** — `python3 scripts/generate_tool_doc.py --write` rewrites the
    table in `docs/tools.md` **and every tool count written in prose** across
    `README.md`, `docs/*.md` and the site description in `docs/_config.yml`.
@@ -122,11 +134,37 @@ def list_widgets(ctx, limit=50):
   (`IndigoSecrets.py` first, PluginConfig fallback).
 - Maximum error checking: guard `int()`/`float()` coercions of config values,
   never assume an Indigo API call succeeds.
-- Version bumps touch `Contents/Info.plist` (`PluginVersion` — leave
-  `CFBundleVersion` alone), the `plugin.py` header, and the README changelog.
+- New `.py` files carry the standard header (Filename, Description, Author,
+  Date, Version). History lives in `docs/changelog.md`, not in file headers.
+
+## Version bumps
+
+A change inside the `.indigoPlugin` bundle gets a version bump. A change only
+to tests, docs, CI or the README does not: none of those reach Indigo, and
+bumping for them would leave the installed bundle looking out of date.
+
+A bump touches, together:
+
+1. `Contents/Info.plist` — `PluginVersion` only (leave `CFBundleVersion` at
+   `1.0.0`; it describes the bundle layout, not the release)
+2. the `# Version:` line of the `plugin.py` header
+3. the README's `**Version:**` line
+4. a `### X.Y.Z (YYYY-MM-DD)` entry at the top of `docs/changelog.md`, in
+   plain English, and the same text word for word under the README's
+   **What's new**, which keeps the newest three
+5. `python3 scripts/generate_tool_doc.py --write` if any tool changed
+
+Then run the suite. `tests/test_version_consistency.py` fails when those
+places disagree, so run it after the bump, not before.
 
 ## Releases
 
-Releases are cut from `main` as `Claude.Bridge.indigoPlugin.zip` (zip the
-bundle from the repo root) and attached to a GitHub release. See the README's
-installation section for what users do with it.
+Releases are cut from `main` as `Claude.Bridge.indigoPlugin.zip`, built from
+the committed tree so nothing untracked (caches, local notes) can slip in:
+
+```bash
+git archive --format=zip -o Claude.Bridge.indigoPlugin.zip HEAD "Claude Bridge.indigoPlugin"
+```
+
+Never zip the working tree. Attach the zip to a GitHub release. See the
+README's installation section for what users do with it.
