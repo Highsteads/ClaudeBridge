@@ -92,12 +92,23 @@ class SearchEntitiesHandler(BaseToolHandler):
             # full candidate set; truncating to one first throws those candidates
             # away, and if that single hit then fails the filter the answer is
             # empty even though matching devices were in the set.
+            #
+            # AND only for a name that EQUALS the query. Any name merely
+            # containing the query also scores 1.0, so the old ">= 0.95" test
+            # made "kitchen" return one of fourteen kitchen devices (2.27.3).
+            exact = self._exact_name_matches(raw_results, query)
             if (device_types is None and state_filter is None
-                    and raw_results and raw_results[0].get("_similarity_score", 0) >= 0.95):
-                raw_results = raw_results[:1]
+                    and len(exact) == 1):
+                raw_results = exact
                 if search_metadata:
                     search_metadata = {**search_metadata,
                                        "total_found": 1, "total_returned": 1, "truncated": False}
+            elif exact:
+                # Several share the name, or a filter follows: keep them all,
+                # exact ones first (they tie at 1.0 with every name that
+                # merely contains the query).
+                exact_ids = {id(r) for r in exact}
+                raw_results.sort(key=lambda r: id(r) not in exact_ids)
 
             # Apply device type filtering if specified
             if device_types is not None and "devices" in search_params["entity_types"]:
@@ -134,6 +145,15 @@ class SearchEntitiesHandler(BaseToolHandler):
         except Exception as e:
             return self.handle_exception(e, f"searching for '{query}'")
     
+    @staticmethod
+    def _exact_name_matches(raw_results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+        """Results whose name equals the query, ignoring case and outer spaces."""
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        return [r for r in raw_results
+                if str(r.get("name", "")).strip().lower() == q]
+
     def _group_results_by_type(self, raw_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """
         Group search results by entity type.

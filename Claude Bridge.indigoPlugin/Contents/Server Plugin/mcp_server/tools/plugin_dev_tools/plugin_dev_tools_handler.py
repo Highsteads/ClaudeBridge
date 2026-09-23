@@ -186,6 +186,11 @@ def _file_hash(path: str) -> str:
 # ════════════════════════════════════════════════════════════════════════════
 
 
+def _quote_ident(name: str) -> str:
+    """Quote an SQLite identifier (names come from PRAGMA table_info)."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
 class PluginDevToolsHandler(BaseToolHandler):
     """v2.6.0 plugin-development helpers."""
 
@@ -947,44 +952,45 @@ class PluginDevToolsHandler(BaseToolHandler):
                 # then range on `id`, which uses the PK index.
                 floor_id = self._rowid_floor_for_ts(cur, table, cutoff)
 
-                if not columns:
-                    # Probe: which columns have a non-null value in the window?
-                    keep = []
-                    for c in all_cols:
-                        if c in ("id",):
-                            continue
-                        try:
-                            cur.execute(
-                                f"SELECT 1 FROM {table} WHERE id >= ? "
-                                f"AND {c} IS NOT NULL LIMIT 1",
-                                (floor_id,),
-                            )
-                            if cur.fetchone():
-                                keep.append(c)
-                        except sqlite3.OperationalError:
-                            continue
-                    cols = keep or ["ts"]
-                    if "ts" in cols:
-                        # Move ts to front
-                        cols = ["ts"] + [c for c in cols if c != "ts"]
-
                 # SQL Logger stores ts in UTC. Convert it to LOCAL time on the
                 # way out so returned timestamps match device.lastChanged /
                 # indigo.server.getTime() (DST-aware via the OS timezone). The
                 # WHERE/ORDER BY operate on the PK range, so the time-window
-                # filter and ordering are unaffected.
-                col_list = ", ".join(
-                    "datetime(ts, 'localtime') AS ts" if c == "ts" else c
-                    for c in cols
-                )
-                cur.execute(
-                    f"SELECT {col_list} FROM {table} "
-                    f"WHERE id >= ? ORDER BY id DESC LIMIT ?",
-                    (floor_id, limit),
-                )
-                rows = []
-                for row in cur.fetchall():
-                    rows.append(dict(zip(cols, row)))
+                # filter and ordering are unaffected. Names are quoted: they
+                # come from PRAGMA table_info, and one that is an SQL keyword
+                # would otherwise break the SELECT.
+                def _select_list(names):
+                    return ", ".join(
+                        "datetime(ts, 'localtime') AS ts" if c == "ts" else _quote_ident(c)
+                        for c in names)
+
+                if not columns:
+                    # Read the newest `limit` rows once and keep the columns
+                    # that carry a value IN THOSE ROWS. Until 2.27.3 this ran
+                    # one "IS NOT NULL" probe per column across the whole
+                    # window, and a column null throughout scanned every row
+                    # in range — up to 31 days of a busy table, on the plugin's
+                    # single dispatch thread. It also kept columns that were
+                    # null in every row actually returned.
+                    wide = [c for c in all_cols if c != "id"]
+                    cur.execute(
+                        f"SELECT {_select_list(wide)} FROM {table} "
+                        f"WHERE id >= ? ORDER BY id DESC LIMIT ?",
+                        (floor_id, limit),
+                    )
+                    wide_rows = [dict(zip(wide, r)) for r in cur.fetchall()]
+                    cols = [c for c in wide
+                            if c == "ts" or any(r.get(c) is not None for r in wide_rows)]
+                    if "ts" in cols:
+                        cols = ["ts"] + [c for c in cols if c != "ts"]
+                    rows = [{c: r.get(c) for c in cols} for r in wide_rows]
+                else:
+                    cur.execute(
+                        f"SELECT {_select_list(cols)} FROM {table} "
+                        f"WHERE id >= ? ORDER BY id DESC LIMIT ?",
+                        (floor_id, limit),
+                    )
+                    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
                 # `hours` describes the window ASKED FOR; `limit` caps rows from
                 # the newest end. On a chatty device those disagree wildly —

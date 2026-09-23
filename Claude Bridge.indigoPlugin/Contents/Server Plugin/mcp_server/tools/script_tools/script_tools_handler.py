@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import tempfile
+import traceback as _traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -33,6 +34,7 @@ try:
 except ImportError:
     pass
 
+from ...common.output_clip import clip_into
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 from ...common.log_levels import resolve as resolve_level
@@ -560,7 +562,7 @@ if __name__ == "__main__":
 
             captured_out = io.StringIO()
             captured_err = io.StringIO()
-            _res = {"error_msg": None}
+            _res = {"error_msg": None, "tb_text": None}
 
             # Run the script in a worker thread with a join timeout so a runaway
             # script can't wedge the request thread forever (same pattern and
@@ -584,7 +586,9 @@ if __name__ == "__main__":
                     except SystemExit:
                         _res["error_msg"] = None  # clean exit via sys.exit() is normal
                     except Exception as exc:
-                        _res["error_msg"] = str(exc)
+                        # Type included: a KeyError used to arrive as just 'foo'.
+                        _res["error_msg"] = f"{type(exc).__name__}: {exc}"
+                        _res["tb_text"]   = _traceback.format_exc()
                 finally:
                     if _sys.stdout is captured_out:
                         _sys.stdout = old_stdout
@@ -623,11 +627,12 @@ if __name__ == "__main__":
                 "success":  error_msg is None,
                 "name":     os.path.basename(path),
                 "path":     path,
-                "stdout":   out[:4000] if out else "",
-                "stderr":   err[:2000] if err else "",
             }
+            clip_into(result, "stdout", out, 4000)
+            clip_into(result, "stderr", err, 2000)
             if error_msg:
                 result["error"] = error_msg
+                clip_into(result, "traceback", _res["tb_text"], 4000, keep="tail")
             self.log_tool_outcome(
                 "run_script",
                 result["success"],

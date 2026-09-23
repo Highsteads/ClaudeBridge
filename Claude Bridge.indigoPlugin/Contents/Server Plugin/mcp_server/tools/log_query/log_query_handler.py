@@ -36,6 +36,11 @@ _LOG_LINE_RE = re.compile(
 # anchoring the window to the END of the range and capping its width.
 _MAX_SPAN_DAYS = 14
 
+# Most entries one reply carries. The default path already clamped to this
+# (indigo_data_provider); the file-scan path had no cap when line_count was
+# null, and a 14-day scan can match tens of thousands of lines.
+_MAX_ENTRIES = 2000
+
 
 def _parse_time_param(value: str, today: date) -> Optional[datetime]:
     """Parse a time string into a datetime.
@@ -153,12 +158,19 @@ class LogQueryHandler(BaseToolHandler):
                             ts_str, source, message = (
                                 m.group(1), m.group(2), m.group(3)
                             )
+                            # Keep the fraction of a second. Cut to whole
+                            # seconds, 07:45:00.312 compared equal to 07:45:00,
+                            # so after="07:45:00" dropped the whole first
+                            # second of the window it was asked for.
                             try:
-                                ts = datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S")
+                                ts = datetime.strptime(ts_str[:26], "%Y-%m-%d %H:%M:%S.%f")
                             except ValueError:
-                                last_kept = None
-                                continue
-                            if after_dt  and ts <= after_dt:
+                                try:
+                                    ts = datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S")
+                                except ValueError:
+                                    last_kept = None
+                                    continue
+                            if after_dt  and ts < after_dt:
                                 last_kept = None
                                 continue
                             if before_dt and ts >= before_dt:
@@ -176,9 +188,13 @@ class LogQueryHandler(BaseToolHandler):
             current += timedelta(days=1)
 
         meta["matched_before_limit"] = len(results)
-        if line_count and len(results) > line_count:
-            results = results[-line_count:]
+        cap = min(line_count or _MAX_ENTRIES, _MAX_ENTRIES)
+        if len(results) > cap:
+            results = results[-cap:]
             meta["truncated"] = True
+            meta["truncated_note"] = (
+                f"{len(results)} newest of {meta['matched_before_limit']} matching entries; "
+                f"narrow 'after'/'before' to see the earlier ones.")
         return results, meta
 
     # ── Public tool method ────────────────────────────────────────────────────
@@ -215,6 +231,11 @@ class LogQueryHandler(BaseToolHandler):
 
         try:
             today = date.today()
+
+            # A whole-number float (20.0) is what some clients send for a
+            # "number" schema; it was refused as "not a positive integer".
+            if isinstance(line_count, float) and line_count.is_integer():
+                line_count = int(line_count)
 
             # Validate line_count for BOTH paths. This check used to sit inside
             # the default path only, so the range path took it raw: a string

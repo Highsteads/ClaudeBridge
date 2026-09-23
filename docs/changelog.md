@@ -8,6 +8,21 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 2.27.3 (2026-09-23)
+A round of fixes from a full review of the plugin, most of them in the tools Claude uses every day.
+
+- **Searching now finds everything that matches.** Asking for "kitchen" returned one device out of fourteen. Any name containing the search word scored as a perfect match, and a perfect match was taken to mean "this is the one", so the rest were thrown away. Only a name that is exactly what was asked for gets that treatment now.
+- **Text you send is stored as you sent it.** Setting a variable to `21.50` stored `21.5`, and a value written as JSON came back as something JSON could not read, all while reporting success. The small program that carries Claude's requests to Indigo was guessing which words were numbers without knowing what each tool expected. Claude Bridge now does that itself, using each tool's own description of its arguments, and anything a tool expects as text arrives untouched.
+- **"Turn on the hall lamp" will not guess.** If a name matches more than one device, nothing is switched and Claude gets the list to choose from.
+- **Plugin status says whether a plugin is actually running**, not just whether it is enabled, so a plugin that falls over on start-up no longer looks healthy. A newly installed or updated plugin also shows up within half a minute rather than an hour, and restarting a mistyped plugin id now says "not found".
+- **The daily energy summary and comparison work.** They were reading lines from SigenEnergyManager's logs that it has never written, so every total came back empty. They now read its own day-by-day record, and the summary adds today's running totals.
+- **No paid API call when the plugin starts.** An Anthropic key in `IndigoSecrets.py` meant every start sent a message to Claude to check the key. The key is only used by the InfluxDB history tool, so it is now checked only when InfluxDB is switched on, or when you press Test Connections, and the check no longer spends anything.
+- **Device history with no columns named is quicker**, and no longer lists columns that are empty in every row it returns.
+- **Event log searches keep the first second of the window you ask for**, and are capped at 2,000 entries even when no count is given.
+- **Shortened output says so**, and a failing script run with `run_script` reports the kind of error and its traceback, not just the message.
+
+54 new tests. I broke each fix on purpose and watched a test fail every time.
+
 ### 2.27.2 (2026-09-23)
 When Claude's own code fails inside Indigo, it now gets told why.
 

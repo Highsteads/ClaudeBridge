@@ -44,6 +44,7 @@ try:
 except ImportError:
     pass
 
+from ...common.output_clip import clip_into
 from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 
@@ -265,21 +266,16 @@ class ScriptingShellHandler(BaseToolHandler):
         out = captured_out.getvalue()
         err = captured_err.getvalue()
 
-        result: Dict[str, Any] = {
-            "success": error_msg is None,
-            "mode":    mode,
-            "stdout":  out[:8000] if out else "",
-            "stderr":  err[:4000] if err else "",
-        }
+        result: Dict[str, Any] = {"success": error_msg is None, "mode": mode}
+        clip_into(result, "stdout", out, 8000)
+        clip_into(result, "stderr", err, 4000)
         if mode == "eval" and value_repr is not None:
-            result["value"] = value_repr[:4000]
+            clip_into(result, "value", value_repr, 4000)
         if error_msg:
-            result["error"]     = error_msg
+            result["error"] = error_msg
             # Keep the TAIL: the exception itself is the last line, and a deep
             # traceback cut from the front used to lose exactly that line.
-            tb_text = tb_text or ""
-            result["traceback"] = (tb_text if len(tb_text) <= 4000
-                                   else "...[truncated]\n" + tb_text[-4000:])
+            clip_into(result, "traceback", tb_text, 4000, keep="tail")
 
         self.log_tool_outcome(
             "execute_indigo_python",

@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.27.2
+**Version:** 2.27.3
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,21 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 2.27.3 (2026-09-23)
+A round of fixes from a full review of the plugin, most of them in the tools Claude uses every day.
+
+- **Searching now finds everything that matches.** Asking for "kitchen" returned one device out of fourteen. Any name containing the search word scored as a perfect match, and a perfect match was taken to mean "this is the one", so the rest were thrown away. Only a name that is exactly what was asked for gets that treatment now.
+- **Text you send is stored as you sent it.** Setting a variable to `21.50` stored `21.5`, and a value written as JSON came back as something JSON could not read, all while reporting success. The small program that carries Claude's requests to Indigo was guessing which words were numbers without knowing what each tool expected. Claude Bridge now does that itself, using each tool's own description of its arguments, and anything a tool expects as text arrives untouched.
+- **"Turn on the hall lamp" will not guess.** If a name matches more than one device, nothing is switched and Claude gets the list to choose from.
+- **Plugin status says whether a plugin is actually running**, not just whether it is enabled, so a plugin that falls over on start-up no longer looks healthy. A newly installed or updated plugin also shows up within half a minute rather than an hour, and restarting a mistyped plugin id now says "not found".
+- **The daily energy summary and comparison work.** They were reading lines from SigenEnergyManager's logs that it has never written, so every total came back empty. They now read its own day-by-day record, and the summary adds today's running totals.
+- **No paid API call when the plugin starts.** An Anthropic key in `IndigoSecrets.py` meant every start sent a message to Claude to check the key. The key is only used by the InfluxDB history tool, so it is now checked only when InfluxDB is switched on, or when you press Test Connections, and the check no longer spends anything.
+- **Device history with no columns named is quicker**, and no longer lists columns that are empty in every row it returns.
+- **Event log searches keep the first second of the window you ask for**, and are capped at 2,000 entries even when no count is given.
+- **Shortened output says so**, and a failing script run with `run_script` reports the kind of error and its traceback, not just the message.
+
+54 new tests. I broke each fix on purpose and watched a test fail every time.
+
 ### 2.27.2 (2026-09-23)
 When Claude's own code fails inside Indigo, it now gets told why.
 
@@ -89,17 +104,6 @@ Clicking a plugin's menu item no longer fails when the reply contains an accent 
 Asking Claude to run *Scan Now* on Device Health Monitor came back with `'ascii' codec can't decode byte 0xe2`, which is the first byte of an em-dash. Inside an Indigo plugin host the text encoding defaults to plain ASCII, so any output from the Indigo client that was not plain ASCII broke the tool reading it, even though the click itself had worked. Every place Claude Bridge runs another program now reads its output as UTF-8: both menu tools, the `du` and `ps` readings behind `system_health` and `find_large_files`, and the `node` check behind `plugin_node_check_html`. A byte that still makes no sense is replaced rather than allowed to stop the tool.
 
 Five new tests. Four run a real child process under the same ASCII default the plugin host uses, and were watched failing on the old code with the exact error from the log. The fifth reads the whole bundle and fails if anything ever again runs a program as text without saying which encoding.
-
-### 2.27.0 (2026-09-14)
-Claude can now use any of the Indigo client's own menus, not just a plugin's.
-
-Claude Bridge could already click a plugin's menu item, because Indigo offers no other way to fire one from outside. That same gap turns out to run through a good deal of the client itself. `indigo.zwave` has an `isEnabled()` and nothing that sets it, so *Interfaces, Z-Wave, Disable* is the only way to make Indigo let go of the Z-Wave stick, and letting go of the stick is exactly what a controller backup needs before it can read it. The new `execute_client_menu_item` takes the whole path, so `['Interfaces', 'Z-Wave', 'Disable']` does what a person would do, and a backup, a verify and switching the interface back on afterwards now run with nobody at the keyboard.
-
-It reads menus as well as clicking them. Passing `list_only` returns the item names under any menu or submenu, which matters more than it sounds: several of these labels are toggles that rename themselves, and the Z-Wave one reads *Disable* while the interface is on and *Enable* while it is off, so anything that clicks a fixed label will sooner or later click the wrong one. Listing leaves the client where it is. Clicking brings it to the front, because System Events needs it there.
-
-Two things it will not do. It refuses any path through Claude Bridge's own submenu, however it is spelt, because reloading the bridge kills the session that asked for it. The plugin-menu tool already refused that by name, and a tool that takes a whole path reaches the identical item by another road, so the guard had to be built again here rather than inherited. It also refuses to quit the client, that being the one click nothing on this side could undo.
-
-15 tests, each guard checked by breaking it first and watching the suite go red. The tool table is generated, and it now keeps the sentence above itself current too: adding this tool moved the table and the generated marker to 169 and left the headline reading 168, which is the same fault the 2.26.0 note records finding in seven places at once.
 
 ## Vibe coding for Indigo
 

@@ -1,18 +1,18 @@
 """
 Energy intelligence handler for ClaudeBridge MCP server.
 
-Reads SigenEnergyManager's daily rotating log files to provide historical
-energy analysis without requiring InfluxDB.
+Reads SigenEnergyManager's own files to provide historical energy analysis
+without requiring InfluxDB.
 
 Tools:
-  - energy_log_days(days=7)       : return raw log entries for the last N days
-  - energy_daily_summary(days=14) : parse log files into per-day kWh totals
+  - energy_log_days(days=7)       : raw log lines from its daily rotating logs
+  - energy_daily_summary(days=14) : per-day kWh totals from daily_history.json
   - energy_compare(days_a, days_b): compare two N-day windows (e.g. this week vs last)
 """
 
+import json
 import logging
 import os
-import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -25,16 +25,6 @@ from ..base_handler import BaseToolHandler
 from ...adapters.data_provider import DataProvider
 
 SIGEN_PLUGIN_ID = "com.clives.indigoplugin.sigenergy-energy-manager"
-
-# Patterns to extract from SigenEnergyManager log lines
-_DAILY_PV_RE      = re.compile(r"\[Daily\].*?PV[:\s]+([\d.]+)\s*kWh", re.I)
-_DAILY_IMPORT_RE  = re.compile(r"\[Daily\].*?import[:\s]+([\d.]+)\s*kWh", re.I)
-_DAILY_EXPORT_RE  = re.compile(r"\[Daily\].*?export[:\s]+([\d.]+)\s*kWh", re.I)
-_DAILY_HOME_RE    = re.compile(r"\[Daily\].*?home[:\s]+([\d.]+)\s*kWh", re.I)
-_DAILY_LINE_RE    = re.compile(r"\[Daily\]", re.I)
-_SOC_RE           = re.compile(r"SOC=([\d.]+)%")
-_MANAGER_RE       = re.compile(r"\[Manager\].*?Action=(\w+)")
-
 
 def _sigen_log_dir() -> Optional[str]:
     """Return the SigenEnergyManager log directory path."""
@@ -50,28 +40,81 @@ def _log_file_for_date(log_dir: str, date: datetime) -> Optional[str]:
     return path if os.path.isfile(path) else None
 
 
-def _parse_daily_line(line: str) -> Optional[Dict[str, Any]]:
-    """
-    Parse a [Daily] summary line from SigenEnergyManager log.
-    Example: 23:59:59 [INFO   ] [Daily] PV: 45.3 kWh  Import: 0.0 kWh  Export: 12.1 kWh  Home: 18.7 kWh
-    """
-    if not _DAILY_LINE_RE.search(line):
-        return None
+def _clamp(value: Any, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(int(value), hi))
+    except (ValueError, TypeError):
+        return default
 
-    result: Dict[str, Any] = {}
-    for label, pattern in (
-        ("pv_kwh",     _DAILY_PV_RE),
-        ("import_kwh", _DAILY_IMPORT_RE),
-        ("export_kwh", _DAILY_EXPORT_RE),
-        ("home_kwh",   _DAILY_HOME_RE),
-    ):
-        m = pattern.search(line)
-        if m:
-            try:
-                result[label] = float(m.group(1))
-            except ValueError:
-                pass
-    return result if result else None
+
+def _daily_history_path() -> Optional[str]:
+    base = indigo.server.getInstallFolderPath()
+    path = os.path.join(base, "Preferences", "Plugins", SIGEN_PLUGIN_ID,
+                        "daily_history.json")
+    return path if os.path.isfile(path) else None
+
+
+# daily_history.json field -> the name these tools have always reported.
+_FIELDS = {
+    "pv_kwh":          "pv_kwh",
+    "grid_import_kwh": "import_kwh",
+    "grid_export_kwh": "export_kwh",
+    "home_kwh":        "home_kwh",
+    "peak_soc":        "max_soc_pct",
+    "min_soc":         "min_soc_pct",
+}
+
+
+def load_daily_history(path: str) -> Dict[str, Dict[str, Any]]:
+    """Map date -> {pv_kwh, import_kwh, export_kwh, home_kwh, max/min_soc_pct,
+    partial}. A later record for the same date replaces an earlier one."""
+    with open(path, encoding="utf-8") as fh:
+        raw = json.load(fh)
+    out: Dict[str, Dict[str, Any]] = {}
+    for rec in raw if isinstance(raw, list) else []:
+        if not isinstance(rec, dict) or not rec.get("date"):
+            continue
+        row: Dict[str, Any] = {"date": str(rec["date"])}
+        for src, dst in _FIELDS.items():
+            val = rec.get(src)
+            row[dst] = float(val) if isinstance(val, (int, float)) else None
+        row["partial"] = bool(rec.get("energy_partial", False))
+        out[row["date"]] = row
+    return out
+
+
+def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Sum the kWh fields that are present; never turn a missing value into 0.
+    Self-sufficiency uses only days carrying both home and import figures."""
+    totals: Dict[str, Any] = {}
+    for key in ("pv_kwh", "import_kwh", "export_kwh", "home_kwh"):
+        vals = [r[key] for r in rows if r.get(key) is not None]
+        totals[key] = round(sum(vals), 2) if vals else None
+    both = [r for r in rows if r.get("home_kwh") is not None and r.get("import_kwh") is not None]
+    home = sum(r["home_kwh"] for r in both)
+    imp  = sum(r["import_kwh"] for r in both)
+    totals["self_sufficiency_pct"] = (
+        round(max(0.0, min(100.0, (1 - imp / home) * 100)), 1) if home > 0 else None)
+    totals["partial_days"] = sum(1 for r in rows if r.get("partial"))
+    return totals
+
+
+def _today_so_far() -> Optional[Dict[str, Any]]:
+    """Today's running totals from the inverter device, which daily_history.json
+    does not hold until midnight."""
+    states = {"pvDailyKwh": "pv_kwh", "gridDailyImportKwh": "import_kwh",
+              "gridDailyExportKwh": "export_kwh", "homeDailyKwh": "home_kwh"}
+    try:
+        for dev in indigo.devices.iter(SIGEN_PLUGIN_ID):
+            if dev.deviceTypeId == "sigenergyInverter":
+                out = {"date": datetime.now().date().isoformat()}
+                for state, key in states.items():
+                    val = dev.states.get(state)
+                    out[key] = float(val) if isinstance(val, (int, float)) else None
+                return out
+    except Exception:
+        return None
+    return None
 
 
 class EnergyToolsHandler(BaseToolHandler):
@@ -136,129 +179,48 @@ class EnergyToolsHandler(BaseToolHandler):
             return self.handle_exception(exc, "energy_log_days")
 
     # ────────────────────────────────────────────────────────────────────────
-    # energy_daily_summary
+    # energy_daily_summary / energy_compare
+    #
+    # Both read SigenEnergyManager's own per-day record, daily_history.json,
+    # written at midnight. Until 2.27.3 they parsed "[Daily]" lines out of the
+    # plugin's log files — lines it has never written — so every total came
+    # back null.
     # ────────────────────────────────────────────────────────────────────────
 
+    def _history(self) -> Optional[Dict[str, Dict[str, Any]]]:
+        path = _daily_history_path()
+        if not path:
+            return None
+        return load_daily_history(path)
+
     def energy_daily_summary(self, days: int = 14) -> Dict[str, Any]:
-        """
-        Parse SigenEnergyManager daily log files and return per-day kWh totals:
-        PV generated, grid imported, grid exported, home consumption.
-        """
+        """Per-day kWh totals for the last N complete days, plus today so far."""
         self.log_incoming_request("energy_daily_summary", {"days": days})
         try:
-            log_dir = _sigen_log_dir()
-            if not log_dir:
+            history = self._history()
+            if history is None:
                 return {"success": False,
-                        "error": "SigenEnergyManager log directory not found"}
-
-            try:
-                days = int(days)
-            except (ValueError, TypeError):
-                days = 14
-            days  = max(1, min(days, 90))
-            today = datetime.now()
-            daily: List[Dict[str, Any]] = []
-            totals = {"pv_kwh": 0.0, "import_kwh": 0.0,
-                      "export_kwh": 0.0, "home_kwh": 0.0}
-
-            for i in range(days):
-                date    = today - timedelta(days=i)
-                logpath = _log_file_for_date(log_dir, date)
-                if not logpath:
-                    continue
-
-                day_data: Dict[str, Any] = {"date": date.strftime("%Y-%m-%d")}
-                max_soc, min_soc = 0.0, 100.0
-                soc_readings     = 0
-
-                try:
-                    with open(logpath, "r", encoding="utf-8", errors="replace") as fh:
-                        for line in fh:
-                            # Daily summary line
-                            parsed = _parse_daily_line(line)
-                            if parsed:
-                                day_data.update(parsed)
-                            # SOC tracking
-                            m = _SOC_RE.search(line)
-                            if m:
-                                soc = float(m.group(1))
-                                max_soc = max(max_soc, soc)
-                                min_soc = min(min_soc, soc)
-                                soc_readings += 1
-                except OSError:
-                    continue
-
-                if soc_readings > 0:
-                    day_data["max_soc_pct"] = round(max_soc, 1)
-                    day_data["min_soc_pct"] = round(min_soc, 1)
-
-                if day_data.get("pv_kwh") is not None or soc_readings > 0:
-                    daily.append(day_data)
-                    # Sum only keys actually present — never fabricate a 0 for a
-                    # missing key (a partial [Daily] line would otherwise skew totals).
-                    for k in ("pv_kwh", "import_kwh", "export_kwh", "home_kwh"):
-                        if day_data.get(k) is not None:
-                            totals[k] = round(totals[k] + day_data[k], 2)
-
-            daily.sort(key=lambda x: x["date"])
-
-            # Self-sufficiency: compute ONLY from days where BOTH home and import
-            # were parsed, so a partial day (PV present, home/import missing) can't
-            # fabricate a 0 and inflate the headline. Clamp to [0, 100] — an odd or
-            # partial day must never surface a negative percentage.
-            ss_days = [d for d in daily
-                       if d.get("home_kwh") is not None and d.get("import_kwh") is not None]
-            ss_home   = sum(d["home_kwh"] for d in ss_days)
-            ss_import = sum(d["import_kwh"] for d in ss_days)
-            self_suff = (
-                round(max(0.0, min(100.0, (1 - ss_import / ss_home) * 100)), 1)
-                if ss_home > 0 else None
-            )
-
-            # Did ANY day actually yield a kWh total? SigenEnergyManager does not
-            # log a per-day PV/import/export/home summary line (only SOC + a
-            # consumption-profile line), so kWh totals are typically absent. Never
-            # present a fabricated all-zero total as if it were real generation —
-            # null the totals and flag it, pointing at the live/historical source.
-            kwh_available = any(
-                d.get(k) is not None
-                for d in daily
-                for k in ("pv_kwh", "import_kwh", "export_kwh", "home_kwh")
-            )
-            if kwh_available:
-                period_totals = {**totals, "self_sufficiency_pct": self_suff}
-            else:
-                period_totals = {k: None for k in totals}
-                period_totals["self_sufficiency_pct"] = None
-
+                        "error": "SigenEnergyManager daily_history.json not found"}
+            days = _clamp(days, 14, 1, 90)
+            today = datetime.now().date()
+            dates = [(today - timedelta(days=i)).isoformat() for i in range(days, 0, -1)]
+            daily = [history[d] for d in dates if d in history]
             result = {
-                "success":         True,
-                "days_requested":  days,
-                "days_found":      len(daily),
-                "kwh_totals_available": kwh_available,
-                "days_used_for_self_sufficiency": len(ss_days),
-                "incomplete_days": len(daily) - len(ss_days),
-                "period_totals":   period_totals,
-                "daily":           daily,
+                "success":        True,
+                "source":         "SigenEnergyManager daily_history.json",
+                "days_requested": days,
+                "days_found":     len(daily),
+                "missing_dates":  [d for d in dates if d not in history],
+                "period_totals":  summarise(daily),
+                "daily":          daily,
             }
-            if not kwh_available:
-                result["note"] = (
-                    "Per-day kWh totals (PV/import/export/home) are not recorded in the "
-                    "SigenEnergyManager logs — only SOC is. Totals are reported as null, not 0. "
-                    "For today's live totals use energy_status or the 'Sigenergy Inverter' device "
-                    "states (pvDailyKwh / gridDailyImportKwh / gridDailyExportKwh / homeDailyKwh); "
-                    "for historical daily totals use analyze_historical_data (InfluxDB)."
-                )
-            self.log_tool_outcome("energy_daily_summary", True,
-                                  f"{len(daily)} days parsed"
-                                  + ("" if kwh_available else " (no kWh totals in logs)"))
+            live = _today_so_far()
+            if live:
+                result["today_so_far"] = live
+            self.log_tool_outcome("energy_daily_summary", True, f"{len(daily)} days")
             return result
         except Exception as exc:
             return self.handle_exception(exc, "energy_daily_summary")
-
-    # ────────────────────────────────────────────────────────────────────────
-    # energy_compare
-    # ────────────────────────────────────────────────────────────────────────
 
     def energy_compare(
         self,
@@ -267,118 +229,55 @@ class EnergyToolsHandler(BaseToolHandler):
         period_b_offset: int = 7,
     ) -> Dict[str, Any]:
         """
-        Compare two rolling periods.
-        period_a = last period_a_days days (most recent)
-        period_b = period_b_days days ending period_b_offset days ago
+        Compare two periods of COMPLETE days.
+        period_a = the last period_a_days days, ending yesterday
+        period_b = period_b_days days, ending period_b_offset days before period_a ends
 
-        Example: compare this week (7d) vs last week (7d starting 7d ago)
-          energy_compare(7, 7, 7)
+        Example: this week against last week — energy_compare(7, 7, 7)
         """
         self.log_incoming_request("energy_compare",
                                   {"period_a_days": period_a_days,
                                    "period_b_days": period_b_days,
                                    "period_b_offset": period_b_offset})
         try:
-            log_dir = _sigen_log_dir()
-            if not log_dir:
+            history = self._history()
+            if history is None:
                 return {"success": False,
-                        "error": "SigenEnergyManager log directory not found"}
+                        "error": "SigenEnergyManager daily_history.json not found"}
+            period_a_days   = _clamp(period_a_days, 7, 1, 90)
+            period_b_days   = _clamp(period_b_days, 7, 1, 90)
+            period_b_offset = _clamp(period_b_offset, 7, 0, 365)
+            yesterday = datetime.now().date() - timedelta(days=1)
 
-            # Coerce defensively — a lax client may send these as strings — AND
-            # clamp: unbounded periods walk one file per day off disk, so a large
-            # value (or the two windows summed) would scan thousands of days.
-            # energy_daily_summary caps at 90 days; match that per window.
-            def _clamp_days(v, default, lo=1, hi=90):
-                try:
-                    return max(lo, min(int(v), hi))
-                except (ValueError, TypeError):
-                    return default
-            period_a_days   = _clamp_days(period_a_days, 7)
-            period_b_days   = _clamp_days(period_b_days, 7)
-            period_b_offset = _clamp_days(period_b_offset, 7, lo=0, hi=365)
+            def _window(end_offset: int, n_days: int) -> Dict[str, Any]:
+                end = yesterday - timedelta(days=end_offset)
+                dates = [(end - timedelta(days=i)).isoformat() for i in range(n_days - 1, -1, -1)]
+                rows = [history[d] for d in dates if d in history]
+                return {"from": dates[0], "to": dates[-1],
+                        "days_found": len(rows), **summarise(rows)}
 
-            today = datetime.now()
+            a = _window(0, period_a_days)
+            b = _window(period_b_offset, period_b_days)
 
-            def _sum_period(start_offset: int, n_days: int) -> Dict[str, Any]:
-                totals = {"pv_kwh": 0.0, "import_kwh": 0.0,
-                          "export_kwh": 0.0, "home_kwh": 0.0}
-                dates  = []
-                ss_home = 0.0
-                ss_import = 0.0
-                complete = 0
-                any_kwh = False   # did any day in this period carry a kWh total?
-                for i in range(start_offset, start_offset + n_days):
-                    date    = today - timedelta(days=i)
-                    logpath = _log_file_for_date(log_dir, date)
-                    if not logpath:
-                        continue
-                    dates.append(date.strftime("%Y-%m-%d"))
-                    # Collect per-day totals so multiple [Daily] lines in one
-                    # file don't double-count — last [Daily] line wins per day,
-                    # matching energy_daily_summary's day_data.update(parsed).
-                    day_data: Dict[str, Any] = {}
-                    try:
-                        with open(logpath, "r", encoding="utf-8",
-                                  errors="replace") as fh:
-                            for line in fh:
-                                parsed = _parse_daily_line(line)
-                                if parsed:
-                                    day_data.update(parsed)
-                    except OSError:
-                        pass
-                    # Sum only keys actually present — don't fabricate 0 for a
-                    # missing key.
-                    for k in totals:
-                        if day_data.get(k) is not None:
-                            totals[k] = round(totals[k] + day_data[k], 2)
-                            any_kwh = True
-                    # Self-sufficiency only from days with BOTH home and import.
-                    if (day_data.get("home_kwh") is not None
-                            and day_data.get("import_kwh") is not None):
-                        ss_home   += day_data["home_kwh"]
-                        ss_import += day_data["import_kwh"]
-                        complete  += 1
-                sself  = (round(max(0.0, min(100.0, (1 - ss_import / ss_home) * 100)), 1)
-                          if ss_home > 0 else None)
-                # If no day yielded a kWh total, report null totals rather than a
-                # misleading all-zero — the logs simply don't carry them.
-                reported = {**totals} if any_kwh else {k: None for k in totals}
-                return {**reported,
-                        "self_sufficiency_pct": sself,
-                        "kwh_totals_available": any_kwh,
-                        "days_found": len(dates),
-                        "complete_days": complete,
-                        "dates": dates}
-
-            a = _sum_period(0, period_a_days)
-            b = _sum_period(period_b_offset, period_b_days)
-
-            def _diff(ka, kb, key):
-                va, vb = ka.get(key, 0) or 0, kb.get(key, 0) or 0
-                delta  = round(va - vb, 2)
-                pct    = round(delta / vb * 100, 1) if vb else None
-                return {"a": va, "b": vb, "delta": delta, "pct_change": pct}
+            def _diff(key):
+                va, vb = a.get(key), b.get(key)
+                if va is None or vb is None:
+                    return {"a": va, "b": vb, "delta": None, "pct_change": None}
+                delta = round(va - vb, 2)
+                return {"a": va, "b": vb, "delta": delta,
+                        "pct_change": round(delta / vb * 100, 1) if vb else None}
 
             result = {
                 "success":    True,
-                "period_a":   {"label": f"last {period_a_days} days", **a},
+                "source":     "SigenEnergyManager daily_history.json",
+                "period_a":   {"label": f"last {period_a_days} complete days", **a},
                 "period_b":   {"label": f"{period_b_days} days ending "
-                                        f"{period_b_offset}d ago",    **b},
-                "comparison": {
-                    k: _diff(a, b, k)
-                    for k in ("pv_kwh", "import_kwh", "export_kwh", "home_kwh")
-                },
+                                        f"{period_b_offset} days before period a", **b},
+                "comparison": {k: _diff(k) for k in
+                               ("pv_kwh", "import_kwh", "export_kwh", "home_kwh",
+                                "self_sufficiency_pct")},
             }
-            if not (a["kwh_totals_available"] or b["kwh_totals_available"]):
-                result["kwh_totals_available"] = False
-                result["note"] = (
-                    "Per-day kWh totals are not recorded in the SigenEnergyManager logs, so this "
-                    "comparison has no generation/consumption data (totals reported as null). Use "
-                    "analyze_historical_data (InfluxDB) for historical kWh comparisons, or "
-                    "energy_status for today's live figures."
-                )
-            self.log_tool_outcome("energy_compare", True,
-                                  "Energy period comparison complete")
+            self.log_tool_outcome("energy_compare", True, "Energy period comparison complete")
             return result
         except Exception as exc:
             return self.handle_exception(exc, "energy_compare")

@@ -2,9 +2,15 @@
 # -*- coding: utf-8 -*-
 # Filename:    indigo_mcp_proxy.py
 # Description: stdio-to-HTTP proxy for Indigo MCP Server plugin (no OAuth)
-# Author:      CliveS & Claude Opus 5
-# Date:        04-08-2026
-# Version:     1.5
+# Author:      CliveS & Claude Opus 5; Claude Opus 5.5 (1.6)
+# Date:        23-09-2026
+# Version:     1.6
+#
+# v1.6 (23-09-2026): tool arguments pass through UNTOUCHED. The proxy used to
+#   convert any string that looked numeric or like JSON, without seeing the
+#   tool's schema, so variable_update(value="21.50") stored "21.5" and a JSON
+#   string value became a Python dict repr — all reporting success. The plugin
+#   (2.27.3+) now converts against each tool's declared schema instead.
 #
 # v1.5 (04-08-2026): survive the boot race. An MCP client can start before
 #   Indigo's web server is listening — most obviously after a Mac reboot, where
@@ -145,49 +151,6 @@ def _drop_connection():
         except Exception:
             pass
         _connection = None
-
-
-def _coerce_args(args: dict) -> dict:
-    """
-    Convert string args that are genuinely structured (JSON arrays/objects) or
-    plain numbers to native types, WITHOUT corrupting ordinary strings.
-
-    Deliberately conservative: 'true'/'false'/'null' and other bare words are
-    left as strings (a variable value of "true" must stay "true"), and a
-    leading-zero / leading-'+' token is left as a string (a code like "0123" is
-    not the number 123). Only [..]/{..} JSON and unambiguous numbers are coerced.
-    """
-    coerced = {}
-    for key, val in args.items():
-        if isinstance(val, str):
-            stripped = val.strip()
-            # Structured args some tools expect (lists/objects).
-            if stripped[:1] in ('[', '{'):
-                try:
-                    coerced[key] = json.loads(stripped)
-                    continue
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            # Plain integer — but never a leading-zero or leading-'+' form.
-            digits = stripped.lstrip("-")
-            if (digits.isdigit()
-                    and stripped[:1] != "+"
-                    and not (len(digits) > 1 and digits[0] == "0")):
-                try:
-                    coerced[key] = int(stripped)
-                    continue
-                except ValueError:
-                    pass
-            # Plain float — only when it actually looks like one ('.'/exponent),
-            # so a leading-zero code or an IP address is never turned numeric.
-            if any(c in stripped for c in (".", "e", "E")):
-                try:
-                    coerced[key] = float(stripped)
-                    continue
-                except ValueError:
-                    pass
-        coerced[key] = val
-    return coerced
 
 
 # JSON-RPC methods safe to auto-retry after a dropped keep-alive connection —
@@ -443,10 +406,6 @@ def post_message(data: dict):
     if method == "initialize" and "params" in data:
         data["params"]["protocolVersion"] = INDIGO_PROTOCOL_VER
         _last_init = json.loads(json.dumps(data))  # deep copy for later replay
-
-    # Coerce tool arguments: strings → native types (int, float, list)
-    if method == "tools/call" and "params" in data:
-        data["params"]["arguments"] = _coerce_args(data["params"].get("arguments", {}))
 
     body = json.dumps(data).encode("utf-8")
 

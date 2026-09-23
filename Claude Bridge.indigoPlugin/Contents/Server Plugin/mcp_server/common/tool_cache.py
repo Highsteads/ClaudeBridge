@@ -36,7 +36,9 @@ CACHEABLE_TOOLS: Set[str] = {
     "list_variable_folders",
     # Get-by-id
     "get_device_by_id", "get_variable_by_id", "get_action_group_by_id",
-    "get_plugin_by_id", "get_plugin_status",
+    # get_plugin_status is deliberately NOT here: it answers "did that restart
+    # work", and a 60 s cached answer to that question is the wrong one (2.27.3).
+    "get_plugin_by_id",
     # Audits / find / health
     "audit_home", "audit_variables", "system_health",
     "find_devices_in_error", "find_low_battery", "find_stale_devices",
@@ -69,7 +71,7 @@ _VARIABLE_TOOLS = {
 _ACTION_TOOLS = {"list_action_groups", "get_action_group_by_id"}
 _SCHEDULE_TOOLS = {"list_schedules"}
 _TRIGGER_TOOLS = {"list_triggers"}
-_PLUGIN_TOOLS = {"list_plugins", "get_plugin_by_id", "get_plugin_status"}
+_PLUGIN_TOOLS = {"list_plugins", "get_plugin_by_id"}
 _SCRIPT_TOOLS = {"list_python_scripts", "list_script_backups", "read_script",
                  "find_orphaned_scripts"}
 _MEMORY_TOOLS = {"recall", "recall_topics"}

@@ -264,3 +264,41 @@ def test_long_traceback_keeps_the_exception_line():
     assert len(res["traceback"]) <= 4000 + len("...[truncated]\n")
     assert res["traceback"].startswith("...[truncated]")
     assert "the-missing-key" in res["traceback"].splitlines()[-1]
+
+
+# ── Shortened output says so (2.27.3) ────────────────────────────────────────
+
+def test_long_stdout_is_flagged_as_truncated():
+    from mcp_server.tools.scripting_shell.scripting_shell_handler import ScriptingShellHandler
+    h = object.__new__(ScriptingShellHandler)
+    h.logger = _LOGGER
+    h.log_tool_outcome = lambda *a, **k: None
+    res = h.execute_indigo_python(code="print('x' * 9000)")
+    assert res["success"] is True
+    assert res["stdout_truncated"] == {"shown": 8000, "total": 9001}
+    assert res["stdout"].endswith("...[truncated]")
+
+
+def test_short_stdout_carries_no_flag():
+    from mcp_server.tools.scripting_shell.scripting_shell_handler import ScriptingShellHandler
+    h = object.__new__(ScriptingShellHandler)
+    h.logger = _LOGGER
+    h.log_tool_outcome = lambda *a, **k: None
+    res = h.execute_indigo_python(code="print('ok')")
+    assert res["stdout"] == "ok\n" and "stdout_truncated" not in res
+
+
+def test_run_script_error_keeps_its_type_and_traceback(tmp_path, monkeypatch):
+    from mcp_server.tools.script_tools import script_tools_handler as sth
+    script = tmp_path / "Broken.py"
+    script.write_text("print('started')\n{}['missing-key']\n", encoding="utf-8")
+    monkeypatch.setattr(sth, "_resolve", lambda name: str(script))
+    h = object.__new__(sth.ScriptToolsHandler)
+    h.logger = _LOGGER
+    h.log_tool_outcome = lambda *a, **k: None
+    h.log_incoming_request = lambda *a, **k: None
+    res = h.run_script("Broken.py")
+    assert res["success"] is False
+    assert res["error"] == "KeyError: 'missing-key'"
+    assert res["traceback"].rstrip().endswith("KeyError: 'missing-key'")
+    assert res["stdout"] == "started\n"

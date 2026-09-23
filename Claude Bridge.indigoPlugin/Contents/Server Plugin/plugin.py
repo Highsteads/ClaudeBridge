@@ -3,9 +3,32 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5; Claude Opus 5.5 (2.27.1-2.27.2)
+# Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5; Claude Opus 5.5 (2.27.1-2.27.3)
 # Date:        23-09-2026
-# Version:     2.27.2
+# Version:     2.27.3
+#
+# v2.27.3 (23-09-2026): the deep review's bug list.
+#   - search_entities returned ONE result whenever the top hit scored >= 0.95,
+#     and any name merely containing the query scores 1.0, so "kitchen" gave
+#     1 of 14 devices. The shortcut now needs a name EQUAL to the query.
+#   - Argument coercion moved from the proxy (blind: "21.50" -> 21.5,
+#     '{"a":1}' -> dict, code="42" -> int) to the server, against each tool's
+#     schema (common/arg_coercion.py). Proxy 1.6 passes arguments untouched.
+#   - device_control refuses a name that matches several devices instead of
+#     switching the first one listed.
+#   - get_plugin_status reports `running` and is no longer TTL-cached; the
+#     bundle-scan cache is 30 s not an hour; restart_plugin says "not found"
+#     for a mistyped id instead of "not enabled".
+#   - energy_daily_summary / energy_compare read daily_history.json; the
+#     "[Daily]" log lines they parsed were never written.
+#   - No billed Anthropic call at plugin start: the key is checked only when
+#     InfluxDB is on, or from the Test Connections button, via models.list.
+#   - device_history with no columns reads the returned rows once instead of
+#     a full-window null scan per column; identifiers quoted.
+#   - query_event_log keeps the first second of a window, caps a null
+#     line_count at 2000, accepts 20.0.
+#   - Shortened stdout/stderr/traceback carry a *_truncated flag; run_script
+#     errors keep their type and a traceback.
 #
 # v2.27.2 (23-09-2026): a failed execute_indigo_python / run_script now keeps
 # its traceback, stdout and stderr, with known credential VALUES replaced by
@@ -1033,18 +1056,28 @@ class Plugin(indigo.PluginBase):
             return default
         return p
 
-    def test_connections(self) -> bool:
+    def test_connections(self, include_anthropic=None) -> bool:
         """
-        Test connections to required and optional services.
+        Test connections to the optional services.
+
+        The Anthropic key is used by ONE thing, the AI step of
+        analyze_historical_data, which needs InfluxDB. So the key is only
+        checked when InfluxDB is enabled, or when the user asks (the Test
+        Connections button passes include_anthropic=True). Until 2.27.3 every
+        plugin start sent a real, billed message to the API to check it.
 
         Returns:
-            True if all required connections are successful, False otherwise
+            True if every connection tested is OK, False otherwise
         """
         all_required_connections_ok = True
+        if include_anthropic is None:
+            include_anthropic = bool(self.enable_influxdb)
 
-        # Test Anthropic API key (required)
+        # Test Anthropic API key
         try:
-            if not self.anthropic_api_key:
+            if not include_anthropic:
+                pass
+            elif not self.anthropic_api_key:
                 self.logger.error("\t❌ Anthropic API key not configured")
                 all_required_connections_ok = False
             else:
@@ -1057,12 +1090,18 @@ class Plugin(indigo.PluginBase):
                     max_retries=0,
                 )
                 try:
-                    resp = test_client.messages.create(
-                        model="claude-haiku-4-5-20251001",
-                        max_tokens=10,
-                        messages=[{"role": "user", "content": "Hi"}]
-                    )
-                    if resp and resp.content:
+                    # Listing models proves the key without spending tokens.
+                    if hasattr(test_client, "models"):
+                        resp = test_client.models.list(limit=1)
+                        ok = resp is not None
+                    else:   # very old SDK: fall back to a tiny message
+                        resp = test_client.messages.create(
+                            model=self.small_model or "claude-haiku-4-5-20251001",
+                            max_tokens=10,
+                            messages=[{"role": "user", "content": "Hi"}]
+                        )
+                        ok = bool(resp and resp.content)
+                    if ok:
                         self.logger.info("\t✅ Anthropic API connected")
                     else:
                         self.logger.error("\t❌ Anthropic API returned invalid response")
@@ -1245,10 +1284,11 @@ class Plugin(indigo.PluginBase):
         # Anthropic API key is already resolved in __init__ via ANTHROPIC_API_KEY
         # (IndigoSecrets.py) -> pluginPrefs. The key is OPTIONAL: every MCP tool
         # works without it (Claude Code brings its own account) — it is used only
-        # for the AI summaries in analyze_historical_data and the startup
-        # self-test, so a missing key is a WARNING, not an error.
-        if not self.anthropic_api_key:
-            self.logger.warning(
+        # for the AI step in analyze_historical_data, which needs InfluxDB. A
+        # missing key only matters when InfluxDB is on, and even then it is an
+        # unconfigured option, so INFO — not a warning at every start (2.27.3).
+        if not self.anthropic_api_key and self.enable_influxdb:
+            self.logger.info(
                 "[Config] No Anthropic API key set — all MCP tools work as normal; "
                 "only the AI summaries in analyze_historical_data are unavailable. "
                 "To enable them, set ANTHROPIC_API_KEY in /Library/Application "
@@ -1256,8 +1296,9 @@ class Plugin(indigo.PluginBase):
                 "'Anthropic API Key' under Plugins -> Claude Bridge -> Configure."
             )
 
-        # Test connections (skips Anthropic test if key is empty)
-        if self.anthropic_api_key and not self.test_connections():
+        # Test connections — only InfluxDB and the key that goes with it are
+        # tested, and only when InfluxDB is enabled.
+        if self.enable_influxdb and not self.test_connections():
             self.logger.error("\tRequired service connections failed - continuing in degraded mode")
 
         # Log CPU architecture information
@@ -2090,8 +2131,9 @@ class Plugin(indigo.PluginBase):
             self.influx_password   = INFLUXDB_PASSWORD or values_dict.get("influx_password", "")
             self.influx_database   = INFLUXDB_DATABASE or values_dict.get("influx_database", "indigo")
 
-            # Test connections
-            connections_ok = self.test_connections()
+            # Test connections — the button checks the key whenever one is set
+            connections_ok = self.test_connections(
+                include_anthropic=bool(self.anthropic_api_key))
 
             if connections_ok:
                 self.logger.info("✅ All required connections tested successfully!")

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from .adapters.data_provider import DataProvider
 from .common.indigo_device_types import IndigoDeviceType, IndigoEntityType, DeviceTypeResolver
+from .common.arg_coercion import coerce_to_schema
 from .common.json_encoder import safe_json_dumps
 from .common.progress import ProgressEmitter, encode_sse_response
 from .common.tool_cache import ToolCache
@@ -960,6 +961,12 @@ class MCPHandler:
                     f"Unknown argument(s) for {tool_name}: {', '.join(sorted(unknown))} "
                     f"— valid arguments: {', '.join(sorted(props))}"
                 )
+
+        # ── Schema-aware argument coercion (v2.27.3) ─────────────────────
+        # Moved here from the proxy, which could not see the schemas and so
+        # turned a string property's "21.50" into 21.5 and '{"a":1}' into a
+        # dict. A property declared as a string now gets exactly what was sent.
+        tool_args = coerce_to_schema(tool_args, props)
 
         # ── Per-call progress emitter (used by long-running tools) ───────
         emitter = ProgressEmitter(request_id=msg_id, tool_name=tool_name)
@@ -3077,9 +3084,10 @@ class MCPHandler:
         }
         self._tools["energy_daily_summary"] = {
             "description": (
-                "Parse SigenEnergyManager daily log files into per-day kWh totals: "
+                "Per-day kWh totals from SigenEnergyManager's own daily record: "
                 "PV generated, grid imported, grid exported, home consumption, "
-                "max/min SOC, and overall self-sufficiency percentage."
+                "max/min SOC, and self-sufficiency over the period. Covers the last "
+                "N complete days; today's running totals come back as today_so_far."
             ),
             "inputSchema": {
                 "type": "object",
@@ -3094,7 +3102,8 @@ class MCPHandler:
         }
         self._tools["energy_compare"] = {
             "description": (
-                "Compare two energy periods. Default: this week vs last week. "
+                "Compare two periods of complete days from SigenEnergyManager's daily "
+                "record. Default: the last 7 days (ending yesterday) against the 7 before. "
                 "Returns kWh deltas and % changes for PV, import, export, "
                 "home consumption, and self-sufficiency."
             ),
@@ -3106,7 +3115,7 @@ class MCPHandler:
                     "period_b_days":     {"type": "number",
                                           "description": "Length of period B in days (default 7)"},
                     "period_b_offset":   {"type": "number",
-                                          "description": "Days ago period B ends (default 7)"},
+                                          "description": "How many days before period A ends period B ends (default 7)"},
                 }
             },
             "function": self._tool_energy_compare
@@ -5300,6 +5309,45 @@ class MCPHandler:
             self.logger.error(f"Run script error: {e}")
             return safe_json_dumps({"error": str(e), "success": False})
 
+    @staticmethod
+    def _resolve_device_for_control(name: str, devices: List[Dict[str, Any]]):
+        """Pick the ONE device a spoken name means, or refuse.
+
+        Acts on a single exact-name match, or else on a single candidate
+        scoring 0.5 or more. Anything else is refused with the candidates.
+        Until 2.27.3 it took the top hit whenever that scored 0.5, and any
+        name merely containing the words scores 1.0 — so with two "Hall
+        Lamp..." devices it could switch whichever the search listed first.
+        Returns (device, None) or (None, refusal dict).
+        """
+        def _cands(items):
+            return [{"id": d.get("id"), "name": d.get("name"),
+                     "score": d.get("relevance_score")} for d in items[:5]]
+
+        wanted = (name or "").strip().lower()
+        exact = [d for d in devices if str(d.get("name", "")).strip().lower() == wanted]
+        if len(exact) == 1:
+            return exact[0], None
+        if len(exact) > 1:
+            return None, {"success": False,
+                          "error": f"{len(exact)} devices are called '{name}'; "
+                                   f"use the device id instead",
+                          "candidates": _cands(exact)}
+        confident = [d for d in devices if (d.get("relevance_score") or 0) >= 0.5]
+        if len(confident) == 1:
+            return confident[0], None
+        if not confident:
+            top = devices[0]
+            return None, {"success": False,
+                          "error": f"No confident match for '{name}' (best: "
+                                   f"'{top.get('name')}' score="
+                                   f"{(top.get('relevance_score') or 0):.2f})",
+                          "suggestions": [d.get("name") for d in devices[:3]]}
+        return None, {"success": False,
+                      "error": f"'{name}' matches {len(confident)} devices; nothing "
+                               f"was switched. Use the full name or the device id.",
+                      "candidates": _cands(confident)}
+
     def _tool_device_control(self, name: str, action: str, brightness: float = None) -> str:
         """Find device by name and control it in one round trip."""
         try:
@@ -5314,15 +5362,10 @@ class MCPHandler:
             if not devices:
                 return safe_json_dumps({"error": f"No device found matching '{name}'", "success": False})
 
-            top     = devices[0]
-            score   = top.get("relevance_score", 0)
-            if score < 0.5:
-                suggestions = [d["name"] for d in devices[:3]]
-                return safe_json_dumps({
-                    "error":       f"No confident match for '{name}' (best: '{top['name']}' score={score:.2f})",
-                    "success":     False,
-                    "suggestions": suggestions
-                })
+            top, refusal = self._resolve_device_for_control(name, devices)
+            if refusal:
+                return safe_json_dumps(refusal)
+            score = top.get("relevance_score", 0)
 
             device_id   = top["id"]
             device_name = top["name"]

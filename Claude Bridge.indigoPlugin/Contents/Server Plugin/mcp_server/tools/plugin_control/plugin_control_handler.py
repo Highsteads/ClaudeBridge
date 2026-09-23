@@ -26,8 +26,10 @@ _OWN_PLUGIN_ID = "com.clives.indigoplugin.claudebridge"
 class PluginControlHandler(BaseToolHandler):
     """Handler for plugin control operations"""
 
-    # Cache duration: 60 minutes
-    CACHE_DURATION = 3600
+    # Bundle scan cache. Was 60 minutes, which left a freshly installed or
+    # bumped plugin reading "not found" or its old version for up to an hour.
+    # The scan is a directory walk plus one Info.plist per bundle.
+    CACHE_DURATION = 30
 
     def __init__(
         self,
@@ -158,6 +160,16 @@ class PluginControlHandler(BaseToolHandler):
                     "success": False,
                     "error": ("Refusing to restart ClaudeBridge from within its own MCP "
                               "session — restart it from the Indigo Plugins menu instead."),
+                }
+
+            # getPlugin() returns a live-looking object for ANY string, so a
+            # mistyped id used to be reported as "not enabled". Check the
+            # installed bundles first, as get_plugin_status does.
+            if not self._is_installed(plugin_id):
+                return {
+                    "success": False,
+                    "error": f"Plugin '{plugin_id}' not found",
+                    "suggestion": "Use list_plugins to see the installed bundle ids.",
                 }
 
             # Get plugin from Indigo API
@@ -445,6 +457,10 @@ class PluginControlHandler(BaseToolHandler):
             status = {
                 "id": plugin_id,
                 "enabled": plugin.isEnabled(),
+                # enabled only says it SHOULD run; a plugin that died in
+                # startup() is still enabled. This is the field that answers
+                # "did the restart work" (2.27.3).
+                "running": self._is_running(plugin),
                 "displayName": getattr(plugin, "pluginDisplayName", "Unknown"),
                 "version": installed.get("version", "Unknown"),
                 "path": installed.get("path", "Unknown"),
@@ -465,6 +481,21 @@ class PluginControlHandler(BaseToolHandler):
             error_msg = f"Failed to get status for plugin '{plugin_id}': {e}"
             self.logger.error(error_msg, exc_info=True)
             return {"success": False, "error": error_msg}
+
+    @staticmethod
+    def _is_running(plugin) -> Any:
+        """plugin.isRunning(), or None when this Indigo cannot say."""
+        try:
+            return bool(plugin.isRunning())
+        except Exception:
+            return None
+
+    def _is_installed(self, plugin_id: str) -> bool:
+        try:
+            return any(p["id"] == plugin_id
+                       for p in self._get_cached_plugins(include_disabled=True))
+        except Exception:
+            return True   # cannot tell: let Indigo's own call decide
 
     # Private methods for caching
 
