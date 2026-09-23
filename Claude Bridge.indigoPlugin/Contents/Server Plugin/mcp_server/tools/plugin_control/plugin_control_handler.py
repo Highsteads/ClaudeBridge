@@ -13,7 +13,10 @@ try:
 except ImportError:
     indigo = None
 
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common import plugin_actions
 from ..base_handler import BaseToolHandler
 from .plugin_scanner import PluginScanner
@@ -33,7 +36,7 @@ class PluginControlHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None
     ):
         """
@@ -73,68 +76,6 @@ class PluginControlHandler(BaseToolHandler):
             error_msg = f"Failed to list plugins: {e}"
             self.logger.error(error_msg, exc_info=True)
             return {"success": False, "error": error_msg, "plugins": []}
-
-    def get_plugin_by_id(self, plugin_id: str) -> Dict[str, Any]:
-        """
-        Get specific plugin information by ID.
-
-        Args:
-            plugin_id: Plugin bundle identifier (e.g., "com.clives.indigoplugin.mcpserver")
-
-        Returns:
-            Dictionary with plugin information
-        """
-        try:
-            if not indigo:
-                return {
-                    "success": False,
-                    "error": "Indigo module not available",
-                }
-
-            # Get plugin from Indigo API. NB getPlugin() returns a PluginInfo object
-            # even for an id that doesn't exist (its isEnabled() just returns False),
-            # so it never raises — we must confirm the plugin is real ourselves,
-            # otherwise a bogus id returns success:true / enabled:false.
-            plugin = indigo.server.getPlugin(plugin_id)
-
-            match = None
-            try:
-                for p in self._get_cached_plugins(include_disabled=True):
-                    if p["id"] == plugin_id:
-                        match = p
-                        break
-            except Exception:
-                match = None
-
-            if match is None:
-                return {
-                    "success": False,
-                    "error": f"Plugin '{plugin_id}' not found",
-                    "suggestion": "Use list_plugins to see available plugins",
-                }
-
-            plugin_info = {
-                "id": plugin_id,
-                "enabled": plugin.isEnabled(),
-                "displayName": getattr(plugin, "pluginDisplayName", match.get("name", "Unknown")),
-                "version": match.get("version", "Unknown"),
-                "path": match.get("path", "Unknown"),
-            }
-            return {"success": True, "plugin": plugin_info}
-
-        except AttributeError as e:
-            # Plugin not found or invalid plugin object
-            error_msg = f"Plugin '{plugin_id}' not found: {e}"
-            self.logger.error(error_msg)
-            return {
-                "success": False,
-                "error": error_msg,
-                "suggestion": "Use list_plugins to see available plugins",
-            }
-        except Exception as e:
-            error_msg = f"Failed to get plugin '{plugin_id}': {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return {"success": False, "error": error_msg}
 
     def restart_plugin(self, plugin_id: str) -> Dict[str, Any]:
         """
@@ -432,7 +373,7 @@ class PluginControlHandler(BaseToolHandler):
             # back a live-looking PluginInfo for any string, so a typo'd or
             # uninstalled bundle id used to return success with enabled=False and
             # displayName "Unknown" — indistinguishable from a plugin that really
-            # is installed and disabled. Same check get_plugin_by_id gained in
+            # is installed and disabled. Same check the old get_plugin_by_id gained in
             # v2.10.1; this sibling was missed.
             installed = None
             try:

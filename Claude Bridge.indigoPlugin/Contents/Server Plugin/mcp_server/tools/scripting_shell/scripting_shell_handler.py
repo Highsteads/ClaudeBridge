@@ -46,13 +46,10 @@ except ImportError:
 
 from ...common.output_clip import clip_into
 from ..base_handler import BaseToolHandler
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
 
-# Best-effort wall-clock limit for a single execute_indigo_python call. A runaway
-# script past this frees the IWS thread with a timeout error (the worker thread is
-# orphaned — Python can't kill a thread — but the server keeps serving). Generous
-# so normal sub-second usage is never affected.
-_EXEC_TIMEOUT_SECONDS = 60
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 
 # Ceiling for execute_plugin_menu_item's caller-supplied timeout. Dispatch is
 # single-threaded, so this subprocess.run blocks EVERY other tool call and every
@@ -141,7 +138,7 @@ class ScriptingShellHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None,
     ):
         super().__init__(tool_name="scripting_shell", logger=logger)
@@ -153,60 +150,46 @@ class ScriptingShellHandler(BaseToolHandler):
 
     def execute_indigo_python(
         self,
-        code: str,
+        code: Optional[str] = None,
         mode: str = "exec",
+        wait_seconds: Any = None,
+        job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Run Python code in the plugin's Indigo Python context.
+        Run Python code in the plugin's Indigo Python context, as a job.
 
         mode='exec' (default): run as a statement block. Use print() to surface
             output. Result includes captured stdout/stderr.
         mode='eval': evaluate a single expression and include its repr in
             'value'. Raises if code is multi-line or contains statements.
+
+        The run waits up to wait_seconds; one still going after that returns a
+        job_id to collect it with (see common/exec_lock.py).
         """
+        from ...common import exec_lock
+
         self.log_incoming_request(
             "execute_indigo_python",
-            {"code_len": len(code or ""), "mode": mode},
+            {"code_len": len(code or ""), "mode": mode, "job_id": job_id},
         )
+        if job_id:
+            if code:
+                return {"success": False,
+                        "error": "give either code (a new run) or job_id (collect one), not both"}
+            return exec_lock.collect("execute_indigo_python", job_id, wait_seconds)
         if not code or not code.strip():
             return {"success": False, "error": "code is required"}
         if mode not in ("exec", "eval"):
             return {"success": False,
                     "error": f"mode must be 'exec' or 'eval', got {mode!r}"}
 
-        import threading
-        from ...common import exec_lock
-
-        # Take the stdout-swap lock BEFORE spawning. If a previous run was
-        # abandoned mid-flight it still holds the lock, and waiting the full
-        # 60s budget for it would freeze the whole plugin (dispatch is
-        # single-threaded) only to return a misleading "your script timed out".
-        # Fail fast and say what is actually wrong instead.
-        if not exec_lock.acquire_for_exec():
-            self.log_tool_outcome("execute_indigo_python", False,
-                                  "refused — previous exec still holds the stdout lock")
-            return exec_lock.busy_error("execute_indigo_python")
-
-        captured_out = io.StringIO()
-        captured_err = io.StringIO()
-
-        ns: Dict[str, Any] = {
-            "__name__": "__mcp_exec__",
-            "indigo":   indigo,
-        }
-
-        res: Dict[str, Any] = {"error_msg": None, "tb_text": None, "value_repr": None}
-
-        # Run the exec in a worker thread and join with a timeout so a runaway
-        # script (e.g. an infinite loop) does NOT wedge the request thread
-        # forever — the handler returns a timeout error and frees the thread. The
-        # fast path (normal sub-second code) is unaffected.
-        #
-        # The worker does NOT touch the lock — the caller already owns it (see
-        # common/exec_lock.py). Its finally restores the streams only if they are
-        # still the ones it installed, so a worker that finishes long after being
-        # abandoned cannot point stdout at its own dead buffer.
-        def _worker():
+        def _work() -> Dict[str, Any]:
+            captured_out = io.StringIO()
+            captured_err = io.StringIO()
+            ns: Dict[str, Any] = {"__name__": "__mcp_exec__", "indigo": indigo}
+            error_msg = tb_text = value_repr = None
+            # Restore each stream only if it is still the one installed here, so
+            # a worker that finishes late cannot point stdout at its dead buffer.
             old_stdout, old_stderr = sys.stdout, sys.stderr
             sys.stdout, sys.stderr = captured_out, captured_err
             try:
@@ -214,75 +197,43 @@ class ScriptingShellHandler(BaseToolHandler):
                     if mode == "eval":
                         value = eval(compile(code, "<mcp_exec>", "eval"), ns)  # noqa: S307
                         try:
-                            res["value_repr"] = repr(value)
+                            value_repr = repr(value)
                         except Exception as repr_exc:
-                            res["value_repr"] = f"<repr failed: {repr_exc}>"
+                            value_repr = f"<repr failed: {repr_exc}>"
                     else:
                         exec(compile(code, "<mcp_exec>", "exec"), ns)  # noqa: S102
                 except SystemExit:
                     pass  # treat sys.exit() as normal completion
                 except Exception as exc:
-                    res["error_msg"] = f"{type(exc).__name__}: {exc}"
-                    res["tb_text"]   = traceback.format_exc()
+                    error_msg = f"{type(exc).__name__}: {exc}"
+                    tb_text = traceback.format_exc()
             finally:
                 if sys.stdout is captured_out:
                     sys.stdout = old_stdout
                 if sys.stderr is captured_err:
                     sys.stderr = old_stderr
 
-        _t = threading.Thread(target=_worker, daemon=True, name="mcp-exec")
-        try:
-            _t.start()
-        except Exception as exc:
-            # Never leak the lock on a failure to spawn — nothing is running, so
-            # the next call must not be told the exec path is wedged.
-            exec_lock.release_after_exec()
-            return self.handle_exception(exc, "execute_indigo_python")
-        _t.join(timeout=_EXEC_TIMEOUT_SECONDS)
-        if _t.is_alive():
-            # Deliberately do NOT release the lock: the worker is still writing
-            # to captured_out, and a later run must not swap stdout underneath
-            # it. Record the wedge so every later call fails fast with a message
-            # that names THIS run rather than blaming the next caller's script.
-            exec_lock.mark_wedged("execute_indigo_python",
-                                  f"exceeded {_EXEC_TIMEOUT_SECONDS}s",
-                                  thread=_t)
+            result: Dict[str, Any] = {"success": error_msg is None, "mode": mode}
+            clip_into(result, "stdout", captured_out.getvalue(), 8000)
+            clip_into(result, "stderr", captured_err.getvalue(), 4000)
+            if mode == "eval" and value_repr is not None:
+                clip_into(result, "value", value_repr, 4000)
+            if error_msg:
+                result["error"] = error_msg
+                # Keep the TAIL: the exception itself is the last line, and a deep
+                # traceback cut from the front used to lose exactly that line.
+                clip_into(result, "traceback", tb_text, 4000, keep="tail")
+            self.log_tool_outcome(
+                "execute_indigo_python", result["success"],
+                f"mode={mode}" + (f" — ERROR: {error_msg}" if error_msg else ""))
+            return result
+
+        job, busy = exec_lock.start("execute_indigo_python", f"mode={mode}", _work)
+        if busy:
             self.log_tool_outcome("execute_indigo_python", False,
-                                  f"timed out after {_EXEC_TIMEOUT_SECONDS}s")
-            return {
-                "success": False, "mode": mode, "timed_out": True,
-                "error": (f"Execution exceeded the {_EXEC_TIMEOUT_SECONDS}s limit and was left "
-                          "running in the background so the request thread could be freed. "
-                          "Until it finishes, further execute_indigo_python / run_script calls "
-                          "are refused immediately rather than queued. A genuinely infinite "
-                          "script needs a plugin reload from the Indigo Plugins menu."),
-                "stdout": captured_out.getvalue()[:8000],
-            }
-        exec_lock.release_after_exec()
-
-        error_msg  = res["error_msg"]
-        tb_text    = res["tb_text"]
-        value_repr = res["value_repr"]
-        out = captured_out.getvalue()
-        err = captured_err.getvalue()
-
-        result: Dict[str, Any] = {"success": error_msg is None, "mode": mode}
-        clip_into(result, "stdout", out, 8000)
-        clip_into(result, "stderr", err, 4000)
-        if mode == "eval" and value_repr is not None:
-            clip_into(result, "value", value_repr, 4000)
-        if error_msg:
-            result["error"] = error_msg
-            # Keep the TAIL: the exception itself is the last line, and a deep
-            # traceback cut from the front used to lose exactly that line.
-            clip_into(result, "traceback", tb_text, 4000, keep="tail")
-
-        self.log_tool_outcome(
-            "execute_indigo_python",
-            result["success"],
-            f"mode={mode}" + (f" — ERROR: {error_msg}" if error_msg else ""),
-        )
-        return result
+                                  f"refused — job {busy['running_job_id']} holds the capture")
+            return busy
+        return exec_lock.wait(job, wait_seconds)
 
     # ────────────────────────────────────────────────────────────────────────
     # execute_plugin_menu_item

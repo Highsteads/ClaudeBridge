@@ -8,9 +8,9 @@
 # Date:        23-09-2026
 # Version:     1.0
 
-from mcp_server.mcp_handler import MCPHandler
+from mcp_server.toolsets.devices import resolve_device_for_control
 
-resolve = MCPHandler._resolve_device_for_control
+resolve = resolve_device_for_control
 
 
 def _d(i, name, score):

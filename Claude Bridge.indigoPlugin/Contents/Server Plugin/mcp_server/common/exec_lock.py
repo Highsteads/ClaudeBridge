@@ -1,192 +1,273 @@
-"""Serialisation for the tools that reassign the PROCESS-GLOBAL sys.stdout/stderr.
+#! /usr/bin/env python
+# -*- coding: utf-8 -*-
+# Filename:    exec_lock.py
+# Description: Background jobs for the two tools that swap the PROCESS-GLOBAL
+#              sys.stdout/stderr (execute_indigo_python and run_script): one
+#              run at a time, and a long run no longer holds the request thread.
+# Author:      CliveS & Claude Opus 5.5
+# Date:        23-09-2026 (3.0 rewrite; the lock itself dates from 25-07-2026)
+# Version:     2.0
 
-execute_indigo_python (scripting_shell) and run_script (script_tools) capture
-output by swapping sys.stdout/sys.stderr for a StringIO. That swap is global to
-the whole plugin process, so two overlapping runs would interleave and one
-run's restore would point stdout at the other's dead StringIO.
+"""
+Why these two tools are serialised
+----------------------------------
+Both capture output by swapping sys.stdout / sys.stderr for a StringIO. That
+swap is global to the whole plugin process, so two overlapping runs would
+interleave, and one run's restore would point stdout at the other's dead
+buffer. So exactly one run may hold the capture at a time — the "slot" below.
 
-WHY THE LOCK IS STILL NEEDED, GIVEN DISPATCH IS SINGLE-THREADED
----------------------------------------------------------------
-Indigo dispatches every plugin callback AND every IWS endpoint handler on the
-plugin's MainThread — measured live with threading.enumerate(). So two tool
-calls never overlap, and the original justification for this lock ("the MCP
-handler dispatches tools/call concurrently on IWS threads") was simply wrong.
+Why they run as jobs (3.0)
+--------------------------
+Indigo dispatches every IWS request and every plugin callback on the plugin's
+one MainThread, and the web server shares it. Measured 23-09-2026: while a
+10-second execute_indigo_python ran, a static /public request stalled 9.9 s —
+a long exec froze every dashboard. 85 of 1,576 calls in ten weeks ran longer
+than 10 s.
 
-The lock earns its place for a different reason: both tools run the user's code
-in a WORKER thread and join with a timeout, so a runaway script leaves a second
-thread alive after the handler has returned. That abandoned worker is a genuine
-concurrent writer to sys.stdout.
+So the code runs in a worker thread and the caller waits at most wait_seconds
+(default 8, clamped to 0-55). A run that finishes in time is returned exactly
+as before. One that does not is left running in the background and the caller
+gets {"status": "running", "job_id": ...} at once, which frees the request
+thread. Calling the tool again with that job_id waits a little longer and then
+hands back the finished result (and forgets the job) or the running status.
 
-WHAT WENT WRONG BEFORE
-----------------------
-The worker acquired the lock itself and released it in a finally. When the join
-expired the worker kept running, so the lock was never released and stdout
-stayed pointed at an abandoned StringIO. Every later exec call then blocked on
-acquire() for its full 60s/120s budget and returned a timeout error about a
-script that had never run — one runaway script turned every subsequent call into
-a full-plugin freeze with a misleading message.
-
-THE SHAPE THAT FIXES IT
------------------------
-  * The CALLER acquires, with a short timeout, BEFORE spawning the worker. If it
-    can't get the lock, it returns immediately and honestly instead of freezing.
-  * The worker never acquires. Its finally restores the streams only if they are
-    still the ones it installed, so a late-finishing abandoned worker cannot
-    clobber a healthy stdout.
-  * The caller releases only when the worker actually finished. On timeout the
-    lock is left held and the wedge is RECORDED, with the abandoned thread.
-
-WHY THE WEDGE RECORD — NOT THE LOCK — IS WHAT REFUSES THE NEXT CALL
-------------------------------------------------------------------
-A reentrant lock is used so a nested exec on the same thread can't self-deadlock.
-But that reentrancy also means a held lock CANNOT refuse the next caller: every
-tool call arrives on the same MainThread that wedged it, and an RLock re-acquired
-by its owning thread succeeds instantly whatever the timeout. Relying on acquire()
-to block was therefore a no-op — the refusal never fired, a second run swapped
-stdout underneath the still-live worker, and the plugin's real stdout could be
-lost until a reload.
-
-So acquire_for_exec() consults the WEDGE RECORD first:
-  * wedged and the recorded worker still alive  -> refuse (busy_error).
-  * wedged but the worker has since finished    -> its guarded finally has already
-    restored the streams (or safely declined to), so the wedge is stale: drop the
-    orphaned recursion level, clear the record, and carry on.
-This is also why the recursion level must be released explicitly — otherwise each
-wedge-and-recover cycle would leave the count one higher for ever.
+The rules
+---------
+* The slot is held from start until the worker FINISHES. A second run while it
+  is held is refused at once, naming the running job and how long it has run —
+  never queued, never blocking.
+* The slot is released by the worker itself, as its last act. Nothing waits on
+  a lock, so the old failure — every later call blocking its whole budget on a
+  lock an abandoned worker would never release — cannot happen.
+* A finished result is kept RESULT_TTL_SECONDS (10 minutes) for collection and
+  then dropped. It does not hold the slot: the capture was restored when the
+  worker finished, so a new run is safe as soon as the old one ends.
+* A worker still running after HARD_CEILING_SECONDS (30 minutes) is reported as
+  wedged. Python cannot kill a thread, so it keeps the slot (its buffer is still
+  live) and the advice is a plugin reload from the Indigo Plugins menu.
+* The worker restores each stream only if it is still the one it installed
+  (see the handlers), so a late finisher cannot clobber a healthy stdout.
 """
 
+import secrets
 import threading
 import time
+from typing import Any, Callable, Dict, Optional, Tuple
 
-STDOUT_SWAP_LOCK = threading.RLock()
+DEFAULT_WAIT_SECONDS = 8
+MAX_WAIT_SECONDS = 55
+RESULT_TTL_SECONDS = 600
+HARD_CEILING_SECONDS = 1800
 
-# How long a caller waits for a previous exec to finish before giving up. Short
-# on purpose: the whole point is to fail fast rather than freeze the plugin.
-LOCK_WAIT_SECONDS = 2.0
+RELOAD_ADVICE = ("Python cannot kill a running thread, so clearing this needs a plugin "
+                 "reload from the Indigo Plugins menu (do NOT restart Claude Bridge from "
+                 "an MCP tool).")
 
-# Set when a worker is abandoned mid-run and the lock is left held. Read by the
-# health endpoint and by the error message every later exec call returns.
-_wedge_lock = threading.Lock()
-_wedged = None
-
-
-def acquire_for_exec(timeout: float = LOCK_WAIT_SECONDS) -> bool:
-    """Try to take the stdout-swap lock. False means a previous exec still holds it.
-
-    The wedge record is checked BEFORE the lock, because the lock alone cannot
-    refuse anything: dispatch is single-threaded, so the next caller is the same
-    thread that wedged it and a reentrant acquire always succeeds. See the module
-    docstring.
-    """
-    with _wedge_lock:
-        if _wedged is not None:
-            worker = _wedged.get("thread")
-            if worker is None or worker.is_alive():
-                # Still running — refuse. A record with NO thread is refused too:
-                # liveness cannot be tested, and guessing "it has probably
-                # finished" risks the stdout corruption this whole module exists
-                # to prevent. Both real call sites record the thread, so this
-                # arm only covers a hand-made record; clear_wedge() releases it.
-                return False
-            # The worker has since finished, so its guarded finally has already
-            # restored the streams (or safely declined to). The record is stale.
-            _release_orphaned_level()
-            _clear_wedge_locked()
-    return STDOUT_SWAP_LOCK.acquire(timeout=timeout)
+_now = time.monotonic   # indirection so tests can move the clock
 
 
-def _release_orphaned_level() -> None:
-    """Drop the recursion level left behind by a wedged-then-finished worker.
+class Job:
+    """One background run of execute_indigo_python or run_script."""
 
-    Only ever called with a stale wedge record, i.e. the caller that abandoned the
-    worker never released. Without this the count creeps up by one per wedge and
-    the lock is held for the rest of the plugin's life.
-    """
+    def __init__(self, tool: str, label: str):
+        self.job_id = secrets.token_hex(4)
+        self.tool = tool
+        self.label = label
+        self.started = _now()
+        self.started_local = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.thread: Optional[threading.Thread] = None
+        self.done = threading.Event()
+        self.result: Optional[Dict[str, Any]] = None
+        self.finished_at: Optional[float] = None
+
+    def elapsed(self) -> float:
+        end = self.finished_at if self.finished_at is not None else _now()
+        return round(end - self.started, 1)
+
+    def describe(self) -> str:
+        return f"{self.tool}" + (f" {self.label}" if self.label else "")
+
+
+_lock = threading.Lock()
+_running: Optional[Job] = None
+_finished: Dict[str, Job] = {}
+
+
+def clamp_wait(value: Any, default: float = DEFAULT_WAIT_SECONDS) -> float:
+    """wait_seconds as a number in 0..MAX_WAIT_SECONDS; junk means the default."""
+    if value is None or isinstance(value, bool):
+        return float(default)
     try:
-        STDOUT_SWAP_LOCK.release()
-    except RuntimeError:
-        # Not held by this thread (or not held at all) — nothing orphaned.
-        pass
+        return max(0.0, min(float(value), float(MAX_WAIT_SECONDS)))
+    except (TypeError, ValueError):
+        return float(default)
 
 
-def release_after_exec() -> None:
-    """Release the lock after a worker completed normally."""
-    try:
-        STDOUT_SWAP_LOCK.release()
-    except RuntimeError:
-        # Not held by this thread — nothing to release; never mask the real error.
-        pass
+def _sweep_locked() -> None:
+    """Drop finished results nobody collected within RESULT_TTL_SECONDS."""
+    now = _now()
+    for job_id, job in list(_finished.items()):
+        if job.finished_at is not None and now - job.finished_at > RESULT_TTL_SECONDS:
+            del _finished[job_id]
 
 
-def mark_wedged(tool: str, detail: str = "", thread=None) -> None:
-    """Record that a worker was abandoned and the lock is deliberately held.
+def _is_wedged(job: Job) -> bool:
+    return not job.done.is_set() and (_now() - job.started) > HARD_CEILING_SECONDS
 
-    ``thread`` is the abandoned worker. It is what later calls test to tell a run
-    that is still going from one that has since finished — without it the wedge
-    would look permanent and every later exec would be refused for ever.
+
+def _busy_locked(tool: str) -> Dict[str, Any]:
+    job = _running
+    elapsed = job.elapsed()
+    reply: Dict[str, Any] = {
+        "success": False,
+        "busy": True,
+        "running_job_id": job.job_id,
+        "elapsed_seconds": elapsed,
+    }
+    if _is_wedged(job):
+        reply["wedged"] = True
+        reply["wedged_since"] = job.started_local
+        reply["error"] = (
+            f"{tool} did NOT run — your code was not executed. Job {job.job_id} "
+            f"({job.describe()}) started at {job.started_local} and is still running after "
+            f"{int(elapsed)}s, so it is treated as wedged and keeps the output capture. "
+            + RELOAD_ADVICE)
+    else:
+        reply["error"] = (
+            f"{tool} did NOT run — your code was not executed. Job {job.job_id} "
+            f"({job.describe()}) has been running for {int(elapsed)}s and holds the output "
+            f"capture, which only one run can use at a time. Collect it with "
+            f"{job.tool}(job_id='{job.job_id}'), then try again.")
+    return reply
+
+
+def busy_error(tool: str) -> Optional[Dict[str, Any]]:
+    """The refusal a new run gets while another holds the slot, else None."""
+    with _lock:
+        return _busy_locked(tool) if _running is not None else None
+
+
+def start(tool: str, label: str,
+          work: Callable[[], Dict[str, Any]]) -> Tuple[Optional[Job], Optional[Dict[str, Any]]]:
+    """Claim the slot and run work() in a worker thread.
+
+    Returns (job, None), or (None, refusal) when another run holds the slot.
+    work() returns the tool's finished result dict; an exception it raises is
+    turned into a failure result rather than lost with the thread.
     """
-    global _wedged
-    with _wedge_lock:
-        _wedged = {
-            "tool":         tool,
-            "detail":       detail,
-            "since_epoch":  time.time(),
-            "since_local":  time.strftime("%Y-%m-%d %H:%M:%S"),
-            "thread":       thread,
+    global _running
+    with _lock:
+        _sweep_locked()
+        if _running is not None:
+            return None, _busy_locked(tool)
+        job = Job(tool, label)
+        _running = job
+
+    def _run():
+        global _running
+        try:
+            result = work()
+        except BaseException as exc:          # noqa: BLE001 — a thread must not die silently
+            result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+        with _lock:
+            job.result = result
+            job.finished_at = _now()
+            if _running is job:
+                _running = None
+            _finished[job.job_id] = job
+        job.done.set()
+
+    job.thread = threading.Thread(target=_run, daemon=True, name=f"mcp-{tool}-{job.job_id}")
+    try:
+        job.thread.start()
+    except Exception:
+        with _lock:
+            if _running is job:
+                _running = None
+        raise
+    return job, None
+
+
+def _report(job: Job) -> Dict[str, Any]:
+    """The finished result (forgetting the job), or where it has got to."""
+    with _lock:
+        if job.done.is_set():
+            _finished.pop(job.job_id, None)
+            return job.result
+        elapsed = job.elapsed()
+        if _is_wedged(job):
+            return {
+                "success": False,
+                "timed_out": True,
+                "wedged": True,
+                "job_id": job.job_id,
+                "elapsed_seconds": elapsed,
+                "wedged_since": job.started_local,
+                "error": (f"Job {job.job_id} ({job.describe()}) has run for {int(elapsed)}s, "
+                          f"past the {HARD_CEILING_SECONDS // 60}-minute ceiling, and is "
+                          f"treated as wedged. It still holds the output capture, so further "
+                          f"execute_indigo_python / run_script calls are refused. "
+                          + RELOAD_ADVICE),
+            }
+        return {
+            "status": "running",
+            "job_id": job.job_id,
+            "elapsed_seconds": elapsed,
+            "note": (f"call {job.tool} again with job_id='{job.job_id}' to collect; the "
+                     f"result is kept for {RESULT_TTL_SECONDS // 60} minutes after it finishes"),
         }
 
 
-def wedged_info():
-    """Return the wedge record, or None if the exec path is healthy.
+def wait(job: Job, wait_seconds: Any = DEFAULT_WAIT_SECONDS) -> Dict[str, Any]:
+    """Wait up to wait_seconds for the job, then report it."""
+    job.done.wait(clamp_wait(wait_seconds))
+    return _report(job)
 
-    The Thread object is stripped (it does not serialise for /health) and replaced
-    with ``worker_alive``, which is the part a reader actually wants: a wedge whose
-    worker has finished no longer blocks anything.
-    """
-    with _wedge_lock:
-        if not _wedged:
+
+def collect(tool: str, job_id: str, wait_seconds: Any = DEFAULT_WAIT_SECONDS) -> Dict[str, Any]:
+    """Wait on a job started earlier and hand back its result or status."""
+    with _lock:
+        _sweep_locked()
+        job = _running if (_running is not None and _running.job_id == job_id) \
+            else _finished.get(job_id)
+    if job is None:
+        return {"success": False,
+                "error": (f"No job '{job_id}' — it is unknown, was already collected, or its "
+                          f"result expired (results are kept for "
+                          f"{RESULT_TTL_SECONDS // 60} minutes after the run finishes).")}
+    if job.tool != tool:
+        return {"success": False,
+                "error": (f"Job '{job_id}' was started by {job.tool}; collect it with "
+                          f"{job.tool}(job_id='{job_id}').")}
+    return wait(job, wait_seconds)
+
+
+def wedged_info() -> Optional[Dict[str, Any]]:
+    """Details of a run past the hard ceiling, or None. Read by /health."""
+    with _lock:
+        job = _running
+        if job is None or not _is_wedged(job):
             return None
-        info = {k: v for k, v in _wedged.items() if k != "thread"}
-        worker = _wedged.get("thread")
-        info["worker_alive"] = bool(worker is not None and worker.is_alive())
-        return info
+        return {"tool": job.tool, "job_id": job.job_id, "detail": job.label,
+                "since_local": job.started_local, "elapsed_seconds": job.elapsed(),
+                "worker_alive": bool(job.thread and job.thread.is_alive())}
 
 
-def clear_wedge() -> None:
-    """Forget a recorded wedge. Nothing in the plugin calls this; the tests use
-    it to reset between cases."""
-    with _wedge_lock:
-        _clear_wedge_locked()
+def status() -> Dict[str, Any]:
+    """The whole picture for /health: what is running and what awaits collection."""
+    with _lock:
+        _sweep_locked()
+        running = None
+        if _running is not None:
+            running = {"job_id": _running.job_id, "tool": _running.tool,
+                       "detail": _running.label, "elapsed_seconds": _running.elapsed(),
+                       "wedged": _is_wedged(_running)}
+        return {"running": running, "uncollected": sorted(_finished)}
 
 
-def _clear_wedge_locked() -> None:
-    """Clear the record. Caller must already hold _wedge_lock."""
-    global _wedged
-    _wedged = None
-
-
-def busy_error(tool: str) -> dict:
-    """The standard result for 'a previous exec is still running'.
-
-    Names the stuck run and its start time so the message can't be mistaken for
-    'YOUR script was too slow', which is what the old code wrongly reported.
-    """
-    info = wedged_info()
-    if info:
-        detail = (f"A previous {info['tool']} call was abandoned at "
-                  f"{info['since_local']} and is still running")
-        if info.get("detail"):
-            detail += f" ({info['detail']})"
-    else:
-        detail = "Another script is running right now"
-    return {
-        "success": False,
-        "busy":    True,
-        "error": (
-            f"{detail}. {tool} did NOT run — your code was not executed. Python "
-            f"cannot kill a running thread, so clearing this needs a plugin reload "
-            f"from the Indigo Plugins menu (do NOT restart Claude Bridge from an "
-            f"MCP tool)."
-        ),
-        "wedged_since": (info or {}).get("since_local"),
-    }
+def reset_for_tests() -> None:
+    """Forget every job. Only for tests, and only once their workers have ended."""
+    global _running
+    with _lock:
+        _running = None
+        _finished.clear()

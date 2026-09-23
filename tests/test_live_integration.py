@@ -27,7 +27,6 @@
 
 import filecmp
 import glob
-import importlib.util
 import json
 import os
 import plistlib
@@ -91,14 +90,9 @@ def _post_mcp(payload, session_id=None):
 
 
 def _registry_count():
-    """Tool count parsed from the same bundle the suite is testing."""
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    spec = importlib.util.spec_from_file_location(
-        "gtd_live", os.path.join(repo_root, "scripts", "generate_tool_doc.py"))
-    gtd = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gtd)
-    handler = os.path.join(SERVER_PLUGIN, "mcp_server", "mcp_handler.py")
-    return len(gtd.parse_tools(gtd._read(handler)))
+    """Tool count from the registry of the same bundle the suite is testing."""
+    from mcp_server import registry
+    return len(registry.load())
 
 
 def _installed_server_plugin():

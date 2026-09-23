@@ -2,17 +2,17 @@
 TTL cache for read-only MCP tool results.
 
 When Claude is iterating on a problem it often calls the same read tool many
-times in quick succession (``list_devices``, ``get_devices_by_type``,
+times in quick succession (``list_devices``, ``audit``,
 ``home_status``, etc.). Caching those results for a short TTL — keyed by
 (tool_name, arguments) — saves Indigo round-trips without making the data
 meaningfully stale.
 
 The cache is conservative by design:
-  - Only tools in the explicit ``CACHEABLE_TOOLS`` allow-list are cached.
+  - Only tools declared cacheable=True in the registry are cached.
   - Default TTL is 60 seconds (configurable, max 300).
   - Clients can opt out per request via ``Cache-Control: no-cache``.
-  - Mutating tools (anything in the WRITE/ADMIN scope sets) invalidate
-    related cache buckets — see :meth:`invalidate_for_tool`.
+  - Mutating tools invalidate the buckets they declare — see
+    :meth:`invalidate_for_tool`.
 """
 
 from __future__ import annotations
@@ -21,188 +21,53 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 
-# ─── Cacheable tools allow-list ──────────────────────────────────────────────
-
-CACHEABLE_TOOLS: Set[str] = {
-    # Search / list
-    "search_entities",
-    "get_devices_by_type", "get_devices_by_state",
-    "list_devices", "list_variables", "list_action_groups",
-    "list_schedules", "list_triggers", "list_plugins",
-    "list_python_scripts", "list_script_backups",
-    "list_variable_folders",
-    # Get-by-id
-    "get_device_by_id", "get_variable_by_id", "get_action_group_by_id",
-    # get_plugin_status is deliberately NOT here: it answers "did that restart
-    # work", and a 60 s cached answer to that question is the wrong one (2.27.3).
-    "get_plugin_by_id",
-    # Audits / find / health
-    "audit_home", "audit_variables", "system_health",
-    "find_devices_in_error", "find_low_battery", "find_stale_devices",
-    "find_orphaned_scripts", "find_orphaned_plugin_data", "find_large_files",
-    "find_conflicts", "dependency_map",
-    # Status reports
-    "home_status", "home_status_report",
-    "energy_status", "heating_status", "security_status",
-    # Read scripts
-    "read_script",
-    # Energy
-    "energy_log_days", "energy_daily_summary", "energy_compare",
-}
-
-
-# Buckets used for invalidation. When a write tool fires, every cached entry
-# whose source tool sits in the matching bucket(s) is dropped.
-_DEVICE_TOOLS = {
-    "search_entities", "get_devices_by_type", "get_devices_by_state",
-    "list_devices", "get_device_by_id",
-    "audit_home", "find_devices_in_error", "find_low_battery", "find_stale_devices",
-    "home_status", "home_status_report", "dependency_map",
-}
-_VARIABLE_TOOLS = {
-    "list_variables", "list_variable_folders", "get_variable_by_id",
-    "audit_variables",
-}
-_ACTION_TOOLS = {"list_action_groups", "get_action_group_by_id"}
-_SCHEDULE_TOOLS = {"list_schedules"}
-_TRIGGER_TOOLS = {"list_triggers"}
-_PLUGIN_TOOLS = {"list_plugins", "get_plugin_by_id"}
-_SCRIPT_TOOLS = {"list_python_scripts", "list_script_backups", "read_script",
-                 "find_orphaned_scripts"}
-
-# Arbitrary-mutation tools whose effect on cached state can't be scoped to a
-# single entity bucket — invalidate EVERYTHING for these.
-_CLEAR_ALL_TOOLS: Set[str] = {
-    "execute_indigo_python",
-    "run_script",
-}
-
+# ─── What is cached, and what drops it ───────────────────────────────────────
+#
+# Declared on each tool in mcp_server/toolsets/ and derived from the registry
+# (mcp_server/registry.py) — nothing is listed here by hand. Until 3.0 this
+# module held a cacheable allow-list, seven bucket sets and a 70-line
+# invalidation map, kept in step with the tools by hand; the update_* writers
+# were once missing from it and a renamed trigger read under its old name for
+# the whole TTL.
+#
+#   cacheable=True, reads={...}   a read tool whose answer may be cached; reads
+#                                 names the buckets that answer depends on
+#   invalidates={...}             a mutating tool drops every cached answer whose
+#                                 reads meet these buckets; {"*"} drops them all
+#
 # ─── Real-world change tracking ──────────────────────────────────────────────
 #
-# The invalidation map below only covers ClaudeBridge's OWN mutating tools. But
-# the world changes without asking us: a light switched at the wall, by a Z-Wave
-# association, by an Indigo trigger, or by any other plugin. Those never touched
-# the cache, so home_status / get_device_by_id / list_devices went on serving the
-# pre-change value for up to the full TTL — presented as current.
-#
-# The plugin already sees every one of those changes in deviceUpdated /
-# variableUpdated. Rather than drop entries eagerly on each (a presence-sensor
-# storm would thrash the store under a lock), each domain carries a counter that
-# those callbacks bump — O(1), no iteration. A cached entry records the counters
-# it was computed under, and a read whose stamp no longer matches is a miss.
-# Cost is paid once, on the next read, and only for the domain that changed.
+# The invalidation above only covers ClaudeBridge's OWN mutating tools. But the
+# world changes without asking us: a light switched at the wall, by a Z-Wave
+# association, by an Indigo trigger, or by any other plugin. The plugin sees
+# every one of those in deviceUpdated / variableUpdated. Rather than drop
+# entries eagerly on each (a presence-sensor storm would thrash the store under
+# a lock), the "device" and "variable" buckets each carry a counter that those
+# callbacks bump — O(1), no iteration. A cached entry records the counters it
+# was computed under, and a read whose stamp no longer matches is a miss.
 _DOMAIN_DEVICE   = "device"
 _DOMAIN_VARIABLE = "variable"
-
-_TOOL_DOMAINS: Dict[str, Set[str]] = {}
-for _t in _DEVICE_TOOLS:
-    _TOOL_DOMAINS.setdefault(_t, set()).add(_DOMAIN_DEVICE)
-for _t in _VARIABLE_TOOLS:
-    _TOOL_DOMAINS.setdefault(_t, set()).add(_DOMAIN_VARIABLE)
-# home_status and the audits read both domains.
-for _t in ("home_status", "home_status_report", "audit_home", "dependency_map"):
-    _TOOL_DOMAINS.setdefault(_t, set()).update({_DOMAIN_DEVICE, _DOMAIN_VARIABLE})
+_DOMAINS = (_DOMAIN_DEVICE, _DOMAIN_VARIABLE)
 
 
-# Map mutating tool → buckets to invalidate
-_INVALIDATION_MAP: Dict[str, Set[str]] = {
-    # ── Device on/off/brightness/colour ─────────────────────────────────
-    "device_turn_on":           _DEVICE_TOOLS,
-    "device_turn_off":          _DEVICE_TOOLS,
-    "device_set_brightness":    _DEVICE_TOOLS,
-    "device_control":           _DEVICE_TOOLS,
-    "device_toggle":            _DEVICE_TOOLS,
-    "dimmer_brighten_by":       _DEVICE_TOOLS,
-    "dimmer_dim_by":            _DEVICE_TOOLS,
-    "set_color":                _DEVICE_TOOLS,
-    "lock_device":              _DEVICE_TOOLS,
-    "unlock_device":            _DEVICE_TOOLS,
-    "request_status_update":    _DEVICE_TOOLS,
-    # ── Thermostat / fan / speed ────────────────────────────────────────
-    "set_heat_setpoint":        _DEVICE_TOOLS,
-    "increase_heat_setpoint":   _DEVICE_TOOLS,
-    "decrease_heat_setpoint":   _DEVICE_TOOLS,
-    "set_cool_setpoint":        _DEVICE_TOOLS,
-    "increase_cool_setpoint":   _DEVICE_TOOLS,
-    "decrease_cool_setpoint":   _DEVICE_TOOLS,
-    # Z-Wave: a config param changes device behaviour; inclusion/exclusion adds/removes devices.
-    "zwave_send_config_parameter":         _DEVICE_TOOLS,
-    "zwave_enter_inclusion_mode":          _DEVICE_TOOLS,
-    "zwave_enter_exclusion_mode":          _DEVICE_TOOLS,
-    "set_hvac_mode":            _DEVICE_TOOLS,
-    "set_fan_mode":             _DEVICE_TOOLS,
-    "set_fan_speed":            _DEVICE_TOOLS,
-    "speedcontrol_set_index":   _DEVICE_TOOLS,
-    "speedcontrol_increase":    _DEVICE_TOOLS,
-    "speedcontrol_decrease":    _DEVICE_TOOLS,
-    # ── Sprinkler ───────────────────────────────────────────────────────
-    "sprinkler_run":            _DEVICE_TOOLS,
-    "sprinkler_stop":           _DEVICE_TOOLS,
-    "sprinkler_pause":          _DEVICE_TOOLS,
-    "sprinkler_resume":         _DEVICE_TOOLS,
-    "sprinkler_set_zone":       _DEVICE_TOOLS,
-    "sprinkler_next_zone":      _DEVICE_TOOLS,
-    "sprinkler_previous_zone":  _DEVICE_TOOLS,
-    # ── Device lifecycle / metadata ─────────────────────────────────────
-    "enable_device":            _DEVICE_TOOLS,
-    "rename_device":            _DEVICE_TOOLS,
-    "move_device_to_folder":    _DEVICE_TOOLS,
-    "duplicate_device":         _DEVICE_TOOLS,
-    "delete_device":            _DEVICE_TOOLS,
-    # ── v2.9.0 additions ────────────────────────────────────────────────
-    "reset_energy_accumulator": _DEVICE_TOOLS,
-    "device_remove_delayed_actions": _DEVICE_TOOLS,
-    "all_lights_off":           _DEVICE_TOOLS,
-    "all_lights_on":            _DEVICE_TOOLS,
-    "all_devices_off":          _DEVICE_TOOLS,
-    "delete_device_folder":     _DEVICE_TOOLS,
-    "delete_variable_folder":   _VARIABLE_TOOLS,
-    # beep_device / ping_device deliberately absent — they change no cached state.
-    # ── Variables ───────────────────────────────────────────────────────
-    "variable_create":          _VARIABLE_TOOLS,
-    "variable_update":          _VARIABLE_TOOLS,
-    "variable_delete":          _VARIABLE_TOOLS,
-    "variable_move_to_folder":  _VARIABLE_TOOLS,
-    "create_variable_folder":   _VARIABLE_TOOLS,   # shows up in list_variable_folders
-    "create_device_folder":     _DEVICE_TOOLS,
-    # ── Action groups ───────────────────────────────────────────────────
-    "action_execute_group":     _ACTION_TOOLS | _DEVICE_TOOLS,
-    "duplicate_action_group":   _ACTION_TOOLS,
-    "delete_action_group":      _ACTION_TOOLS,
-    "update_action_group":      _ACTION_TOOLS,
-    # ── Schedules ───────────────────────────────────────────────────────
-    "enable_schedule":          _SCHEDULE_TOOLS,
-    "disable_schedule":         _SCHEDULE_TOOLS,
-    "duplicate_schedule":       _SCHEDULE_TOOLS,
-    "delete_schedule":          _SCHEDULE_TOOLS,
-    "update_schedule":          _SCHEDULE_TOOLS,
-    # Firing a schedule runs its actions, which can move device/variable state.
-    "execute_schedule_now":     _SCHEDULE_TOOLS | _DEVICE_TOOLS | _VARIABLE_TOOLS,
-    "schedule_remove_delayed_actions": _SCHEDULE_TOOLS,
-    "remove_all_delayed_actions":      _SCHEDULE_TOOLS,
-    # ── Triggers ────────────────────────────────────────────────────────
-    "enable_trigger":           _TRIGGER_TOOLS,
-    "disable_trigger":          _TRIGGER_TOOLS,
-    "move_trigger_to_folder":   _TRIGGER_TOOLS,
-    "delete_trigger":           _TRIGGER_TOOLS,
-    # The v2.12.0 update_* writers were missed here while every enable/disable/
-    # delete/duplicate sibling was listed. Triggers, schedules and action groups
-    # have NO domain counter, so nothing else drops their buckets and a renamed
-    # trigger kept reading under its old name for the whole TTL.
-    "update_trigger":           _TRIGGER_TOOLS,
-    "fire_trigger":             _DEVICE_TOOLS | _VARIABLE_TOOLS,  # may cause side-effects
-    # ── Plugins ─────────────────────────────────────────────────────────
-    "restart_plugin":           _PLUGIN_TOOLS,
-    # ── Scripts ─────────────────────────────────────────────────────────
-    "write_script":             _SCRIPT_TOOLS,
-    "create_script":            _SCRIPT_TOOLS,
-    "delete_script":            _SCRIPT_TOOLS,
-    # ── Events ──────────────────────────────────────────────────────────
-    "fire_indigo_event":        _DEVICE_TOOLS | _VARIABLE_TOOLS,  # may cause side-effects
-}
+def _registry():
+    from .. import registry
+    return registry
+
+
+def __getattr__(name: str):
+    """The pre-3.0 module constants, derived from the registry on access."""
+    reg = _registry()
+    if name == "CACHEABLE_TOOLS":
+        return set(reg.cacheable_names())
+    if name == "_INVALIDATION_MAP":
+        return {k: set(v) for k, v in reg.invalidation_map().items()}
+    if name == "_CLEAR_ALL_TOOLS":
+        return set(reg.clear_all_names())
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ─── Cache implementation ────────────────────────────────────────────────────
@@ -232,7 +97,7 @@ class ToolCache:
         self._generation = 0
 
         # Per-domain change counters, bumped by note_external_change() from the
-        # plugin's deviceUpdated / variableUpdated callbacks. See _TOOL_DOMAINS.
+        # plugin's deviceUpdated / variableUpdated callbacks.
         self._domain_gen: Dict[str, int] = {_DOMAIN_DEVICE: 0, _DOMAIN_VARIABLE: 0}
 
         # Lifetime stats — surfaced via /health
@@ -259,16 +124,17 @@ class ToolCache:
 
     @staticmethod
     def is_cacheable(tool_name: str) -> bool:
-        return tool_name in CACHEABLE_TOOLS
+        spec = _registry().spec_for(tool_name)
+        return bool(spec is not None and spec.cacheable)
 
     def _domain_stamp_locked(self, tool_name: str) -> Tuple:
         """Snapshot the change counters this tool's answer depends on.
 
-        MUST be called with _lock held. A tool outside _TOOL_DOMAINS (system
-        health, script listings) is unaffected by device or
-        variable traffic and gets an empty stamp, so it caches exactly as before.
+        MUST be called with _lock held. A tool that reads neither domain (system
+        health, script listings) is unaffected by device or variable traffic and
+        gets an empty stamp.
         """
-        domains = _TOOL_DOMAINS.get(tool_name)
+        domains = _registry().reads_of(tool_name) & set(_DOMAINS)
         if not domains:
             return ()
         return tuple(sorted((d, self._domain_gen.get(d, 0)) for d in domains))
@@ -366,22 +232,24 @@ class ToolCache:
         Arbitrary-mutation tools (execute_indigo_python, run_script) can change
         any entity, so they clear the whole cache rather than a single bucket.
         """
-        if mutating_tool in _CLEAR_ALL_TOOLS:
+        spec = _registry().spec_for(mutating_tool)
+        changed = spec.invalidates if spec is not None else frozenset()
+        if "*" in changed:
             n = self.clear()
             if n:
                 with self._lock:
                     self.invalidations += n
             return n
 
-        buckets = _INVALIDATION_MAP.get(mutating_tool)
-        if not buckets:
+        if not changed:
             return 0
+        reads_of = _registry().reads_of
         with self._lock:
             # Bump generation for EVERY real invalidation, even if nothing is
             # cached right now — an in-flight compute for one of these buckets
             # must still be prevented from storing its pre-mutation result.
             self._generation += 1
-            keys_to_drop = [k for k in self._store if k[0] in buckets]
+            keys_to_drop = [k for k in self._store if reads_of(k[0]) & changed]
             for k in keys_to_drop:
                 del self._store[k]
             if keys_to_drop:

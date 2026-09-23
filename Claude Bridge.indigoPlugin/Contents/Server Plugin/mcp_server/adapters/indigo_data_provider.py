@@ -11,7 +11,6 @@ import logging
 import time
 from typing import Dict, List, Any, Optional
 
-from .data_provider import DataProvider
 from ..common.device_props import device_dict
 from ..common.json_encoder import filter_json, KEYS_TO_KEEP_MINIMAL_DEVICES
 
@@ -34,7 +33,7 @@ def _to_variable_string(value) -> str:
     return str(value)
 
 
-class IndigoDataProvider(DataProvider):
+class IndigoDataProvider:
     """Data provider implementation for accessing Indigo entities."""
 
     # Sane client-side bounds for thermostat setpoints (degrees Celsius).

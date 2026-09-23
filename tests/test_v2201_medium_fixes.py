@@ -190,9 +190,10 @@ def test_update_writers_invalidate_their_caches():
     drops their buckets — a renamed trigger read stale for the whole TTL."""
     from mcp_server.common.tool_cache import _INVALIDATION_MAP
 
-    for tool in ("update_trigger", "update_schedule", "update_action_group"):
-        assert tool in _INVALIDATION_MAP, f"{tool} invalidates nothing"
-        assert _INVALIDATION_MAP[tool], f"{tool} maps to an empty bucket set"
+    tool = "update_automation"
+    assert tool in _INVALIDATION_MAP, f"{tool} invalidates nothing"
+    for listing in ("list_triggers", "list_schedules", "list_action_groups"):
+        assert listing in _INVALIDATION_MAP[tool], f"{tool} leaves {listing} stale"
 
 
 # ── A sensitive tool's failure must not ship the secret by another name ──────

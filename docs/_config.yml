@@ -5,7 +5,7 @@
 title: Claude Bridge
 description: >-
   Talk to your Indigo home automation in plain English. Claude gets live
-  access to your devices, variables, scripts and event log through 168 tools.
+  access to your devices, variables, scripts and event log through 69 tools.
 url: https://highsteads.github.io
 baseurl: /ClaudeBridge
 remote_theme: just-the-docs/just-the-docs@v0.12.0

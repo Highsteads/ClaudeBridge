@@ -1,0 +1,566 @@
+#! /usr/bin/env python
+# -*- coding: utf-8 -*-
+# Filename:    devices.py
+# Description: Device tools — finding, reading and controlling devices.
+# Author:      CliveS & Claude Opus 5.5
+# Date:        23-09-2026
+# Version:     1.0
+
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+from ..common import device_capabilities
+from ..common.indigo_device_types import DeviceTypeResolver, IndigoDeviceType, IndigoEntityType
+from ..registry import tool
+from ..tools.device_control.color_names import parse_color
+from ._schema import (DELAY, DEVICE, DURATION, bad_choice, boolean, enum, id_or_name, number,
+                      refuse, string, unused_args)
+
+_DEVICE_TYPES_HELP = ("Valid types: dimmer, relay, sensor, multiio, speedcontrol, sprinkler, "
+                      "thermostat, device. Aliases supported: light→dimmer, switch→relay, "
+                      "motion→sensor, fan→speedcontrol, etc.")
+
+
+# ── Shared helpers ───────────────────────────────────────────────────────────
+
+def enrich_device_capabilities(device):
+    """Attach a capabilities block to a serialised device dict, in place, read
+    live off the device (``supports*`` flags). Advisory metadata — absent when
+    the device cannot be resolved or exposes no flags."""
+    if not isinstance(device, dict):
+        return device
+    try:
+        import indigo
+        dev = indigo.devices[device["id"]]
+    except Exception:
+        return device
+    caps = device_capabilities.live_capabilities(dev)
+    if caps:
+        device["capabilities"] = caps
+    return device
+
+
+def resolve_device_for_control(name: str, devices: List[Dict[str, Any]]):
+    """Pick the ONE device a spoken name means, or refuse.
+
+    Acts on a single exact-name match, or else on a single candidate scoring
+    0.5 or more. Anything else is refused with the candidates. Until 2.27.3 it
+    took the top hit whenever that scored 0.5, and any name merely containing
+    the words scores 1.0 — so with two "Hall Lamp..." devices it could switch
+    whichever the search listed first. Returns (device, None) or (None, refusal).
+    """
+    def _cands(items):
+        return [{"id": d.get("id"), "name": d.get("name"),
+                 "score": d.get("relevance_score")} for d in items[:5]]
+
+    wanted = (name or "").strip().lower()
+    exact = [d for d in devices if str(d.get("name", "")).strip().lower() == wanted]
+    if len(exact) == 1:
+        return exact[0], None
+    if len(exact) > 1:
+        return None, {"success": False,
+                      "error": f"{len(exact)} devices are called '{name}'; "
+                               f"use the device id instead",
+                      "candidates": _cands(exact)}
+    confident = [d for d in devices if (d.get("relevance_score") or 0) >= 0.5]
+    if len(confident) == 1:
+        return confident[0], None
+    if not confident:
+        top = devices[0]
+        return None, {"success": False,
+                      "error": f"No confident match for '{name}' (best: "
+                               f"'{top.get('name')}' score="
+                               f"{(top.get('relevance_score') or 0):.2f})",
+                      "suggestions": [d.get("name") for d in devices[:3]]}
+    return None, {"success": False,
+                  "error": f"'{name}' matches {len(confident)} devices; nothing "
+                           f"was switched. Use the full name or the device id.",
+                  "candidates": _cands(confident)}
+
+
+def resolve_device(ctx, device) -> Tuple[Optional[int], Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Turn a `device` argument (id or name) into a device id.
+
+    Returns (device_id, match_info, refusal). match_info is non-empty only when
+    a name was resolved, and names what was matched so the reply can say so.
+    """
+    if device is None or isinstance(device, bool) or (isinstance(device, str) and not device.strip()):
+        return None, {}, refuse("device is required: a device id or its name")
+    if isinstance(device, (int, float)):
+        if float(device).is_integer():
+            return int(device), {}, None
+        return None, {}, refuse(f"device id must be a whole number, got {device!r}")
+    text = str(device).strip()
+    if text.lstrip("-").isdigit():
+        return int(text), {}, None
+    found = ctx.search_handler.search(query=text, entity_types=["devices"], detail="slim")
+    devices = (found.get("results") or {}).get("devices") or []
+    if not devices:
+        return None, {}, refuse(f"No device found matching '{text}'")
+    top, refusal = resolve_device_for_control(text, devices)
+    if refusal:
+        return None, {}, refusal
+    return top["id"], {"matched_device": top.get("name"),
+                       "match_score": top.get("relevance_score")}, None
+
+
+def _error_text(result: Any) -> str:
+    return str(result.get("error")) if isinstance(result, dict) else str(result)
+
+
+def _with_match(result: Any, match: Dict[str, Any]) -> Any:
+    if isinstance(result, dict) and match:
+        result.update(match)
+    return result
+
+
+def _resolve_types(device_types) -> Tuple[Optional[List[str]], Optional[Dict[str, Any]]]:
+    """Resolve device-type aliases, or return a refusal with suggestions."""
+    resolved, invalid = DeviceTypeResolver.resolve_device_types(device_types)
+    if not invalid:
+        return resolved, None
+    parts = [f"Invalid device types: {invalid}",
+             f"Valid types: {IndigoDeviceType.get_all_types()}"]
+    for bad in invalid:
+        suggestions = DeviceTypeResolver.get_suggestions_for_invalid_type(bad)
+        if suggestions:
+            parts.append(f"Did you mean: {', '.join(suggestions)}")
+    return None, refuse(" | ".join(parts))
+
+
+# ── Reading ──────────────────────────────────────────────────────────────────
+
+@tool("search_entities", scope="read", cacheable=True,
+      reads={"device", "variable", "action_group"},
+      description=("Search for Indigo entities using natural language. Results are slim by "
+                   "default (id, name, state, lastChanged). Use detail='full' only when you "
+                   "need complete device properties such as Z-Wave config or plugin props."),
+      properties={
+          "query": string("Natural language search query"),
+          "device_types": {"type": "array", "items": {"type": "string"},
+                           "description": "Optional device types to filter. " + _DEVICE_TYPES_HELP},
+          "entity_types": {"type": "array",
+                           "items": {"type": "string", "enum": ["device", "variable", "action"]},
+                           "description": ("Optional entity types to search: device, variable, "
+                                           "action (singular; 'action' means action groups). "
+                                           "Omit to search all three.")},
+          "state_filter": {"type": "object",
+                           "description": "Optional state conditions to filter results"},
+          "detail": enum(["slim", "full"],
+                         "Result detail level. 'slim' (default) returns id/name/state/lastChanged "
+                         "only — fast. 'full' returns complete device objects including all "
+                         "plugin and Z-Wave properties."),
+      },
+      required=["query"])
+def search_entities(ctx, query, device_types=None, entity_types=None,
+                    state_filter=None, detail="slim"):
+    if device_types:
+        device_types, refusal = _resolve_types(device_types)
+        if refusal:
+            refusal["query"] = query
+            return refusal
+    if entity_types:
+        if isinstance(entity_types, str):
+            entity_types = [entity_types]
+        entity_types = [IndigoEntityType.normalise(et) for et in entity_types]
+        invalid = [et for et in entity_types if not IndigoEntityType.is_valid_type(et)]
+        if invalid:
+            return refuse(f"Invalid entity types: {invalid} | "
+                          f"Valid types: {IndigoEntityType.get_all_types()}", query=query)
+    ctx.logger.info(f"[search_entities]: query: '{query}', device_types: {device_types}, "
+                    f"entity_types: {entity_types}, state_filter: {state_filter}")
+    return ctx.search_handler.search(query, device_types, entity_types, state_filter,
+                                     detail=detail)
+
+
+@tool("list_devices", scope="read", cacheable=True, reads={"device"},
+      description=("List devices. With no arguments, every device. device_type narrows to one "
+                   "type (aliases accepted) and state_filter to devices whose states match, "
+                   "e.g. {\"onState\": true} or {\"heatIsOn\": true}; either filter returns "
+                   "count, total_matched and truncated, and limit caps the list (default 200)."),
+      properties={
+          "device_type": string("Optional device type. " + _DEVICE_TYPES_HELP),
+          "state_filter": {"type": "object",
+                           "description": ("Optional state conditions using Indigo state names, "
+                                           "e.g. {\"onState\": true}, "
+                                           "{\"temperature\": {\"gt\": 21}}")},
+          "limit": {"type": "integer",
+                    "description": "Max devices when filtering (default 200)"},
+      })
+def list_devices(ctx, device_type=None, state_filter=None, limit=None):
+    if not device_type and not state_filter:
+        if limit is not None:
+            return refuse("limit applies only with device_type or state_filter — "
+                          "call list_devices with no arguments for every device")
+        return ctx.list_handlers.list_all_devices()
+    if device_type and not state_filter:
+        return ctx.get_devices_by_type_handler.get_devices(
+            device_type, limit=200 if limit is None else limit)
+    types = None
+    if device_type:
+        types, refusal = _resolve_types([device_type])
+        if refusal:
+            return refusal
+    result = ctx.list_handlers.get_devices_by_state(state_filter, types)
+    try:
+        cap = max(1, int(200 if limit is None else limit))
+    except (TypeError, ValueError):
+        cap = 200
+    devices = result.get("devices") or []
+    result["total_matched"] = len(devices)
+    result["truncated"] = len(devices) > cap
+    result["limit"] = cap
+    result["devices"] = devices[:cap]
+    result["count"] = len(result["devices"])
+    return result
+
+
+@tool("get_device_by_id", scope="read", cacheable=True, reads={"device"},
+      description="Get a specific device by ID",
+      properties={"device_id": id_or_name("The device ID")},
+      required=["device_id"])
+def get_device_by_id(ctx, device_id):
+    device_id = int(device_id)
+    device = ctx.data_provider.get_device(device_id)
+    if device is None:
+        return {"error": f"Device {device_id} not found"}
+    return enrich_device_capabilities(device)
+
+
+@tool("get_device_by_name", scope="read",
+      description=("Find a device by name and return its full state in one round trip. Tries "
+                   "exact match, then case-insensitive, then partial match. Returns all device "
+                   "states, properties, and current values."),
+      properties={"name": string("Device name (exact, partial, or case-insensitive)")},
+      required=["name"])
+def get_device_by_name(ctx, name):
+    result = ctx.data_provider.get_device_by_name(name)
+    if result is None:
+        return refuse(f"No device found matching '{name}'")
+    return {"success": True, "device": enrich_device_capabilities(result)}
+
+
+@tool("device_history", scope="read",
+      description=("Read recent SQL Logger history for one device. Returns timestamp + "
+                   "non-null state columns. Column names are stored LOWERCASE (batterysoc, not "
+                   "batterySoc); an unknown name is an error listing the valid columns. Rows are "
+                   "sparse — only changed values are written, so forward-fill before deriving "
+                   "trends. `limit` caps rows from the NEWEST end, so on a chatty device it can "
+                   "cut the window far shorter than `hours` — check `truncated` and the "
+                   "`ts_oldest`/`ts_newest` span before concluding anything about earlier "
+                   "events."),
+      properties={
+          "device_id": id_or_name("The device ID"),
+          "hours": number("Lookback in hours (default 24)"),
+          "limit": number("Max rows (default 500, max 5000)"),
+          "columns": {"type": "array", "items": {"type": "string"},
+                      "description": "Optional list of column names to return"},
+      },
+      required=["device_id"])
+def device_history(ctx, device_id, hours=24, limit=500, columns=None):
+    return ctx.plugin_dev_tools_handler.device_history(
+        device_id, hours=hours, limit=limit, columns=columns)
+
+
+# ── Control ──────────────────────────────────────────────────────────────────
+
+_DEVICE_ACTIONS = ("on", "off", "toggle", "brightness", "brighten", "dim", "color",
+                   "status_request", "beep", "ping", "reset_energy")
+
+_ACTION_ARGS = {
+    "on": ("delay", "duration"), "off": ("delay", "duration"),
+    "brightness": ("value",), "brighten": ("value",), "dim": ("value",),
+    "color": ("color", "red", "green", "blue", "white", "white_temperature"),
+}
+
+
+@tool("device_control", scope="write", invalidates={"device"},
+      description=(
+          "Control one device, by id or by name. action: on / off (optional delay, and "
+          "duration to revert automatically — 'fan on for 10 minutes' is duration=600), "
+          "toggle, brightness (value 0-100), brighten / dim (value = percentage points), "
+          "color (a 'color' hex code or CSS name such as 'dodgerblue', or red/green/blue "
+          "0-255, plus optional white and white_temperature), status_request (poll the "
+          "device), beep (to find it physically), ping (reachability), reset_energy (zero "
+          "the kWh total; the old total is returned but cannot be restored). A name must "
+          "match exactly or match one device confidently, otherwise nothing is switched and "
+          "the candidates come back."),
+      properties={
+          "device": DEVICE,
+          "action": enum(_DEVICE_ACTIONS, "What to do"),
+          "value": number("brightness: level 0-100. brighten/dim: percentage points"),
+          "color": string("color action: hex (#RRGGBB, #RGB) or a CSS colour name; takes "
+                          "precedence over red/green/blue. British 'grey' spellings accepted"),
+          "red": number("Red channel 0-255"),
+          "green": number("Green channel 0-255"),
+          "blue": number("Blue channel 0-255"),
+          "white": number("White channel 0-255 (RGBW only)"),
+          "white_temperature": number("Colour temperature in Kelvin (e.g. 2700-6500)"),
+          "delay": DELAY,
+          "duration": DURATION,
+      },
+      required=["device", "action"])
+def device_control(ctx, device, action, value=None, color=None, red=None, green=None,
+                   blue=None, white=None, white_temperature=None, delay=None, duration=None):
+    t_start = time.perf_counter()
+    if action not in _DEVICE_ACTIONS:
+        return bad_choice("action", action, _DEVICE_ACTIONS)
+    stray = unused_args("device_control", action,
+                        {"value": value, "color": color, "red": red, "green": green,
+                         "blue": blue, "white": white, "white_temperature": white_temperature,
+                         "delay": delay, "duration": duration},
+                        _ACTION_ARGS.get(action, ()))
+    if stray:
+        return stray
+    if action in ("brightness", "brighten", "dim") and value is None:
+        return refuse(f"device_control: action '{action}' needs value")
+
+    device_id, match, refusal = resolve_device(ctx, device)
+    if refusal:
+        return refusal
+
+    dc = ctx.device_control_handler
+    ext = ctx.extended_tools_handler
+    if action == "on":
+        result = dc.turn_on(device_id, delay=delay or 0, duration=duration or 0)
+    elif action == "off":
+        result = dc.turn_off(device_id, delay=delay or 0, duration=duration or 0)
+    elif action == "toggle":
+        # Indigo decides the direction. The search snapshot is rebuilt on a 300 s
+        # interval, so deciding here could invert the command for five minutes.
+        result = ext.device_toggle(device_id)
+    elif action == "brightness":
+        result = dc.set_brightness(device_id, value)
+    elif action == "brighten":
+        result = ext.dimmer_brighten_by(device_id, value)
+    elif action == "dim":
+        result = ext.dimmer_dim_by(device_id, value)
+    elif action == "color":
+        if color is not None:
+            try:
+                red, green, blue = parse_color(color)
+            except ValueError as ce:
+                return refuse(str(ce))
+        if red is None or green is None or blue is None:
+            return refuse("Provide either a 'color' string (hex or CSS name) "
+                          "or all three of red/green/blue (0-255).")
+        result = dc.set_color(device_id, red, green, blue,
+                              white=white, white_temperature=white_temperature)
+    elif action == "status_request":
+        result = dc.request_status_update(device_id)
+    elif action == "beep":
+        result = ext.beep_device(device_id)
+    elif action == "ping":
+        result = ext.ping_device(device_id)
+    else:
+        result = ext.reset_energy_accumulator(device_id)
+    result = _with_match(result, match)
+    if match and isinstance(result, dict):
+        result["elapsed_ms"] = round((time.perf_counter() - t_start) * 1000)
+    return result
+
+
+_HVAC_MODES = ["heat", "cool", "auto", "off", "programHeat", "programCool", "programAuto"]
+
+
+@tool("thermostat_control", scope="write", invalidates={"device"},
+      description=("Change a thermostat or TRV (e.g. RAMSES, Evohome). Give any combination "
+                   "of heat_setpoint, cool_setpoint (degrees Celsius), heat_delta, cool_delta "
+                   "(step up with a positive number, down with a negative one), hvac_mode and "
+                   "fan_mode. They are applied in that order and the reply lists what was "
+                   "done; the first failure stops the rest."),
+      properties={
+          "device": DEVICE,
+          "heat_setpoint": number("Target heat temperature, degrees Celsius"),
+          "cool_setpoint": number("Target cool temperature, degrees Celsius"),
+          "heat_delta": number("Degrees to raise (+) or lower (-) the heat setpoint"),
+          "cool_delta": number("Degrees to raise (+) or lower (-) the cool setpoint"),
+          "hvac_mode": enum(_HVAC_MODES, "HVAC operating mode"),
+          "fan_mode": enum(["auto", "alwaysOn", "always_on"], "Fan mode"),
+      },
+      required=["device"])
+def thermostat_control(ctx, device, heat_setpoint=None, cool_setpoint=None, heat_delta=None,
+                       cool_delta=None, hvac_mode=None, fan_mode=None):
+    steps = [(k, v) for k, v in (("heat_setpoint", heat_setpoint),
+                                  ("cool_setpoint", cool_setpoint),
+                                  ("heat_delta", heat_delta), ("cool_delta", cool_delta),
+                                  ("hvac_mode", hvac_mode), ("fan_mode", fan_mode))
+             if v is not None]
+    if not steps:
+        return refuse("thermostat_control: give at least one of heat_setpoint, cool_setpoint, "
+                      "heat_delta, cool_delta, hvac_mode, fan_mode")
+    for key in ("heat_delta", "cool_delta"):
+        val = dict(steps).get(key)
+        if val is not None and not val:
+            return refuse(f"thermostat_control: {key} must not be 0")
+
+    device_id, match, refusal = resolve_device(ctx, device)
+    if refusal:
+        return refusal
+
+    dc = ctx.device_control_handler
+    done: List[Dict[str, Any]] = []
+    for i, (key, val) in enumerate(steps):
+        if key == "heat_setpoint":
+            result = dc.set_heat_setpoint(device_id, val)
+        elif key == "cool_setpoint":
+            result = dc.set_cool_setpoint(device_id, val)
+        elif key == "heat_delta":
+            result = (dc.increase_heat_setpoint(device_id, val) if val > 0
+                      else dc.decrease_heat_setpoint(device_id, abs(val)))
+        elif key == "cool_delta":
+            result = (dc.increase_cool_setpoint(device_id, val) if val > 0
+                      else dc.decrease_cool_setpoint(device_id, abs(val)))
+        elif key == "hvac_mode":
+            result = dc.set_hvac_mode(device_id, val)
+        else:
+            result = ctx.extended_tools_handler.set_fan_mode(device_id, val)
+        ok = (isinstance(result, dict) and result.get("success") is not False
+              and "error" not in result)
+        done.append({"step": key, "value": val, "result": result})
+        if not ok:
+            return _with_match({"success": False, "device_id": device_id,
+                                "error": f"{key} failed: {_error_text(result)}",
+                                "done": done[:-1], "failed": done[-1],
+                                "not_attempted": [k for k, _ in steps[i + 1:]]}, match)
+    return _with_match({"success": True, "device_id": device_id, "done": done}, match)
+
+
+@tool("speed_control", scope="write", invalidates={"device"},
+      description=("Set a fan or speed-control device. Give exactly one of level (0-100 "
+                   "percent), index (0 off, 1 low, 2 medium, 3 high) or step (+1 or -1 to move "
+                   "one index up or down)."),
+      properties={
+          "device": DEVICE,
+          "level": number("Speed level 0-100"),
+          "index": number("Speed index 0-3"),
+          "step": number("+1 for one index faster, -1 for one slower"),
+      },
+      required=["device"])
+def speed_control(ctx, device, level=None, index=None, step=None):
+    given = [k for k, v in (("level", level), ("index", index), ("step", step)) if v is not None]
+    if len(given) != 1:
+        return refuse("speed_control: give exactly one of level, index or step"
+                      + (f" — got {', '.join(given)}" if given else ""))
+    if step is not None and step not in (1, -1):
+        return refuse(f"speed_control: step must be +1 or -1, got {step!r}")
+    device_id, match, refusal = resolve_device(ctx, device)
+    if refusal:
+        return refusal
+    ext = ctx.extended_tools_handler
+    if level is not None:
+        result = ctx.device_control_handler.set_fan_speed(device_id, level)
+    elif index is not None:
+        result = ext.speedcontrol_set_index(device_id, index)
+    elif step == 1:
+        result = ext.speedcontrol_increase(device_id)
+    else:
+        result = ext.speedcontrol_decrease(device_id)
+    return _with_match(result, match)
+
+
+_SPRINKLER_ACTIONS = ("run", "stop", "pause", "resume", "next_zone", "previous_zone", "set_zone")
+
+
+@tool("sprinkler_control", scope="write", invalidates={"device"},
+      description=("Drive a sprinkler device: run the programme, stop, pause, resume, "
+                   "next_zone, previous_zone, or set_zone with zone (1-based)."),
+      properties={
+          "device": DEVICE,
+          "action": enum(_SPRINKLER_ACTIONS, "What to do"),
+          "zone": number("Zone index, 1-based (set_zone only)"),
+      },
+      required=["device", "action"])
+def sprinkler_control(ctx, device, action, zone=None):
+    if action not in _SPRINKLER_ACTIONS:
+        return bad_choice("action", action, _SPRINKLER_ACTIONS)
+    stray = unused_args("sprinkler_control", action, {"zone": zone},
+                        ("zone",) if action == "set_zone" else ())
+    if stray:
+        return stray
+    if action == "set_zone" and zone is None:
+        return refuse("sprinkler_control: set_zone needs zone")
+    device_id, match, refusal = resolve_device(ctx, device)
+    if refusal:
+        return refusal
+    ext = ctx.extended_tools_handler
+    if action == "set_zone":
+        result = ext.sprinkler_set_zone(device_id, zone)
+    else:
+        result = getattr(ext, f"sprinkler_{action}")(device_id)
+    return _with_match(result, match)
+
+
+_BROADCASTS = {"lights_on": "all_lights_on", "lights_off": "all_lights_off",
+               "all_off": "all_devices_off"}
+
+
+@tool("all_devices", scope="write", invalidates={"device"},
+      description=("Send one of Indigo's native broadcasts: lights_on, lights_off or all_off. "
+                   "They reach native-protocol devices (Z-Wave/Insteon/X10) ONLY — devices owned "
+                   "by plugins (zigbee2mqtt, Shelly, Tasmota) are NOT affected; switch those "
+                   "individually or through an action group."),
+      properties={"action": enum(list(_BROADCASTS), "Which broadcast")},
+      required=["action"])
+def all_devices(ctx, action):
+    if action not in _BROADCASTS:
+        return bad_choice("action", action, _BROADCASTS)
+    return getattr(ctx.extended_tools_handler, _BROADCASTS[action])()
+
+
+@tool("lock_control", scope="admin", invalidates={"device"},
+      description=("Lock or unlock a Z-Wave or other lock device, optionally unlocking with a "
+                   "PIN code. ADMIN scope: this is physical security."),
+      properties={
+          "device": DEVICE,
+          "action": enum(["lock", "unlock"], "lock or unlock"),
+          "code": string("Optional PIN code (unlock only)"),
+      },
+      required=["device", "action"])
+def lock_control(ctx, device, action, code=None):
+    if action not in ("lock", "unlock"):
+        return bad_choice("action", action, ("lock", "unlock"))
+    if action == "lock" and code is not None:
+        return refuse("lock_control: code applies only to unlock")
+    device_id, match, refusal = resolve_device(ctx, device)
+    if refusal:
+        return refusal
+    dc = ctx.device_control_handler
+    result = dc.lock_device(device_id) if action == "lock" else dc.unlock_device(device_id, code=code)
+    return _with_match(result, match)
+
+
+# ── Device housekeeping ──────────────────────────────────────────────────────
+
+@tool("enable_device", scope="write", invalidates={"device"},
+      description=("Enable or disable a device's communication. NOT the same as on/off — this "
+                   "controls whether Indigo polls/listens to the device at all."),
+      properties={
+          "device_id": id_or_name("The device ID"),
+          "value": boolean("True to enable, False to disable (default True)"),
+          "enable": boolean("Alias of value — the name callers naturally reach for"),
+      },
+      required=["device_id"])
+def enable_device(ctx, device_id, value=None, enable=None):
+    # `enable` is an accepted alias for `value` (v2.12.1) — an explicit value
+    # wins if a caller supplies both; the default remains True (enable).
+    resolved = value if value is not None else (enable if enable is not None else True)
+    return ctx.extended_tools_handler.enable_device(device_id, value=resolved)
+
+
+@tool("rename_device", scope="write", invalidates={"device"}, refresh_search=True,
+      description="Rename a device.",
+      properties={"device_id": id_or_name("The device ID"),
+                  "new_name": string("New device name")},
+      required=["device_id", "new_name"])
+def rename_device(ctx, device_id, new_name):
+    return ctx.extended_tools_handler.rename_device(device_id, new_name)
+
+
+@tool("delete_device", scope="admin", invalidates={"device"}, refresh_search=True,
+      destructive=True,
+      description="Permanently delete a device. Destructive — cannot be undone.",
+      properties={"device_id": id_or_name("Device ID")},
+      required=["device_id"])
+def delete_device(ctx, device_id):
+    return ctx.extended_tools_handler.delete_device(device_id)

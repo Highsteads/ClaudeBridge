@@ -70,3 +70,16 @@ def _install_indigo_stub() -> None:
 
 
 _install_indigo_stub()
+
+
+def call_tool(ctx, tool_name, /, **args):
+    """Run a registry tool the way the handler does — the same wrapper that
+    serialises a dict and turns an exception into a failure payload — and
+    return the parsed reply. ctx needs a `logger` plus whatever the tool
+    reaches (handler objects, data_provider and so on)."""
+    import json
+    from mcp_server import registry
+    from mcp_server.mcp_handler import MCPHandler
+    spec = registry.spec_for(tool_name)
+    assert spec is not None, f"no registry tool called {tool_name!r}"
+    return json.loads(MCPHandler._tool_function(ctx, spec)(**args))

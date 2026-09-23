@@ -45,7 +45,7 @@ class ResultFormatter:
         
         # Add state query suggestion if appropriate
         if state_detected and search_metadata and search_metadata.get("truncated", False):
-            formatted["suggestion"] = "State-based query detected with truncated results. Consider using list_devices(state_filter={...}) or get_devices_by_state() for complete state information."
+            formatted["suggestion"] = "State-based query detected with truncated results. Consider using list_devices(state_filter={...}) for complete state information."
         
         # Add results for each entity type
         for entity_type, entities in results.items():

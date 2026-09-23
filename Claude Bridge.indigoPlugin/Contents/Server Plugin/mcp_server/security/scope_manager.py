@@ -39,12 +39,10 @@ Behaviour (revised 06-Jun-2026 — fail-closed once configured):
           good config is kept, and a broken first load degrades to read-only
           with an ERROR (not to full admin).
 
-Tools are classified by name into READ / WRITE / ADMIN buckets below. The
-bucket is matched against the token's scopes; missing scope ⇒ ScopeDenied.
-The three buckets are an exhaustive, deny-by-default partition of every
-registered tool — see audit_classification(), called once at startup, which
-logs an ERROR if any registered tool is unclassified so a newly-added tool can
-never silently fall into READ.
+Each built-in tool declares its scope (read / write / admin) in the tool
+registry (mcp_server/registry.py); it is matched against the token's scopes and
+a missing scope raises ScopeDenied. Anything not in the registry and not a
+classified plugin-provided tool fails closed to admin.
 """
 
 from __future__ import annotations
@@ -57,106 +55,35 @@ from typing import Dict, List, Optional, Set
 
 # ─── Tool classification ─────────────────────────────────────────────────────
 #
-# DENY-BY-DEFAULT: every registered tool MUST appear in exactly one of the three
-# sets below. required_scope_for() returns 'admin' for anything unlisted (the
-# safest fail-closed default) and audit_classification() logs an ERROR at
-# startup for any registered tool missing from all three sets.
+# Every built-in tool declares its scope where it is defined (mcp_server/
+# toolsets/, via the @tool decorator in mcp_server/registry.py). Nothing is
+# listed here by hand any more: until 3.0 these were three literal sets kept in
+# step with the handler, and a tool missing from all three failed closed to
+# admin with only a startup log line to say so.
+#
+#   read  — pure queries, no state change
+#   write — modify Indigo state
+#   admin — destructive, irreversible, code execution, plugin lifecycle,
+#           physical security, and data leaving the house
+#
+# READ_TOOLS / WRITE_TOOLS / ADMIN_TOOLS remain importable names (derived on
+# access, see __getattr__ below) for anything that reads them.
 
-# Pure queries — no state change. Require 'read'.
-READ_TOOLS: Set[str] = {
-    "search_entities", "get_devices_by_type", "get_device_by_id", "get_device_by_name",
-    "get_devices_by_state", "list_devices", "list_variables", "list_schedules",
-    "list_triggers", "list_action_groups", "list_control_pages", "list_plugins",
-    "list_python_scripts", "list_script_backups", "list_variable_folders",
-    "get_variable_by_id", "get_action_group_by_id", "get_control_page", "get_plugin_by_id",
-    "get_plugin_status", "home_status", "home_status_report", "heating_status", "energy_status",
-    "energy_compare", "energy_daily_summary", "energy_log_days",
-    "device_history", "audit_home", "audit_variables", "find_conflicts", "find_devices_in_error",
-    "find_low_battery", "find_orphaned_plugin_data", "find_orphaned_scripts", "find_stale_devices",
-    "find_large_files", "dependency_map", "action_group_get_dependencies", "schedule_get_dependencies",
-    "get_deprecated_elements", "get_latitude_longitude", "get_reflector_url", "get_web_server_url",
-    "trigger_get_dependencies", "get_reflector_status", "get_indigo_paths",
-    "calculate_sunrise", "calculate_sunset", "check_plugin_updates", "read_script",
-    "query_event_log", "security_status", "system_health",
-    "plugin_diff_source_vs_installed", "plugin_lint", "plugin_node_check_html",
-    "plugin_show_packages_versions", "plugin_validate_xml",
-    # v2.9.0 — read-only API drift detector
-    "audit_api_coverage",
-    # v2.12.0 — automation introspection (read-only .indiDb structure store
-    # + event-log correlation)
-    "get_trigger_details", "get_schedule_details", "get_action_group_details",
-    "find_automation_references", "investigate_event",
-}
+_SCOPE_SETS = {"READ_TOOLS": "read", "WRITE_TOOLS": "write", "ADMIN_TOOLS": "admin"}
 
-# Tools that *modify* Indigo state — require 'write' or 'admin'.
-WRITE_TOOLS: Set[str] = {
-    # Device / dimmer / climate / fan / speed / sprinkler mutators
-    "device_turn_on", "device_turn_off", "device_set_brightness", "device_control", "device_toggle",
-    "dimmer_brighten_by", "dimmer_dim_by",
-    "set_heat_setpoint", "set_cool_setpoint", "set_hvac_mode",
-    "increase_heat_setpoint", "decrease_heat_setpoint",
-    "increase_cool_setpoint", "decrease_cool_setpoint",
-    "set_color", "set_fan_mode", "set_fan_speed",
-    "speedcontrol_decrease", "speedcontrol_increase", "speedcontrol_set_index",
-    "sprinkler_next_zone", "sprinkler_pause", "sprinkler_previous_zone", "sprinkler_resume",
-    "sprinkler_run", "sprinkler_set_zone", "sprinkler_stop",
-    # Variables
-    "variable_create", "variable_update", "variable_move_to_folder",
-    # Action groups / schedules / triggers
-    "action_execute_group",
-    "enable_schedule", "disable_schedule", "execute_schedule_now", "schedule_remove_delayed_actions",
-    "enable_trigger", "disable_trigger",
-    "fire_indigo_event", "fire_trigger",
-    "duplicate_action_group",
-    # Folders / device housekeeping
-    "create_device_folder", "create_variable_folder",
-    "enable_device", "rename_device", "move_device_to_folder", "move_trigger_to_folder",
-    "duplicate_device", "duplicate_schedule", "request_status_update",
-    # Logging
-    "log_message",
-    # Outbound side effects (send as the user)
-    "send_email", "send_notification", "server_speak",
-    # v2.9.0 — diagnostics, energy reset, delayed actions, native broadcasts.
-    # The broadcasts are WRITE not ADMIN: reversible mass on/off, same class of
-    # effect as action_execute_group.
-    "beep_device", "ping_device", "reset_energy_accumulator",
-    "device_remove_delayed_actions",
-    "all_lights_off", "all_lights_on", "all_devices_off",
-    # v2.12.0 — automation field editing (reversible renames/re-points via
-    # replaceOnServer; action steps and conditions are untouchable)
-    "update_trigger", "update_schedule", "update_action_group",
-}
 
-# Destructive / irreversible / code-execution / lifecycle / physical-security — require 'admin'.
-ADMIN_TOOLS: Set[str] = {
-    # Arbitrary code / GUI scripting / script files
-    "execute_indigo_python", "execute_plugin_menu_item", "execute_client_menu_item", "run_script", "scaffold_automation_script",
-    "write_script", "create_script", "delete_script",
-    # Plugin lifecycle
-    "restart_plugin", "plugin_refresh_deps",
-    # Running another plugin's own action. ADMIN because the blast radius is
-    # whatever that plugin exposes — valves, locks, garage doors, sprinkler
-    # zones, alarm arming — and a wrong device id actuates the wrong hardware.
-    "execute_device_action",
-    # Irreversible deletes
-    "delete_device", "delete_schedule", "delete_trigger", "delete_action_group", "variable_delete",
-    "remove_all_delayed_actions",
-    "delete_device_folder", "delete_variable_folder",   # v2.9.0 — can cascade-delete contents
-    # Physical security
-    "lock_device", "unlock_device",
-    # Z-Wave management — config params, mesh heal, and physical inclusion/exclusion.
-    # ADMIN: sendConfigParm reprograms a device, inclusion/exclusion pairs/unpairs hardware,
-    # and a network optimize is estate-wide radio traffic.
-    "zwave_send_config_parameter", "zwave_start_network_optimize", "zwave_stop_network_optimize",
-    "zwave_enter_inclusion_mode", "zwave_enter_exclusion_mode", "zwave_exit_inclusion_exclusion_mode",
-    # Outbound webhooks — registering an egress target POSTs home state to an
-    # external URL, strictly more sensitive than a WRITE (data-leaving-the-house).
-    "webhook_create", "webhook_list", "webhook_delete",
-    # Raw server access — ADMIN despite being read-only. It reaches undocumented
-    # internals whose surface we do not fully know, so it is classified by what
-    # it can REACH, not by what today's Get-only guard permits.
-    "raw_server_request",
-}
+def __getattr__(name: str):
+    if name in _SCOPE_SETS:
+        from .. import registry
+        return set(registry.names_in_scope(_SCOPE_SETS[name]))
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _registry_scope(tool_name: str) -> Optional[str]:
+    from .. import registry
+    spec = registry.spec_for(tool_name)
+    return spec.scope if spec is not None else None
+
 
 # Plugin-provided tools (v2.26.0). They are registered at runtime from other
 # plugins' manifests, so they cannot appear in the static sets above. Each is
@@ -185,21 +112,19 @@ def dynamic_scope_names() -> Set[str]:
     return set(_DYNAMIC_SCOPES)
 
 
-# Order matters: a name should never be in more than one set (audit enforces it),
-# but if it somehow is, the higher privilege wins.
 def required_scope_for(tool_name: str) -> str:
-    """Return the scope name required to invoke *tool_name* (fail-closed)."""
-    if tool_name in ADMIN_TOOLS:
-        return "admin"
-    if tool_name in WRITE_TOOLS:
-        return "write"
-    if tool_name in READ_TOOLS:
-        return "read"
+    """Return the scope name required to invoke *tool_name* (fail-closed).
+
+    The registry wins over a dynamic (plugin-provided) classification — the
+    external-tool manager already refuses a name that collides with a built-in.
+    """
+    scope = _registry_scope(tool_name)
+    if scope is not None:
+        return scope
     if tool_name in _DYNAMIC_SCOPES:
         return _DYNAMIC_SCOPES[tool_name]
-    # Unclassified — fail closed. audit_classification() will have logged an
-    # ERROR for this at startup; require admin so a new tool can never be
-    # reachable by a read/write token until it is explicitly classified.
+    # Unknown — fail closed, so nothing can reach a read/write token until it
+    # is declared somewhere that classifies it.
     return "admin"
 
 
@@ -351,36 +276,32 @@ class ScopeManager:
 
     def audit_classification(self, tool_names) -> Dict[str, List[str]]:
         """
-        Verify every registered tool is classified into exactly one bucket.
-        Logs an ERROR for any unclassified tool (which fails closed to 'admin')
-        and a WARNING for any name in more than one bucket. Returns a report.
+        Verify every registered tool is classified. A registry tool always is;
+        a plugin-provided one is classified when it registers. Anything else in
+        the list is unclassified, logged as an ERROR, and fails closed to admin.
+        Returns a report.
         """
+        from .. import registry
         names = set(tool_names or [])
-        union = READ_TOOLS | WRITE_TOOLS | ADMIN_TOOLS
+        built_in = set(registry.load())
         dynamic = names & dynamic_scope_names()
-        unclassified = sorted(names - union - dynamic)
-        multi = sorted(
-            n for n in names
-            if (n in READ_TOOLS) + (n in WRITE_TOOLS) + (n in ADMIN_TOOLS) > 1
-        )
-        stale = sorted(union - names)   # classified but not registered
+        unclassified = sorted(names - built_in - dynamic)
+        stale = sorted(built_in - names)   # declared but not registered on this handler
         if unclassified:
             self.logger.error(
                 f"\tScope classification GAP — {len(unclassified)} registered tool(s) "
                 f"are unclassified and will require ADMIN: {unclassified}"
             )
-        if multi:
-            self.logger.warning(f"\tScope classification: tool(s) in multiple buckets: {multi}")
         if stale:
-            self.logger.debug(f"\tScope classification: classified-but-not-registered: {stale}")
-        if not unclassified and not multi:
+            self.logger.debug(f"\tScope classification: declared-but-not-registered: {stale}")
+        if not unclassified:
+            counts = {sc: len(names & registry.names_in_scope(sc)) for sc in ("read", "write", "admin")}
             self.logger.info(
                 f"\tScope classification OK — {len(names)} tools "
-                f"(read={len(READ_TOOLS & names)}, write={len(WRITE_TOOLS & names)}, "
-                f"admin={len(ADMIN_TOOLS & names)}"
+                f"(read={counts['read']}, write={counts['write']}, admin={counts['admin']}"
                 + (f", plugin-provided={len(dynamic)}" if dynamic else "") + ")"
             )
-        return {"unclassified": unclassified, "multi_classified": multi, "stale": stale}
+        return {"unclassified": unclassified, "multi_classified": [], "stale": stale}
 
     # ── Lookup ────────────────────────────────────────────────────────────
 

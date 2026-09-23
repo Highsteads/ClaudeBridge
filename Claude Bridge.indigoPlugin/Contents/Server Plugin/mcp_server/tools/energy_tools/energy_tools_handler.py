@@ -22,23 +22,12 @@ except ImportError:
     pass
 
 from ..base_handler import BaseToolHandler
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 
 SIGEN_PLUGIN_ID = "com.clives.indigoplugin.sigenergy-energy-manager"
-
-def _sigen_log_dir() -> Optional[str]:
-    """Return the SigenEnergyManager log directory path."""
-    base = indigo.server.getInstallFolderPath()
-    log_dir = os.path.join(
-        base, "Preferences", "Plugins", SIGEN_PLUGIN_ID, "logs"
-    )
-    return log_dir if os.path.isdir(log_dir) else None
-
-
-def _log_file_for_date(log_dir: str, date: datetime) -> Optional[str]:
-    path = os.path.join(log_dir, date.strftime("%Y-%m-%d") + ".log")
-    return path if os.path.isfile(path) else None
-
 
 def _clamp(value: Any, default: int, lo: int, hi: int) -> int:
     try:
@@ -122,61 +111,11 @@ class EnergyToolsHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None,
     ):
         super().__init__(tool_name="energy_tools", logger=logger)
         self.data_provider = data_provider
-
-    # ────────────────────────────────────────────────────────────────────────
-    # energy_log_days
-    # ────────────────────────────────────────────────────────────────────────
-
-    def energy_log_days(self, days: int = 3) -> Dict[str, Any]:
-        """
-        Return raw log lines from the last N days of SigenEnergyManager logs.
-        Useful for asking Claude to reason about specific events.
-        """
-        self.log_incoming_request("energy_log_days", {"days": days})
-        try:
-            log_dir = _sigen_log_dir()
-            if not log_dir:
-                return {"success": False,
-                        "error": "SigenEnergyManager log directory not found"}
-
-            try:
-                days = int(days)
-            except (ValueError, TypeError):
-                days = 3
-            days = max(1, min(days, 14))  # cap at 14 days
-            today  = datetime.now()
-            result_lines: Dict[str, List[str]] = {}
-
-            for i in range(days):
-                date    = today - timedelta(days=i)
-                logpath = _log_file_for_date(log_dir, date)
-                if not logpath:
-                    continue
-                try:
-                    with open(logpath, "r", encoding="utf-8", errors="replace") as fh:
-                        lines = [l.rstrip() for l in fh if l.strip()]
-                    result_lines[date.strftime("%Y-%m-%d")] = lines
-                except OSError:
-                    pass
-
-            result = {
-                "success":    True,
-                "days":       days,
-                "log_dir":    log_dir,
-                "dates_found": list(result_lines.keys()),
-                "logs":       result_lines,
-            }
-            total = sum(len(v) for v in result_lines.values())
-            self.log_tool_outcome("energy_log_days", True,
-                                  f"{total} log lines across {len(result_lines)} days")
-            return result
-        except Exception as exc:
-            return self.handle_exception(exc, "energy_log_days")
 
     # ────────────────────────────────────────────────────────────────────────
     # energy_daily_summary / energy_compare

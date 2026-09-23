@@ -13,7 +13,7 @@ Provides configuration health checks and housekeeping analysis:
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 try:
     import indigo
@@ -22,7 +22,10 @@ except ImportError:
 
 from ..base_handler import BaseToolHandler
 from ...common.device_props import device_address
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.battery import battery_pct as _battery_pct
 from ...common.script_refs import (
     scripts_dirs as _scripts_dirs,
@@ -51,7 +54,7 @@ class AuditHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None,
     ):
         super().__init__(tool_name="audit", logger=logger)
@@ -357,7 +360,7 @@ class AuditHandler(BaseToolHandler):
                     "script folder (Scripts + Python Scripts) AND no getDependencies "
                     "link. This is a CANDIDATE list, NOT 'safe to delete' — a plugin "
                     "that hard-codes the ID in its own source cannot be detected here. "
-                    "Always re-check (e.g. dependency_map) immediately before deleting."
+                    "Always re-check (e.g. find_automation_references) immediately before deleting."
                 ),
                 "unreferenced": unused,
                 "problematic":  problematic,
@@ -538,117 +541,3 @@ class AuditHandler(BaseToolHandler):
             return result
         except Exception as exc:
             return self.handle_exception(exc, "find_conflicts")
-
-    @staticmethod
-    def _deps_to_dict(deps) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Normalise an indigo.Dict returned by getDependencies() into a plain
-        dict keyed by category, each holding a list of {"id", "name"} entries.
-
-        getDependencies returns categories (triggers, schedules, actionGroups,
-        devices, variables, controlPages) each a list of indigo.Dict entries
-        keyed "ID" / "Name" (capitalised).
-        """
-        out: Dict[str, List[Dict[str, Any]]] = {}
-        if not deps:
-            return out
-        try:
-            for category, items in dict(deps).items():
-                bucket: List[Dict[str, Any]] = []
-                for it in (items or []):
-                    try:
-                        bucket.append({"id": it["ID"], "name": it["Name"]})
-                    except Exception:
-                        # Unexpected entry shape — preserve it as a string.
-                        bucket.append({"raw": str(it)})
-                out[category] = bucket
-        except Exception:
-            pass
-        return out
-
-    def dependency_map(self, entity_id: Union[int, str]) -> Dict[str, Any]:
-        """
-        Build a dependency map for a device or variable.
-
-        Uses indigo.<ns>.getDependencies(), the authoritative reverse-dependency
-        API, to return exactly which triggers, schedules, action groups, control
-        pages, devices and variables reference this entity. Also returns which
-        Python scripts reference it by numeric ID (scripts are not covered by
-        getDependencies).
-        """
-        self.log_incoming_request("dependency_map", {"entity_id": entity_id})
-        try:
-            # Resolve ID and name
-            eid   = None
-            ename = str(entity_id)
-            entity_type = "unknown"
-
-            try:
-                eid = int(entity_id)
-            except (ValueError, TypeError):
-                pass
-
-            # Try device
-            dev = None
-            if eid and eid in indigo.devices:
-                dev = indigo.devices[eid]
-                eid, ename, entity_type = dev.id, dev.name, "device"
-            elif str(entity_id) in indigo.devices:
-                dev = indigo.devices[str(entity_id)]
-                eid, ename, entity_type = dev.id, dev.name, "device"
-
-            # Try variable
-            var = None
-            if entity_type == "unknown":
-                if eid and eid in indigo.variables:
-                    var = indigo.variables[eid]
-                    eid, ename, entity_type = var.id, var.name, "variable"
-                elif str(entity_id) in indigo.variables:
-                    var = indigo.variables[str(entity_id)]
-                    eid, ename, entity_type = var.id, var.name, "variable"
-
-            if entity_type == "unknown":
-                return {"success": False,
-                        "error": f"No device or variable found matching '{entity_id}'"}
-
-            # Scan scripts (getDependencies does not cover script bodies)
-            id_map       = _scan_scripts_for_ids(_scripts_dirs())
-            scripts_refs = id_map.get(eid, [])
-
-            # Authoritative reverse-dependency set via getDependencies
-            references: Dict[str, List[Dict[str, Any]]] = {}
-            dep_note = None
-            try:
-                ns = indigo.device if entity_type == "device" else indigo.variable
-                references = self._deps_to_dict(ns.getDependencies(eid))
-            except Exception as dep_exc:
-                dep_note = (
-                    f"getDependencies unavailable for this entity ({dep_exc}); "
-                    f"only script references are shown."
-                )
-
-            result = {
-                "success":      True,
-                "entity_id":    eid,
-                "entity_name":  ename,
-                "entity_type":  entity_type,
-                "script_references": {
-                    "count":   len(scripts_refs),
-                    "scripts": scripts_refs,
-                },
-                "references": references,
-                "note": (
-                    "'references' is the authoritative reverse-dependency set from "
-                    "indigo.getDependencies (triggers/schedules/action groups/control "
-                    "pages/devices/variables that reference this entity). It does NOT "
-                    "include Python scripts (see 'script_references') or any plugin "
-                    "that hard-codes the ID in its own source."
-                ),
-            }
-            if dep_note:
-                result["dependency_warning"] = dep_note
-            self.log_tool_outcome("dependency_map", True,
-                                  f"{len(scripts_refs)} script refs for '{ename}'")
-            return result
-        except Exception as exc:
-            return self.handle_exception(exc, "dependency_map")

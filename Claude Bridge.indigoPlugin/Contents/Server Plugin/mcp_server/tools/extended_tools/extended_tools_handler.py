@@ -25,7 +25,10 @@ except ImportError:
     pass
 
 from ..base_handler import BaseToolHandler
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.control_page import PAGE_FLAGS_WITH_ACTIONS, describe_element
 
 
@@ -102,7 +105,7 @@ class ExtendedToolsHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None,
     ):
         super().__init__(tool_name="extended_tools", logger=logger)
@@ -377,18 +380,6 @@ class ExtendedToolsHandler(BaseToolHandler):
         except Exception as exc:
             return self.handle_exception(exc, "schedule_remove_delayed_actions")
 
-    def schedule_get_dependencies(self, schedule_id) -> Dict[str, Any]:
-        """Return the indigo.Dict of dependents for a schedule, as a plain dict."""
-        self.log_incoming_request("schedule_get_dependencies", {"schedule_id": schedule_id})
-        try:
-            sid = _coerce_id(schedule_id)
-            deps = indigo.schedule.getDependencies(sid)
-            # indigo.Dict converts cleanly via dict(...)
-            deps_dict = _deps_to_plain(deps)
-            return {"success": True, "schedule_id": sid, "dependencies": deps_dict}
-        except Exception as exc:
-            return self.handle_exception(exc, "schedule_get_dependencies")
-
     # ════════════════════════════════════════════════════════════════════════
     # Trigger CRUD
     # ════════════════════════════════════════════════════════════════════════
@@ -461,29 +452,42 @@ class ExtendedToolsHandler(BaseToolHandler):
     # both always raised AttributeError. Action groups cannot be enabled/disabled
     # (unlike triggers and schedules) — there is nothing to wrap.
 
-    def action_group_get_dependencies(self, action_group_id) -> Dict[str, Any]:
-        """Return the dependents of an action group as a plain dict."""
-        self.log_incoming_request("action_group_get_dependencies",
-                                  {"action_group_id": action_group_id})
-        try:
-            aid = _coerce_id(action_group_id)
-            deps = indigo.actionGroup.getDependencies(aid)
-            deps_dict = _deps_to_plain(deps)
-            return {"success": True, "action_group_id": aid, "dependencies": deps_dict}
-        except Exception as exc:
-            return self.handle_exception(exc, "action_group_get_dependencies")
+    # Every kind getDependencies() exists for: (IOM namespace, collection).
+    _DEPENDENCY_KINDS = {
+        "device":       ("device", "devices"),
+        "variable":     ("variable", "variables"),
+        "trigger":      ("trigger", "triggers"),
+        "schedule":     ("schedule", "schedules"),
+        "action_group": ("actionGroup", "actionGroups"),
+    }
 
-    def trigger_get_dependencies(self, trigger_id) -> Dict[str, Any]:
-        """Return the dependents of a trigger as a plain dict (parity with the
-        schedule/action-group versions — trigger.getDependencies exists too)."""
-        self.log_incoming_request("trigger_get_dependencies", {"trigger_id": trigger_id})
+    def get_dependencies(self, kind: str, entity_id) -> Dict[str, Any]:
+        """Indigo's own getDependencies() for any object, as a plain dict.
+
+        One method for every kind rather than one per kind: they differed only
+        in the namespace they called. An id is preferred; an exact name is
+        looked up in the matching collection.
+        """
+        self.log_incoming_request("get_dependencies", {"kind": kind, "id": entity_id})
         try:
-            tid = _coerce_id(trigger_id)
-            deps = indigo.trigger.getDependencies(tid)
-            deps_dict = _deps_to_plain(deps)
-            return {"success": True, "trigger_id": tid, "dependencies": deps_dict}
+            if kind not in self._DEPENDENCY_KINDS:
+                return {"success": False,
+                        "error": f"kind must be one of {', '.join(self._DEPENDENCY_KINDS)}"}
+            namespace, collection_name = self._DEPENDENCY_KINDS[kind]
+            collection = getattr(indigo, collection_name)
+            try:
+                eid = _coerce_id(entity_id)
+            except ValueError:
+                try:
+                    eid = collection[str(entity_id)].id
+                except Exception:
+                    return {"success": False,
+                            "error": f"No {kind.replace('_', ' ')} called {entity_id!r}"}
+            deps = getattr(indigo, namespace).getDependencies(eid)
+            return {"success": True, "kind": kind, "id": eid,
+                    "dependencies": _deps_to_plain(deps)}
         except Exception as exc:
-            return self.handle_exception(exc, "trigger_get_dependencies")
+            return self.handle_exception(exc, "get_dependencies")
 
     # ════════════════════════════════════════════════════════════════════════
     # Z-Wave management (config parameters, network heal, inclusion/exclusion)
@@ -571,13 +575,13 @@ class ExtendedToolsHandler(BaseToolHandler):
     def zwave_enter_inclusion_mode(self, use_encryption: bool = False) -> Dict[str, Any]:
         """Put the Z-Wave controller into INCLUSION mode to add a new device. The
         controller stays in this mode until a device is added or you call
-        zwave_exit_inclusion_exclusion_mode. Physically pairs hardware."""
+        zwave(action='exit_inclusion_exclusion'). Physically pairs hardware."""
         self.log_incoming_request("zwave_enter_inclusion_mode",
                                   {"use_encryption": use_encryption})
         try:
             indigo.zwave.enterInclusionMode(useEncryption=_coerce_bool(use_encryption))
             msg = ("Z-Wave controller is now in INCLUSION mode — activate the new device's "
-                   "pairing/learn button. Call zwave_exit_inclusion_exclusion_mode to cancel.")
+                   "pairing/learn button. Call zwave(action='exit_inclusion_exclusion') to cancel.")
             self.log_tool_outcome("zwave_enter_inclusion_mode", True, msg)
             return {"success": True, "mode": "inclusion",
                     "encrypted": _coerce_bool(use_encryption), "message": msg}
@@ -591,7 +595,7 @@ class ExtendedToolsHandler(BaseToolHandler):
         try:
             indigo.zwave.enterExclusionMode()
             msg = ("Z-Wave controller is now in EXCLUSION mode — activate the device's "
-                   "pairing/learn button to remove it. Call zwave_exit_inclusion_exclusion_mode to cancel.")
+                   "pairing/learn button to remove it. Call zwave(action='exit_inclusion_exclusion') to cancel.")
             self.log_tool_outcome("zwave_enter_exclusion_mode", True, msg)
             return {"success": True, "mode": "exclusion", "message": msg}
         except Exception as exc:
@@ -753,25 +757,6 @@ class ExtendedToolsHandler(BaseToolHandler):
     # ════════════════════════════════════════════════════════════════════════
     # Server-level tools
     # ════════════════════════════════════════════════════════════════════════
-
-    def server_speak(self, text: str, wait: bool = False) -> Dict[str, Any]:
-        """Speak text through the Indigo server (macOS text-to-speech)."""
-        self.log_incoming_request("server_speak", {"text_len": len(text or ""), "wait": wait})
-        try:
-            text = (text or "").strip()
-            if not text:
-                return {"success": False, "error": "text is required"}
-            # _coerce_bool, not bool(): the STRING "false" is truthy, and the
-            # truthy branch is the BLOCKING one. Dispatch is single-threaded, so
-            # waitUntilDone=True freezes every tool and every device callback for
-            # as long as the utterance takes.
-            wait_flag = _coerce_bool(wait)
-            indigo.server.speak(text, waitUntilDone=wait_flag)
-            msg = f"Spoke {len(text)} chars"
-            self.log_tool_outcome("server_speak", True, msg)
-            return {"success": True, "chars": len(text), "wait": wait_flag, "message": msg}
-        except Exception as exc:
-            return self.handle_exception(exc, "server_speak")
 
     def calculate_sunrise(self, date_iso: Optional[str] = None) -> Dict[str, Any]:
         """Sunrise for today or a given YYYY-MM-DD date."""

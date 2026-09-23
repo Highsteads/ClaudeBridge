@@ -15,14 +15,14 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 ## How it works
 
-Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **159 tools** for reading and controlling your system.
+Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **69 tools** for reading and controlling your system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
 │  Claude Code        │         │  go-between script   │         │  Indigo web  │
 │  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
 │                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (159 tools) │
+│                     │         │  key automatically   │         │  (69 tools)  │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
@@ -55,7 +55,7 @@ With Claude Bridge, Claude can:
 | | |
 |---|---|
 | **[Getting started](getting-started.md)** | What you need, what it costs, the one-command install, and connecting Claude Code |
-| **[What it does](what-it-does.md)** | The 159 tools by what they let Claude do — devices, heating, energy, scripts, the event log, webhooks, audits |
+| **[What it does](what-it-does.md)** | The 69 tools by what they let Claude do — devices, heating, energy, scripts, the event log, webhooks, audits |
 | **[Working with Claude](working-with-claude.md)** | How a session goes: a script in one prompt, a plugin from a description, a bug found by reading the log. And the honest limits |
 | **[Tool reference](tools.md)** | Every tool by name, grouped by the permission it needs. Generated from the code, checked on every push |
 | **[Configuration](configuration.md)** | The Configure dialog, credentials, per-token scopes, the menu items |

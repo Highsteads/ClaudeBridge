@@ -26,7 +26,10 @@ except ImportError:
     pass
 
 from ..base_handler import BaseToolHandler
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.battery import battery_pct as _battery_pct
 
 
@@ -98,7 +101,7 @@ class HomeStatusHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None,
     ):
         super().__init__(tool_name="home_status", logger=logger)

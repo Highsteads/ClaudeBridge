@@ -45,7 +45,7 @@ def test_cache_skips_store_when_generation_bumped_during_compute():
     def _compute():
         calls["n"] += 1
         # Simulate a mutation landing WHILE this read computes.
-        cache.invalidate_for_tool("device_turn_on")
+        cache.invalidate_for_tool("device_control")
         return '{"success": true, "value": %d}' % calls["n"]
 
     # First call computes AND a mutation bumps the generation mid-compute → not stored
@@ -74,10 +74,11 @@ def test_cache_normal_store_still_works():
 # ── #43 search refresh wired for structure-changing tools ────────────────────
 
 def test_search_refresh_tools_set():
-    from mcp_server.mcp_handler import MCPHandler
-    s = MCPHandler._SEARCH_REFRESH_TOOLS
+    from mcp_server import registry
+    s = registry.search_refresh_names()
     for t in ("delete_device", "rename_device", "variable_create", "variable_delete",
+              "delete_automation", "delete_folder", "duplicate",
               "execute_indigo_python", "run_script"):
         assert t in s, t
     # a pure device on/off must NOT trigger a full index rebuild
-    assert "device_turn_on" not in s
+    assert "device_control" not in s

@@ -67,15 +67,15 @@ def test_delete_script_is_not_gated():
 
 def test_both_conditions_needed():
     _allow(True)
-    delete_gate.check("delete_trigger", {"confirm": True})   # passes
+    delete_gate.check("delete_automation", {"confirm": True})   # passes
 
     _allow(False)
     with pytest.raises(DeleteDenied):
-        delete_gate.check("delete_trigger", {"confirm": True})
+        delete_gate.check("delete_automation", {"confirm": True})
 
     _allow(True)
     with pytest.raises(DeleteDenied):
-        delete_gate.check("delete_trigger", {})
+        delete_gate.check("delete_automation", {})
 
 
 def test_missing_confirm_names_the_stale_client_cache():
@@ -88,7 +88,7 @@ def test_missing_confirm_names_the_stale_client_cache():
     """
     _allow(True)
     with pytest.raises(DeleteDenied) as exc:
-        delete_gate.check("delete_trigger", {})
+        delete_gate.check("delete_automation", {})
     message = str(exc.value)
     assert "reconnect" in message
     assert "tool list" in message
@@ -109,7 +109,7 @@ def test_confirm_must_be_the_boolean_true(truthy):
     """A truthy string is not consent — only True is."""
     _allow(True)
     with pytest.raises(DeleteDenied):
-        delete_gate.check("delete_trigger", {"confirm": truthy})
+        delete_gate.check("delete_automation", {"confirm": truthy})
 
 
 # ── Through the real dispatch path ───────────────────────────────────────────
@@ -119,10 +119,10 @@ def test_admin_token_alone_cannot_delete(tmp_path):
     _allow(False)
     called = []
     h = _make_handler(tmp_path, scopes_data=ADMIN_SCOPES, tools={
-        "delete_trigger": _tool(lambda **kw: called.append(kw) or "gone"),
+        "delete_automation": _tool(lambda **kw: called.append(kw) or "gone"),
     })
     resp = h._handle_tools_call(
-        1, {"name": "delete_trigger", "arguments": {"trigger_id": 1, "confirm": True}},
+        1, {"name": "delete_automation", "arguments": {"kind": "trigger", "id": 1, "confirm": True}},
         headers={"authorization": "Bearer root"},
     )
     assert resp["error"]["code"] == -32099
@@ -133,27 +133,35 @@ def test_enabled_and_confirmed_reaches_the_handler(tmp_path):
     _allow(True)
     called = []
     h = _make_handler(tmp_path, scopes_data=ADMIN_SCOPES, tools={
-        "delete_trigger": _tool(lambda **kw: called.append(kw) or "gone"),
+        "delete_automation": _tool(lambda **kw: called.append(kw) or "gone"),
     })
     resp = h._handle_tools_call(
-        2, {"name": "delete_trigger", "arguments": {"trigger_id": 7, "confirm": True}},
+        2, {"name": "delete_automation", "arguments": {"kind": "trigger", "id": 7, "confirm": True}},
         headers={"authorization": "Bearer root"},
     )
     assert "error" not in resp, resp
-    assert called == [{"trigger_id": 7}], "confirm must be consumed, not forwarded"
+    assert called == [{"kind": "trigger", "id": 7}], "confirm must be consumed, not forwarded"
 
 
-def test_confirm_is_declared_on_every_gated_tool(tmp_path):
-    """Undeclared, the unknown-argument check would reject the confirm itself."""
-    h = _make_handler(tmp_path, scopes_data=ADMIN_SCOPES, tools={
-        name: _tool(lambda **kw: "ok") for name in delete_gate.DESTRUCTIVE_TOOLS
-    })
-    h._declare_delete_confirmations()
-    for name in delete_gate.DESTRUCTIVE_TOOLS:
-        props = h._tools[name]["inputSchema"]["properties"]
+def test_confirm_is_declared_on_every_gated_tool():
+    """Undeclared, the unknown-argument check would reject the confirm itself.
+    The registry adds it to every destructive tool, with the gate's wording."""
+    from mcp_server import registry
+    gated = registry.destructive_names()
+    assert gated == {"delete_device", "variable_delete", "delete_automation", "delete_folder"}
+    for name in gated:
+        spec = registry.spec_for(name)
+        props = spec.input_schema["properties"]
         assert "confirm" in props, f"{name} would reject its own confirm argument"
         assert props["confirm"]["type"] == "boolean"
-        assert "confirm=true" in h._tools[name]["description"]
+        assert "confirm" not in spec.input_schema.get("required", []), \
+            "a missing confirm must reach the gate's explanation, not -32602"
+        assert "confirm=true" in spec.description
+
+
+def test_derived_set_matches_the_registry():
+    from mcp_server import registry
+    assert delete_gate.DESTRUCTIVE_TOOLS == set(registry.destructive_names())
 
 
 def test_every_gated_tool_also_requires_admin_scope():

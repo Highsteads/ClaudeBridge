@@ -13,7 +13,8 @@ For reads, both folders are searched (Python Scripts first).
 Tools:
   - read_script(name)               : return full content of a script
   - write_script(name, content)     : overwrite a script (auto-backup created)
-  - create_script(name, content)    : create a new script (fails if exists)
+  - create_script(name, content)    : create a new script (fails if exists) —
+                                      both reached through the write_script tool
   - delete_script(name)             : move a script to the _backups/_archived subfolder
   - list_script_backups(name)       : list auto-backups for a script
   - run_script(name)                : execute a script in the Indigo Python context
@@ -27,7 +28,7 @@ import shutil
 import tempfile
 import traceback as _traceback
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 try:
     import indigo
@@ -36,16 +37,15 @@ except ImportError:
 
 from ...common.output_clip import clip_into
 from ..base_handler import BaseToolHandler
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.log_levels import resolve as resolve_level
 
 BACKUP_DIR_NAME = "_backups"
 MAX_BACKUPS_PER_SCRIPT = 5
 
-# Best-effort wall-clock limit for a single run_script call — generous, since a
-# real automation script can legitimately take a while. Past this the IWS thread
-# is freed with a timeout error (worker thread orphaned; server keeps serving).
-_RUN_SCRIPT_TIMEOUT_SECONDS = 120
 
 
 def _scripts_dir() -> str:
@@ -162,7 +162,7 @@ class ScriptToolsHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None,
     ):
         super().__init__(tool_name="script_tools", logger=logger)
@@ -207,15 +207,15 @@ class ScriptToolsHandler(BaseToolHandler):
         """
         Overwrite an existing script with new content.
         A timestamped backup is created in _backups/ before writing.
-        Fails if the script does not already exist — use create_script for new scripts.
+        Fails if the script does not already exist — write_script(create=true) makes new ones.
         """
         self.log_incoming_request("write_script", {"name": name})
         try:
             path = _resolve(name)
             if not os.path.isfile(path):
                 return {"success": False,
-                        "error": (f"Script '{name}' does not exist. "
-                                  f"Use create_script to create a new script.")}
+                        "error": (f"Script '{name}' does not exist. To create a new "
+                                  f"script, call write_script with create=true.")}
 
             # Refuse to overwrite a live script if the pre-write backup failed —
             # the whole point of the auto-backup is to make this reversible. A
@@ -278,8 +278,8 @@ class ScriptToolsHandler(BaseToolHandler):
             path = _resolve(name)
             if os.path.isfile(path):
                 return {"success": False,
-                        "error": (f"Script '{name}' already exists. "
-                                  f"Use write_script to update an existing script.")}
+                        "error": (f"Script '{name}' already exists. To update it, "
+                                  f"call write_script without create (a backup is kept).")}
 
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as fh:
@@ -340,204 +340,33 @@ class ScriptToolsHandler(BaseToolHandler):
     # ────────────────────────────────────────────────────────────────────────
 
     # ────────────────────────────────────────────────────────────────────────
-    # scaffold_automation_script
-    # ────────────────────────────────────────────────────────────────────────
-
-    def scaffold_automation_script(
-        self,
-        script_name: str,
-        description: str = "",
-        device_ids: Optional[List[int]] = None,
-        variable_ids: Optional[List[int]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Generate and save a complete Python script template to the Indigo
-        Scripts folder. The scaffold includes:
-          - Documented file header (filename, description, author, date, version)
-          - log() helper function
-          - Named constants for every supplied device/variable ID
-            (names looked up live from Indigo so they're correct)
-          - Skeleton main() function with safe error handling
-        Fails if a script with that name already exists.
-        """
-        self.log_incoming_request("scaffold_automation_script",
-                                  {"script_name": script_name,
-                                   "device_ids": device_ids,
-                                   "variable_ids": variable_ids})
-        try:
-            # Validate ids up front — a non-numeric client value must never be
-            # interpolated verbatim into generated source. Invalid ids are
-            # dropped (the scaffold is advisory; a bad id is not worth failing).
-            def _valid_ids(raw):
-                out = []
-                for x in (raw or []):
-                    try:
-                        out.append(int(x))
-                    except (TypeError, ValueError):
-                        continue
-                return out
-            device_ids   = _valid_ids(device_ids)
-            variable_ids = _valid_ids(variable_ids)
-
-            path = _resolve(script_name)
-            if os.path.isfile(path):
-                return {
-                    "success": False,
-                    "error": (f"Script '{script_name}' already exists. "
-                              "Use write_script to update it."),
-                }
-
-            # Resolve device names from Indigo
-            device_lines: List[str] = []
-            if device_ids:
-                try:
-                    import indigo as _indigo
-                    for did in device_ids:
-                        try:
-                            dname = _indigo.devices[int(did)].name
-                        except Exception:
-                            dname = f"Device_{did}"
-                        const = dname.upper().replace(" ", "_").replace("-", "_")
-                        const = "".join(c if c.isalnum() or c == "_" else "_"
-                                        for c in const)
-                        device_lines.append(
-                            f"DEVICE_{const:<30} = {did}  # {dname}"
-                        )
-                except ImportError:
-                    for did in device_ids:
-                        device_lines.append(f"DEVICE_ID_{did:<25} = {did}")
-
-            # Resolve variable names from Indigo
-            variable_lines: List[str] = []
-            if variable_ids:
-                try:
-                    import indigo as _indigo
-                    for vid in variable_ids:
-                        try:
-                            vname = _indigo.variables[int(vid)].name
-                        except Exception:
-                            vname = f"Variable_{vid}"
-                        const = vname.upper().replace(" ", "_").replace("-", "_")
-                        const = "".join(c if c.isalnum() or c == "_" else "_"
-                                        for c in const)
-                        variable_lines.append(
-                            f"VARIABLE_{const:<28} = {vid}  # {vname}"
-                        )
-                except ImportError:
-                    for vid in variable_ids:
-                        variable_lines.append(f"VARIABLE_ID_{vid:<21} = {vid}")
-
-            now     = datetime.now()
-            stem    = os.path.basename(path)[:-3]
-            desc    = description or f"{stem} automation script"
-
-            ids_block = ""
-            if device_lines or variable_lines:
-                ids_block = "\n# ── Device / Variable IDs ────────────────────────────────────────────────\n"
-                if device_lines:
-                    ids_block += "\n".join(device_lines) + "\n"
-                if variable_lines:
-                    ids_block += "\n".join(variable_lines) + "\n"
-                ids_block += "\n"
-
-            content = f"""\
-#! /usr/bin/env python
-# -*- coding: utf-8 -*-
-# Filename:    {os.path.basename(path)}
-# Description: {desc}
-# Author:      CliveS & Claude
-# Date:        {now.strftime("%d-%m-%Y")}
-# Version:     1.0
-
-# ── Imports ───────────────────────────────────────────────────────────────────
-import logging
-from datetime import datetime
-import indigo  # noqa
-
-{ids_block}
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-_LOG_LEVELS = {{
-    "DEBUG":   logging.DEBUG,
-    "INFO":    logging.INFO,
-    "WARNING": logging.WARNING,
-    "ERROR":   logging.ERROR,
-}}
-
-
-def log(message, level="INFO"):
-    # Indigo's level= wants a Python logging INT. A STRING is silently ignored
-    # and the line logs as plain Info — so map the name first, or every WARNING
-    # and ERROR this script raises will render as an ordinary Info line.
-    if not isinstance(level, int):
-        level = _LOG_LEVELS.get(str(level).upper(), logging.INFO)
-    indigo.server.log(f"[{{datetime.now().strftime('%H:%M:%S.%f')[:-3]}}] {{message}}",
-                      level=level)
-
-
-# ── Main logic ────────────────────────────────────────────────────────────────
-
-def main():
-    \"\"\"
-    {desc}
-    \"\"\"
-    try:
-        log("Script started")
-
-        # ── TODO: add your logic here ──────────────────────────────────────
-
-
-        log("Script complete")
-    except Exception as exc:
-        log(f"ERROR in {stem}: {{exc}}", "ERROR")
-        raise
-
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    main()
-"""
-
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(content)
-
-            lines_count = content.count("\n") + 1
-            result = {
-                "success":      True,
-                "name":         os.path.basename(path),
-                "path":         path,
-                "lines":        lines_count,
-                "device_ids":   device_ids or [],
-                "variable_ids": variable_ids or [],
-                "message":      (f"Scaffold '{script_name}' created "
-                                 f"({lines_count} lines). "
-                                 f"Edit in Indigo or use write_script to update."),
-            }
-            self.log_tool_outcome("scaffold_automation_script", True,
-                                  result["message"])
-            return result
-        except Exception as exc:
-            return self.handle_exception(exc, "scaffold_automation_script")
-
-    # ────────────────────────────────────────────────────────────────────────
     # run_script
     # ────────────────────────────────────────────────────────────────────────
 
-    def run_script(self, name: str) -> Dict[str, Any]:
+    def run_script(self, name: Optional[str] = None, wait_seconds: Any = None,
+                   job_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Execute a Python script in the Indigo Python context.
+        Execute a Python script in the Indigo Python context, as a job.
 
         The script is looked up in Python Scripts (then Scripts) and executed
         via exec() with the `indigo` module pre-injected into globals — bare
         references like `indigo.devices.iter(...)` work without an explicit
-        `import indigo`, matching Indigo's own GUI action runner.  stdout and
-        stderr are captured.  Suitable for short automation scripts;
-        long-running scripts should be triggered via action groups instead.
+        `import indigo`, matching Indigo's own GUI action runner. stdout and
+        stderr are captured. The call waits up to wait_seconds; a script still
+        running after that returns a job_id to collect it with (see
+        common/exec_lock.py).
         """
-        self.log_incoming_request("run_script", {"name": name})
+        from ...common import exec_lock
+
+        self.log_incoming_request("run_script", {"name": name, "job_id": job_id})
         try:
+            if job_id:
+                if name:
+                    return {"success": False,
+                            "error": "give either name (a new run) or job_id (collect one), not both"}
+                return exec_lock.collect("run_script", job_id, wait_seconds)
+            if not name:
+                return {"success": False, "error": "name is required"}
             path = _resolve(name)
             if not os.path.isfile(path):
                 return {"success": False,
@@ -548,97 +377,53 @@ if __name__ == "__main__":
 
             import io
             import sys as _sys
-            import threading as _threading
 
-            from ...common import exec_lock
-
-            # Caller-side acquire with a short timeout — see the rationale in
-            # common/exec_lock.py. Waiting the full 120s for an abandoned worker
-            # would freeze the whole plugin and then blame this script for it.
-            if not exec_lock.acquire_for_exec():
-                self.log_tool_outcome("run_script", False,
-                                      "refused — previous exec still holds the stdout lock")
-                return exec_lock.busy_error("run_script")
-
-            captured_out = io.StringIO()
-            captured_err = io.StringIO()
-            _res = {"error_msg": None, "tb_text": None}
-
-            # Run the script in a worker thread with a join timeout so a runaway
-            # script can't wedge the request thread forever (same pattern and
-            # rationale as execute_indigo_python). The worker does not touch the
-            # lock, and restores each stream only if it is still its own.
-            def _worker():
-                old_stdout = _sys.stdout
-                old_stderr = _sys.stderr
-                _sys.stdout = captured_out
-                _sys.stderr = captured_err
+            def _work() -> Dict[str, Any]:
+                captured_out = io.StringIO()
+                captured_err = io.StringIO()
+                error_msg = tb_text = None
+                # Restore each stream only if it is still the one installed
+                # here, so a late finisher cannot clobber a healthy stdout.
+                old_stdout, old_stderr = _sys.stdout, _sys.stderr
+                _sys.stdout, _sys.stderr = captured_out, captured_err
                 try:
                     code = compile(source, path, "exec")
-                    ns = {
-                        "__file__": path,
-                        "__name__": "__main__",
-                        "indigo":   indigo,
-                    }
+                    ns = {"__file__": path, "__name__": "__main__", "indigo": indigo}
                     try:
                         exec(code, ns)  # noqa: S102
-                        _res["error_msg"] = None
                     except SystemExit:
-                        _res["error_msg"] = None  # clean exit via sys.exit() is normal
+                        pass  # a clean exit via sys.exit() is normal
                     except Exception as exc:
                         # Type included: a KeyError used to arrive as just 'foo'.
-                        _res["error_msg"] = f"{type(exc).__name__}: {exc}"
-                        _res["tb_text"]   = _traceback.format_exc()
+                        error_msg = f"{type(exc).__name__}: {exc}"
+                        tb_text = _traceback.format_exc()
+                except SyntaxError as exc:
+                    error_msg = f"{type(exc).__name__}: {exc}"
+                    tb_text = _traceback.format_exc()
                 finally:
                     if _sys.stdout is captured_out:
                         _sys.stdout = old_stdout
                     if _sys.stderr is captured_err:
                         _sys.stderr = old_stderr
 
-            _t = _threading.Thread(target=_worker, daemon=True, name="mcp-run-script")
-            try:
-                _t.start()
-            except Exception:
-                exec_lock.release_after_exec()
-                raise
-            _t.join(timeout=_RUN_SCRIPT_TIMEOUT_SECONDS)
-            if _t.is_alive():
-                # Hold the lock deliberately; record the wedge so later calls
-                # fail fast and name THIS script rather than the next caller's.
-                exec_lock.mark_wedged("run_script", f"'{os.path.basename(path)}' "
-                                                    f"exceeded {_RUN_SCRIPT_TIMEOUT_SECONDS}s",
-                                      thread=_t)
-                return {
-                    "success": False, "name": os.path.basename(path), "timed_out": True,
-                    "error": (f"Script exceeded the {_RUN_SCRIPT_TIMEOUT_SECONDS}s limit and was left "
-                              "running in the background so the request thread could be freed. "
-                              "Until it finishes, further run_script / execute_indigo_python calls "
-                              "are refused immediately rather than queued. A genuinely infinite "
-                              "script needs a plugin reload from the Indigo Plugins menu."),
-                    "stdout": captured_out.getvalue()[:4000],
-                }
-            exec_lock.release_after_exec()
+                result = {"success": error_msg is None,
+                          "name": os.path.basename(path), "path": path}
+                clip_into(result, "stdout", captured_out.getvalue(), 4000)
+                clip_into(result, "stderr", captured_err.getvalue(), 2000)
+                if error_msg:
+                    result["error"] = error_msg
+                    clip_into(result, "traceback", tb_text, 4000, keep="tail")
+                self.log_tool_outcome(
+                    "run_script", result["success"],
+                    f"Ran '{name}'" + (f" — ERROR: {error_msg}" if error_msg else ""))
+                return result
 
-            error_msg = _res["error_msg"]
-            out = captured_out.getvalue()
-            err = captured_err.getvalue()
-
-            result = {
-                "success":  error_msg is None,
-                "name":     os.path.basename(path),
-                "path":     path,
-            }
-            clip_into(result, "stdout", out, 4000)
-            clip_into(result, "stderr", err, 2000)
-            if error_msg:
-                result["error"] = error_msg
-                clip_into(result, "traceback", _res["tb_text"], 4000, keep="tail")
-            self.log_tool_outcome(
-                "run_script",
-                result["success"],
-                f"Ran '{name}'" + (f" — ERROR: {error_msg}" if error_msg else ""),
-            )
-            return result
+            job, busy = exec_lock.start("run_script", f"'{os.path.basename(path)}'", _work)
+            if busy:
+                self.log_tool_outcome("run_script", False,
+                                      f"refused — job {busy['running_job_id']} holds the capture")
+                return busy
+            return exec_lock.wait(job, wait_seconds)
         except Exception as exc:
             return self.handle_exception(exc, "run_script")
 

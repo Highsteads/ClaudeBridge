@@ -9,13 +9,13 @@
 # Date:        23-09-2026
 # Version:     1.0
 
-import json
 import logging
 from unittest.mock import MagicMock
 
 import pytest
 
 from mcp_server.common.indigo_device_types import IndigoEntityType
+from conftest import call_tool
 from mcp_server.mcp_handler import MCPHandler
 
 
@@ -50,7 +50,7 @@ def _handler():
 
 def test_plural_entity_types_reach_the_search_as_canonical_values():
     h = _handler()
-    out = json.loads(h._tool_search_entities("lamp", entity_types=["devices", "variables"]))
+    out = call_tool(h, "search_entities", query="lamp", entity_types=["devices", "variables"])
     assert "error" not in out
     args = h.search_handler.search.call_args[0]
     assert args[2] == ["device", "variable"]
@@ -58,13 +58,13 @@ def test_plural_entity_types_reach_the_search_as_canonical_values():
 
 def test_a_bare_string_is_accepted_as_one_type():
     h = _handler()
-    h._tool_search_entities("lamp", entity_types="devices")
+    call_tool(h, "search_entities", query="lamp", entity_types="devices")
     assert h.search_handler.search.call_args[0][2] == ["device"]
 
 
 def test_invalid_type_error_lists_the_valid_ones():
     h = _handler()
-    out = json.loads(h._tool_search_entities("x", entity_types=["triggers"]))
+    out = call_tool(h, "search_entities", query="x", entity_types=["triggers"])
     assert "triggers" in out["error"]
     for valid in ("device", "variable", "action"):
         assert valid in out["error"]
@@ -72,8 +72,6 @@ def test_invalid_type_error_lists_the_valid_ones():
 
 
 def test_schema_enumerates_the_valid_entity_types():
-    h = object.__new__(MCPHandler)
-    h._tools = {}
-    h._register_tools()   # needs nothing but an empty registry on self
-    items = h._tools["search_entities"]["inputSchema"]["properties"]["entity_types"]["items"]
+    from mcp_server import registry
+    items = registry.spec_for("search_entities").input_schema["properties"]["entity_types"]["items"]
     assert items["enum"] == IndigoEntityType.get_all_types()

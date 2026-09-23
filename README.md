@@ -14,14 +14,14 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 ## How it works
 
-Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **159 tools** for reading and controlling your system.
+Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **69 tools** for reading and controlling your system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
 │  Claude Code        │         │  go-between script   │         │  Indigo web  │
 │  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
 │                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (159 tools) │
+│                     │         │  key automatically   │         │  (69 tools)  │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
@@ -144,9 +144,8 @@ One example of how a session goes — there are three, with what you get out of 
 Claude Code:
 1. Calls `search_entities` to find your porch light and front door sensor
 2. Calls `get_device_by_name` to confirm IDs and states
-3. Writes the script via `scaffold_automation_script` with the correct
-   IDs baked in and a `log()` helper
-4. Writes the file via `create_script`
+3. Writes the script with the correct IDs baked in and a `log()` helper
+4. Saves it with `write_script` (`create=true`)
 5. Tells you the script name and tells you to schedule it for sunset
 
 You read the result, hit Enter to commit, done. No Googling
@@ -160,11 +159,10 @@ You read the result, hit Enter to commit, done. No Googling
   click yourself.
 - **Claude reads your automations, it doesn't rewrite them blind.**
   Trigger conditions and Action Group steps used to be invisible.
-  They aren't any more — `get_trigger_details`, `get_action_group_details`
-  and `find_automation_references` read them straight out of Indigo's
-  own database, embedded scripts included. Editing them still goes
-  through `update_trigger` and `update_schedule`, which cover the
-  firing configuration rather than every step.
+  They aren't any more — `get_automation` and `find_automation_references`
+  read them straight out of Indigo's own database, embedded scripts
+  included. Editing them still goes through `update_automation`, which
+  covers names, descriptions and a trigger's event rather than every step.
 - **Vibe coding speeds you up, it doesn't think for you.** Read what
   has been written. Test the changes. The point of Claude Bridge is
   that checking is one tool call away — so use it.
@@ -175,29 +173,33 @@ You read the result, hit Enter to commit, done. No Googling
 
 ## What it does
 
-Claude Bridge gives Claude Code **159 MCP tools**, enough to read and change anything on a running
-Indigo server: **65 read** tools (pure queries), **63 write** tools (they change Indigo state) and
-**31 admin** tools (deletes, code execution, plugin lifecycle, physical security). By area:
+Claude Bridge gives Claude Code **69 MCP tools**, enough to read and change anything on a running
+Indigo server: **28 read** tools (pure queries), **21 write** tools (they change Indigo state) and
+**20 admin** tools (deletes, code execution, plugin lifecycle, physical security). By area:
 
-- **Devices** — list, search and inspect by id, name, type or state; plain-English search; on, off,
-  toggle, brightness, colour, fan speed, lock and unlock; timed actions that Indigo's own engine
-  carries out; beep and ping to find a device.
-- **Heating** — per-zone snapshots, setpoints, bumps and HVAC modes on any Indigo thermostat.
-- **Energy** — live solar, battery and grid, day-by-day analysis and comparisons.
+- **Devices** — list, search and inspect by id, name, type or state; plain-English search; one
+  `device_control` tool for on, off, toggle, brightness, colour, status, beep and ping, by id or by
+  name (an ambiguous name is refused, never guessed); fan speed, sprinklers, lock and unlock; timed
+  actions that Indigo's own engine carries out.
+- **Heating** — per-zone snapshots, and setpoints, steps, HVAC and fan modes in one
+  `thermostat_control` call.
+- **Energy** — live solar, battery and grid, day-by-day history and period comparisons.
 - **Variables, action groups, triggers and schedules** — create, read, update, organise, enable,
   disable, run and fire; read a trigger's conditions and an action group's steps out of Indigo's
   own database; find everything that references a device or variable before you touch it.
 - **Plugins** — enumerate, inspect, restart, and run any plugin's own actions.
-- **Scripts** — read, write with automatic backups, create, archive and run, in both script folders;
-  a scaffolder that writes a script in the house style with every id resolved live.
+- **Scripts** — read, write with automatic backups, create, archive and run, in both script folders.
+  A long run carries on in the background and hands back a job to collect, so the web server is
+  never held up waiting for it.
 - **The event log** — search it by keyword, device, plugin or time, including entries older than
   the Indigo window shows.
 - **Event webhooks** — the home posts a signed event to a URL you run, behind a default-deny
   firewall. Off until you turn it on.
 - **Plugin-provided tools** — any plugin that ships a manifest brings its own tools, listed under
   its prefix and forwarded to it.
-- **Audits, health, reporting and notifications** — whole-system audits and finders for what is
-  in error, quiet, orphaned or oversized; a prose status report; e-mail, Pushover and log lines.
+- **Audits, health, reporting and notifications** — one `audit` tool for whole-system checks and
+  for what is in error, quiet, orphaned or oversized; a prose status report; e-mail, Pushover and
+  log lines.
 - **A scripting shell** — arbitrary Python in Indigo's context, admin scope only.
 
 Every tool by name, with the scope it needs, is in the
@@ -272,7 +274,7 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 159 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 69 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and

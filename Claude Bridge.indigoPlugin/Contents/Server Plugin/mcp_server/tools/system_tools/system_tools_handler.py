@@ -33,7 +33,10 @@ except ImportError:
     pass
 
 from ..base_handler import BaseToolHandler
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 
 
 # ── Indigo path helpers ──────────────────────────────────────────────────────
@@ -294,7 +297,7 @@ class SystemToolsHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None,
     ):
         super().__init__(tool_name="system_tools", logger=logger)
@@ -641,7 +644,7 @@ class SystemToolsHandler(BaseToolHandler):
             scan_path = os.path.realpath(raw_path)
             if not any(scan_path == a or scan_path.startswith(a + os.sep) for a in allowed):
                 return {"success": False,
-                        "error": ("Path not permitted — find_large_files is confined to the "
+                        "error": ("Path not permitted — audit(check='large_files') is confined to the "
                                   f"Indigo install and script folders, got: {raw_path}")}
             if not os.path.isdir(scan_path):
                 return {"success": False,

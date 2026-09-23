@@ -331,7 +331,7 @@ def test_dynamic_scopes_classify_read_write_and_fail_closed():
         assert sm.required_scope_for("zz_write") == "write"
         assert sm.required_scope_for("zz_bogus") == "admin"
         assert sm.required_scope_for("zz_typo") == "admin"
-        assert sm.required_scope_for("device_turn_on") == "write", "static sets are untouched"
+        assert sm.required_scope_for("device_control") == "write", "static sets are untouched"
     finally:
         sm.unregister_dynamic_scopes(["zz_read", "zz_write", "zz_bogus", "zz_typo"])
     assert sm.required_scope_for("zz_read") == "admin", "unregistered names fail closed again"
@@ -342,12 +342,12 @@ def test_audit_counts_dynamic_tools_as_classified(tmp_path, caplog):
     try:
         sm.register_dynamic_scope("zz_ext", "read")
         with caplog.at_level(logging.INFO):
-            report = mgr.audit_classification(["device_turn_on", "zz_ext"])
+            report = mgr.audit_classification(["device_control", "zz_ext"])
         assert report["unclassified"] == []
         assert any("plugin-provided=1" in r.message for r in caplog.records)
     finally:
         sm.unregister_dynamic_scopes(["zz_ext"])
-    report = mgr.audit_classification(["device_turn_on", "zz_ext"])
+    report = mgr.audit_classification(["device_control", "zz_ext"])
     assert report["unclassified"] == ["zz_ext"], "without registration the same name is a GAP"
 
 
@@ -363,7 +363,7 @@ def _handler(tmp_path, plugin_obj=None, get_plugin=None):
     h._telemetry_lock   = threading.Lock()
     h._tool_call_log    = deque(maxlen=200)
     h._tool_error_count = 0
-    h._tools            = {"device_turn_on": {"description": "built-in", "inputSchema": {"type": "object"},
+    h._tools            = {"device_control": {"description": "built-in", "inputSchema": {"type": "object"},
                                               "function": lambda **k: "{}"}}
     h._resources        = {}
     h._sessions         = {}
@@ -389,13 +389,13 @@ def test_refresh_registers_lists_dispatches_and_forgets(tmp_path):
         result = h.refresh_external_tools(plugin_list=[bundle])
         assert result == {"tools": ["widgets_get_status", "widgets_set_mode"],
                           "providers": [PID], "removed": []}
-        assert "device_turn_on" in h._tools, "built-ins are untouched"
+        assert "device_control" in h._tools, "built-ins are untouched"
         assert sm.required_scope_for("widgets_get_status") == "read"
         assert sm.required_scope_for("widgets_set_mode") == "write"
 
         listed = h._handle_tools_list(1, {})["result"]["tools"]
         names = {t["name"] for t in listed}
-        assert {"widgets_get_status", "widgets_set_mode", "device_turn_on"} <= names
+        assert {"widgets_get_status", "widgets_set_mode", "device_control"} <= names
         ext = next(t for t in listed if t["name"] == "widgets_set_mode")
         assert ext["inputSchema"]["required"] == ["mode"]
 
@@ -416,7 +416,7 @@ def test_refresh_registers_lists_dispatches_and_forgets(tmp_path):
         # The provider vanishes: its tools go, their scopes fail closed again.
         result = h.refresh_external_tools(plugin_list=[])
         assert result["removed"] == ["widgets_get_status", "widgets_set_mode"]
-        assert "widgets_get_status" not in h._tools and "device_turn_on" in h._tools
+        assert "widgets_get_status" not in h._tools and "device_control" in h._tools
         assert sm.required_scope_for("widgets_get_status") == "admin"
     finally:
         sm.unregister_dynamic_scopes(["widgets_get_status", "widgets_set_mode"])
@@ -479,7 +479,7 @@ def test_skeletal_handler_without_the_subsystem_still_lists(tmp_path):
     external_tools attribute; tools/list must not care."""
     h = _handler(tmp_path)
     del h.external_tools
-    assert h._handle_tools_list(1, {})["result"]["tools"][0]["name"] == "device_turn_on"
+    assert h._handle_tools_list(1, {})["result"]["tools"][0]["name"] == "device_control"
 
 
 # ── the one real provider on this machine ────────────────────────────────

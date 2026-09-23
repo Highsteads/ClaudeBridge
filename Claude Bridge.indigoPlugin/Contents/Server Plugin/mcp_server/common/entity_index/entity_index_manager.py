@@ -9,7 +9,10 @@ import threading
 import time
 from typing import Optional, Dict, Any
 
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from .main import EntityIndex
 
 
@@ -18,7 +21,7 @@ class EntityIndexManager:
     
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None,
         update_interval: int = 300  # 5 minutes default
     ):

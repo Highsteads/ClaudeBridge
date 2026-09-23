@@ -115,7 +115,9 @@ def test_the_tool_reference_carries_the_generated_table():
     text = (DOCS / "tools.md").read_text(encoding="utf-8")
     assert "<!-- BEGIN TOOL TABLE -->" in text and "<!-- END TOOL TABLE -->" in text
     inner = text.split("<!-- BEGIN TOOL TABLE -->")[1].split("<!-- END TOOL TABLE -->")[0]
-    assert inner.count("| `") >= 100, "the table has not been generated into docs/tools.md"
+    from mcp_server import registry
+    assert inner.count("| `") == len(registry.load()), \
+        "the table has not been generated into docs/tools.md"
     assert "### Read tools (" in inner and "### Admin tools (" in inner
 
 

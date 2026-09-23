@@ -1,8 +1,8 @@
 # Contributing to Claude Bridge
 
 Thanks for having a look. This page tells you how to run the tests, what the
-layout is, and — the most common change — how to add a new MCP tool without
-tripping over the four places tool metadata lives.
+layout is, and — the most common change — how to add a new MCP tool, which is
+now one decorated function.
 
 ## Running the tests
 
@@ -27,7 +27,7 @@ CB_SP="$PWD/Claude Bridge.indigoPlugin/Contents/Server Plugin" python -m pytest 
 ```
 
 Lint (errors only — undefined names, unused imports; no style policing) and
-the README tool-table staleness check:
+the tool-reference and tool-count staleness check:
 
 ```bash
 pip install ruff
@@ -45,13 +45,15 @@ Claude Bridge.indigoPlugin/Contents/Server Plugin/
 ├── plugin.py               # Indigo plugin lifecycle + IWS endpoints + secrets loading
 ├── indigo_mcp_proxy.py     # stdio→HTTP bridge that Claude Code launches
 └── mcp_server/
-    ├── mcp_handler.py      # MCP protocol dispatch + tool registry
-    ├── tools/<category>/   # one handler module per tool category
+    ├── mcp_handler.py      # MCP protocol dispatch (rate limit, scopes, gate, cache)
+    ├── registry.py         # the @tool decorator and everything derived from it
+    ├── toolsets/           # every built-in tool, one module per domain
+    ├── tools/<category>/   # the handler classes the tools call
     ├── security/           # scope manager, rate limiter, egress firewall
     ├── webhooks/           # outbound event webhook engine
     └── common/             # tool cache, entity (search) index, helpers
 tests/                      # pytest suite — runs standalone, <10 s
-scripts/generate_tool_doc.py # regenerates the README tool table from the registry
+scripts/generate_tool_doc.py # writes docs/tools.md and every tool count from the registry
 ```
 
 The canonical copies of `indigo_mcp_proxy.py` and `IndigoSecrets_example.py`
@@ -62,56 +64,54 @@ fresh clone.
 
 ## Adding a new MCP tool
 
-Tool metadata lives in **four places**. Miss one and a test (or the startup
-audit) will tell you, but here is the full recipe so you don't have to find
-out the hard way:
+A tool is **one decorated function** in the right module under
+`mcp_server/toolsets/` (devices, variables, automations, organise, server,
+scripts, plugins, notify, webhooks, zwave). Everything else — the schema
+clients see, the scope check, caching and cache invalidation, the delete
+gate, error scrubbing, search-index refresh and the docs — is derived from it.
 
-1. **Implement** the behaviour in the right handler under
-   `mcp_server/tools/<category>/` (or add a new category module and wire it
-   in `MCPHandler._init_handlers()`).
-2. **Register** it in `MCPHandler._register_tools()`
-   (`mcp_server/mcp_handler.py`): a `self._tools["your_tool"] = {...}` entry
-   with `description`, `inputSchema` (declare `required` args — dispatch
-   validates them for you) and `function`.
-3. **Classify** it in `mcp_server/security/scope_manager.py` — add the name to
-   exactly one of `READ_TOOLS` / `WRITE_TOOLS` / `ADMIN_TOOLS`. Unclassified
-   tools fail closed to admin and log an ERROR at startup;
-   `tests/test_tool_registry_consistency.py` fails too.
-   Rule of thumb: pure query → read; changes Indigo state → write;
-   destructive / irreversible / code execution / physical security / data
-   leaving the house → admin.
-4. **Cache behaviour** (read tools only) in
-   `mcp_server/common/tool_cache.py`: if the result is worth caching, add the
-   name to `CACHEABLE_TOOLS` *and* make sure every mutator that would stale it
-   maps to a bucket containing it in `_INVALIDATION_MAP` — or, if only the TTL
-   can keep it fresh, add it to `TTL_ONLY_CACHEABLE` in
-   `tests/test_tool_registry_consistency.py` (a conscious decision, not a
-   default). Mutating tools that stale cached reads get an `_INVALIDATION_MAP`
-   entry of their own.
-5. **Docs**: regenerate the tool reference —
-   `python3 scripts/generate_tool_doc.py --write`. It writes `docs/tools.md`
-   (not the README, which has not carried the table since 11-09-2026), and it
-   owns both the table and the "**N tools, grouped by security scope.**"
-   sentence above it. Mention the tool in `docs/what-it-does.md` if it's
-   user-visible.
-   **Then sweep the tool count by hand.** It is quoted in prose in about a
-   dozen places across `README.md` and `docs/`, and the generator owns none of
-   them. Search for the OLD number on a word boundary:
+```python
+@tool("list_widgets", scope="read", cacheable=True, reads={"device"},
+      description="List the widgets, newest first.",
+      properties={"limit": number("Most widgets to return (default 50)")})
+def list_widgets(ctx, limit=50):
+    return ctx.extended_tools_handler.list_widgets(limit)
+```
 
-   ```bash
-   grep -rnE "\b168\b" README.md docs/*.md | grep -v "^docs/changelog.md"
-   ```
-
-   Use the word boundary rather than `"168 tools"`: two of the lines read
-   ``168 `indigo-mcp` tools``, so a phrase search silently misses them, which is
-   the same near-miss the count bug is made of. Check each hit before editing —
-   `192.168` matches, and so does a genuine 168 in older prose. Leave
-   `docs/changelog.md` alone, its entries record what was true at the time. The
-   2.26.0 note exists because this was missed and the README read 167 in seven
-   places at once.
-6. **Test**: add a behavioural test (see `tests/test_dispatch.py` for the
-   skeletal-handler pattern that needs no Indigo server), then run the full
-   suite.
+1. **Scope** — `read` (pure query), `write` (changes Indigo state) or `admin`
+   (destructive, irreversible, code execution, plugin lifecycle, physical
+   security, data leaving the house).
+2. **Arguments** — `properties` and `required` become the input schema, and
+   the function's parameters must match them exactly (`tests/test_registry.py`
+   checks). Reuse the fragments in `toolsets/_schema.py`: `DEVICE` for a device
+   by id or name (resolve it with `devices.resolve_device`, which refuses an
+   ambiguous name), `AUTOMATION_KIND`, `enum()`, `number()` and so on. If one
+   tool takes several actions, refuse arguments the chosen action does not use
+   with `unused_args()` — silently ignoring one is the bug the dispatcher's
+   unknown-argument check exists to stop.
+3. **Behaviour** — `ctx` is the `MCPHandler`: call the handler objects it holds
+   (`ctx.device_control_handler`, `ctx.extended_tools_handler`, …) or `indigo`
+   directly. Return a dict; `{"success": False, "error": ...}` for a refusal.
+   An exception becomes a failure payload for you.
+4. **Metadata** — `cacheable=True` with `reads={...}` for a read worth
+   caching; `invalidates={...}` on anything that changes what a cached read
+   shows (`{"*"}` clears the lot); `destructive=True` for a delete with no way
+   back, which adds the `confirm` argument and puts the call behind the
+   delete preference; `sensitive=True` to scrub a failure whole;
+   `redact=True` to keep a failure but blank secret values;
+   `refresh_search=True` when it adds, removes or renames devices, variables
+   or action groups. The buckets are listed in `registry.py`.
+5. **Docs** — `python3 scripts/generate_tool_doc.py --write` rewrites the
+   table in `docs/tools.md` **and every tool count written in prose** across
+   `README.md`, `docs/*.md` and the site description in `docs/_config.yml`.
+   `--check` fails on a stale count, and also on a count written in a phrasing
+   it does not know how to rewrite. It never touches `docs/changelog.md` or the
+   README's "What's new", which record what was true at the time. Mention the
+   tool in `docs/what-it-does.md` if it is user-visible.
+6. **Test** — add a behavioural test. `tests/conftest.py` has `call_tool(ctx,
+   name, **args)`, which runs a tool through the real wrapper against a
+   context you build from mocks, and `tests/test_dispatch.py` shows the
+   skeletal-handler pattern for the full dispatch path. Then run the suite.
 
 ## Conventions
 

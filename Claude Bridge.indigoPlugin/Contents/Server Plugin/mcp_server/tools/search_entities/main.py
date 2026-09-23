@@ -5,7 +5,10 @@ Search entities handler for natural language search of Indigo entities.
 import logging
 from typing import Dict, List, Any, Optional
 
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.entity_index import EntityIndex
 from ...common.indigo_device_types import DeviceClassifier
 from ...common.state_filter import StateFilter
@@ -19,7 +22,7 @@ class SearchEntitiesHandler(BaseToolHandler):
     
     def __init__(
         self, 
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         entity_index: EntityIndex,
         logger: Optional[logging.Logger] = None
     ):

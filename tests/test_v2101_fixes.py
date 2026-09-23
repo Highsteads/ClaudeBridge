@@ -129,26 +129,9 @@ def test_log_message_unknown_level_falls_back_to_info(monkeypatch):
 
 # ── scaffold_automation_script must not emit the broken log helper ───────────
 
-def test_scaffold_template_maps_level_to_int():
-    """Every generated script inherits this helper — it must map, not pass through.
-
-    The old template emitted `def log(message, level="INFO")` passing the string
-    straight to indigo.server.log, and used level="ERROR" in the top-level
-    exception handler, so a scaffolded script logged its own traceback at Info.
-    """
-    import inspect
-    import mcp_server.tools.script_tools.script_tools_handler as sth
-
-    src = inspect.getsource(sth.ScriptToolsHandler.scaffold_automation_script)
-    assert "_LOG_LEVELS.get(str(level).upper(), logging.INFO)" in src, \
-        "generated log() helper no longer maps the level name to a logging int"
-    assert 'level="ERROR"' not in src, \
-        "generated script still passes a STRING level to indigo.server.log"
-
-
 # ── cache invalidation gaps closed ───────────────────────────────────────────
 
 def test_folder_invalidation_wired():
     from mcp_server.common import tool_cache as tc
-    assert "create_variable_folder" in tc._INVALIDATION_MAP
-    assert "list_variable_folders" in tc._INVALIDATION_MAP["create_variable_folder"]
+    assert "create_folder" in tc._INVALIDATION_MAP
+    assert "list_variable_folders" in tc._INVALIDATION_MAP["create_folder"]

@@ -122,8 +122,8 @@ def test_action_group_enable_disable_removed_from_scopes():
     every = sm.READ_TOOLS | sm.WRITE_TOOLS | sm.ADMIN_TOOLS
     assert "enable_action_group" not in every
     assert "disable_action_group" not in every
-    # duplicate_action_group is a real IOM op and must remain.
-    assert "duplicate_action_group" in sm.WRITE_TOOLS
+    # duplicating an action group is a real IOM op and must remain.
+    assert "duplicate" in sm.WRITE_TOOLS
 
 
 def test_action_group_enable_disable_removed_from_invalidation_map():

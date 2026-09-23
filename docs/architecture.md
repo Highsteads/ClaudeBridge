@@ -36,13 +36,15 @@ Claude Bridge.indigoPlugin/
 │       ├── MenuItems.xml
 │       ├── PluginConfig.xml
 │       └── mcp_server/
-│           ├── mcp_handler.py              # MCP protocol implementation
+│           ├── mcp_handler.py              # MCP protocol and dispatch
+│           ├── registry.py                 # the @tool decorator; all tool metadata
+│           ├── toolsets/                   # every built-in tool (69 tools), by domain
 │           ├── adapters/                   # Indigo data provider
 │           ├── common/
 │           │   └── entity_index/           # In-memory fuzzy search index
 │           ├── handlers/                   # List/resource handlers
 │           ├── security/                   # Auth manager
-│           └── tools/                      # 18 tool handler modules (159 tools)
+│           └── tools/                      # handler classes the tools call
 │       ├── indigo_mcp_proxy.py             # Claude Code go-between script
 │       └── install.py                      # one-shot installer
 └── README.md
@@ -50,17 +52,21 @@ Claude Bridge.indigoPlugin/
 
 ---
 
-`mcp_server/` is the whole of the server: `mcp_handler.py` registers every tool and dispatches
-calls; `tools/` holds eighteen handler packages, one per area; `security/` is the scope manager,
+`mcp_server/` is the whole of the server. Each tool is one decorated function in `toolsets/`, and
+`registry.py` holds what the decorator declares — the schema, the scope, what the tool caches and
+what it invalidates, whether it is a gated delete, how its failures are scrubbed — so every other
+part reads it from there rather than keeping its own copy. `mcp_handler.py` builds the tool list
+from the registry and dispatches calls; `tools/` holds the handler classes that do the work;
+`security/` is the scope manager,
 the delete gate and the webhook egress guard; `external_tools/` reads other plugins' manifests;
 `adapters/` reads Indigo's own database file for the trigger and action-group detail the API does
 not expose; `handlers/`, `common/` and `webhooks/` are the plumbing.
 
 ## Tests
 
-Six hundred and eighty tests run without an Indigo install — `tests/conftest.py` stubs the
+The whole test suite runs without an Indigo install — `tests/conftest.py` stubs the
 `indigo` module and resolves the bundle automatically — plus a lint pass and a check that the
-generated [tool reference](tools.md) matches the code. CI runs all of it on every push.
+generated [tool reference](tools.md) and every tool count in the docs match the code. CI runs
+all of it on every push.
 [CONTRIBUTING](https://github.com/Highsteads/ClaudeBridge/blob/main/CONTRIBUTING.md) has the
-commands and the recipe for adding a tool without tripping over the four places tool metadata
-lives.
+commands and the recipe for adding a tool, which is one decorated function.

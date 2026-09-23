@@ -1,44 +1,45 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 # Filename:    generate_tool_doc.py
-# Description: Generate the MCP tool reference (docs/tools.md) from the live
-#              tool registry. Single source of truth is mcp_handler.py (tool name
-#              + description) cross-referenced with scope_manager.py
-#              (read/write/admin tier). No Indigo import — pure static AST parse,
-#              runs anywhere.
-# Author:      CliveS & Claude Opus 4.8; Claude Fable 5.1 (1.1)
-# Date:        08-06-2026 (1.1: 11-09-2026)
-# Version:     1.1
+# Description: Generate the MCP tool reference (docs/tools.md) from the tool
+#              registry, and keep every tool count written in prose in the
+#              README and the documentation site in step with it.
+# Author:      CliveS & Claude Opus 4.8; Claude Fable 5.1 (1.1); Claude Opus 5.5 (2.0)
+# Date:        08-06-2026 (1.1: 11-09-2026, 2.0: 23-09-2026)
+# Version:     2.0
 #
-# v1.1 (11-09-2026): the table moved out of the README into docs/tools.md, a page
-#   of the documentation site (GitHub Pages). The README is a front page now and
-#   carries the tier counts only. Same markers, same --write / --check contract.
-#   Also: a blank line before the END marker, or kramdown drops the last table.
+# v2.0 (23-09-2026): reads the registry itself (mcp_server/registry.py) instead
+#   of AST-parsing mcp_handler.py and scope_manager.py, which no longer hold the
+#   tools. A stub `indigo` module is installed first, exactly as tests/conftest.py
+#   does, so it still runs on a plain runner with no Indigo. It now also owns
+#   every prose tool count — README.md, docs/*.md and the site description in
+#   docs/_config.yml — and --check fails on any that is stale. Until now it kept
+#   the table and the headline current and nothing else, so the README said 159
+#   while _config.yml said 168.
+# v1.1 (11-09-2026): the table moved out of the README into docs/tools.md.
 #
 # Usage:
 #   python3 scripts/generate_tool_doc.py            # print the table to stdout
-#   python3 scripts/generate_tool_doc.py --write    # inject into docs/tools.md between markers
-#   python3 scripts/generate_tool_doc.py --check     # exit 1 if docs/tools.md is stale or a tool is unclassified
+#   python3 scripts/generate_tool_doc.py --write    # update docs/tools.md and every count
+#   python3 scripts/generate_tool_doc.py --check    # exit 1 if anything is stale
 #
 # The table is written between these markers in docs/tools.md:
 #   <!-- BEGIN TOOL TABLE -->
 #   <!-- END TOOL TABLE -->
 
 import argparse
-import re
-import ast
+import glob
 import os
+import re
 import sys
+import types
+from unittest.mock import MagicMock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUNDLE_SP = os.path.join(
-    REPO_ROOT, "Claude Bridge.indigoPlugin", "Contents", "Server Plugin"
-)
-HANDLER_PATH = os.path.join(BUNDLE_SP, "mcp_server", "mcp_handler.py")
-SCOPE_PATH = os.path.join(BUNDLE_SP, "mcp_server", "security", "scope_manager.py")
-GATE_PATH = os.path.join(BUNDLE_SP, "mcp_server", "security", "delete_gate.py")
+BUNDLE_SP = os.path.join(REPO_ROOT, "Claude Bridge.indigoPlugin", "Contents", "Server Plugin")
 DOC_PATH = os.path.join(REPO_ROOT, "docs", "tools.md")
-README_PATH = DOC_PATH   # kept for anything that imported the old name
+README_PATH = os.path.join(REPO_ROOT, "README.md")
+CONFIG_PATH = os.path.join(REPO_ROOT, "docs", "_config.yml")
 
 BEGIN_MARKER = "<!-- BEGIN TOOL TABLE -->"
 END_MARKER = "<!-- END TOOL TABLE -->"
@@ -61,116 +62,51 @@ def _read(path):
         return f.read()
 
 
-def parse_tools(handler_src):
-    """Return {tool_name: description} for every self._tools["x"] = {...} literal."""
-    tools = {}
-    tree = ast.parse(handler_src)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            # Match  self._tools["name"]
-            if (
-                isinstance(target, ast.Subscript)
-                and isinstance(target.value, ast.Attribute)
-                and target.value.attr == "_tools"
-                and isinstance(target.slice, ast.Constant)
-                and isinstance(target.slice.value, str)
-            ):
-                name = target.slice.value
-                desc = ""
-                if isinstance(node.value, ast.Dict):
-                    for k, v in zip(node.value.keys, node.value.values):
-                        if (
-                            isinstance(k, ast.Constant)
-                            and k.value == "description"
-                            and isinstance(v, ast.Constant)
-                            and isinstance(v.value, str)
-                        ):
-                            desc = v.value.strip()
-                            break
-                tools[name] = desc
-    return tools
+def _install_indigo_stub() -> None:
+    """The same stub tests/conftest.py installs: enough for the plugin's modules
+    to import on a machine with no Indigo."""
+    if "indigo" in sys.modules:
+        return
+    ind = types.ModuleType("indigo")
+
+    class _PluginBase:
+        def __init__(self, *a, **k):
+            pass
+
+    ind.PluginBase = _PluginBase
+    ind.Dict = dict
+    ind.List = list
+    for attr in ("server", "devices", "variables", "kStateImageSel", "activePlugin",
+                 "kDeviceAction", "Variable", "Device", "kHvacMode", "kFanMode",
+                 "thermostat", "dimmer", "device", "actionGroups", "triggers", "schedules"):
+        setattr(ind, attr, MagicMock())
+    sys.modules["indigo"] = ind
 
 
-def parse_delete_gate(gate_src):
-    """Return (destructive_tool_names, description_suffix) from delete_gate.py.
-
-    The gated tools have their description extended at REGISTRATION time, not
-    in the `self._tools[...] = {...}` literal, so a static parse of the handler
-    alone silently understates what those tools require — which is the exact
-    kind of doc/runtime drift this generator exists to prevent. Parsed rather
-    than imported to keep the "runs anywhere, no Indigo" property.
-    """
-    names, suffix = set(), ""
-    tree = ast.parse(gate_src)
-    for node in ast.walk(tree):
-        targets, value = [], None
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            targets, value = [node.target.id], node.value
-        elif isinstance(node, ast.Assign):
-            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            value = node.value
-        for tname in targets:
-            if tname == "DESTRUCTIVE_TOOLS" and isinstance(value, ast.Set):
-                names = {e.value for e in value.elts
-                         if isinstance(e, ast.Constant) and isinstance(e.value, str)}
-            elif tname == "CONFIRM_DESCRIPTION_SUFFIX":
-                try:
-                    suffix = ast.literal_eval(value)
-                except (ValueError, SyntaxError):
-                    suffix = ""
-    return names, suffix
+def load_registry(bundle_sp: str = BUNDLE_SP):
+    """Import the tool registry from a bundle and return {name: ToolSpec}."""
+    _install_indigo_stub()
+    if bundle_sp not in sys.path:
+        sys.path.insert(0, bundle_sp)
+    from mcp_server import registry
+    return registry.load()
 
 
-def parse_scope_sets(scope_src):
-    """Return {tool_name: 'read'|'write'|'admin'} from the three classification sets."""
-    set_to_scope = {
-        "READ_TOOLS": "read",
-        "WRITE_TOOLS": "write",
-        "ADMIN_TOOLS": "admin",
-    }
-    scopes = {}
-    tree = ast.parse(scope_src)
-    for node in ast.walk(tree):
-        # Sets are declared as either `READ_TOOLS: Set[str] = {...}` (AnnAssign)
-        # or `READ_TOOLS = {...}` (Assign). Handle both.
-        targets = []
-        value = None
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            targets = [node.target.id]
-            value = node.value
-        elif isinstance(node, ast.Assign):
-            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            value = node.value
-        for tname in targets:
-            scope = set_to_scope.get(tname)
-            if scope and isinstance(value, ast.Set):
-                for elt in value.elts:
-                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                        scopes[elt.value] = scope
-    return scopes
+def count_by_scope(reg):
+    counts = {"read": 0, "write": 0, "admin": 0}
+    for spec in reg.values():
+        counts[spec.scope] += 1
+    return counts
 
 
-def build_table(tools, scopes):
-    """Return (markdown, warnings). Mirrors required_scope_for: unlisted == admin."""
-    warnings = []
-    # Bucket tools by their effective scope.
+def build_table(reg):
+    """Return the markdown table, one section per scope."""
     buckets = {"read": [], "write": [], "admin": []}
-    for name in sorted(tools):
-        scope = scopes.get(name)
-        if scope is None:
-            # Fail-closed default — same as required_scope_for() at runtime.
-            scope = "admin"
-            warnings.append(
-                f"{name!r} is not in READ/WRITE/ADMIN_TOOLS — defaulting to admin "
-                f"(runtime audit_classification() will ERROR on this)."
-            )
-        buckets[scope].append(name)
+    for name in sorted(reg):
+        buckets[reg[name].scope].append(name)
 
-    total = len(tools)
     lines = [
-        f"<!-- AUTO-GENERATED by scripts/generate_tool_doc.py — {total} tools. Do not edit by hand. -->",
+        f"<!-- AUTO-GENERATED by scripts/generate_tool_doc.py — {len(reg)} tools. Do not edit by hand. -->",
         "",
     ]
     for scope, heading, blurb in SCOPE_ORDER:
@@ -184,89 +120,170 @@ def build_table(tools, scopes):
         lines.append("| Tool | Description |")
         lines.append("|------|-------------|")
         for name in names:
-            desc = tools[name].replace("\n", " ").replace("|", "\\|").strip()
+            desc = reg[name].description.replace("\n", " ").replace("|", "\\|").strip()
             lines.append(f"| `{name}` | {desc} |")
         lines.append("")
     # The trailing BLANK line matters: the END marker follows the table, and
     # kramdown (GitHub Pages) refuses to parse a table whose block also holds a
-    # line with no pipe in it — the whole admin table rendered as a paragraph
-    # until this was measured (11-09-2026). GitHub's README renderer forgave it.
-    return "\n".join(lines).rstrip() + "\n\n", warnings
+    # line with no pipe in it (measured 11-09-2026).
+    return "\n".join(lines).rstrip() + "\n\n"
 
 
-# The page opens by stating the count in prose, OUTSIDE the markers, so the
-# generator has to own that line as well. It did not until 14-09-2026: adding a
-# tool rewrote the table and the AUTO-GENERATED comment to 169 and left the
-# sentence above them reading 168, which is the same "count in several places,
-# only some of them maintained" fault the README's own 2.24.0 entry records.
-_HEADLINE_RE = re.compile(r"^\*\*\d+ tools, grouped by security scope\.\*\*", re.M)
-
-
-def inject(readme_src, table_md, total=None):
-    """Replace content between the markers. Returns the new page text."""
-    if BEGIN_MARKER not in readme_src or END_MARKER not in readme_src:
+def inject_table(page, table_md):
+    if BEGIN_MARKER not in page or END_MARKER not in page:
         raise SystemExit(
             f"docs/tools.md is missing the markers.\nAdd these two lines where the "
             f"table should go:\n  {BEGIN_MARKER}\n  {END_MARKER}"
         )
-    if total is not None:
-        readme_src, n = _HEADLINE_RE.subn(
-            f"**{total} tools, grouped by security scope.**", readme_src)
-        if n != 1:
-            raise SystemExit(
-                "docs/tools.md should open with one '**N tools, grouped by security "
-                f"scope.**' line for the generator to keep current, found {n}."
-            )
-    pre = readme_src.split(BEGIN_MARKER)[0]
-    post = readme_src.split(END_MARKER)[1]
+    pre = page.split(BEGIN_MARKER)[0]
+    post = page.split(END_MARKER)[1]
     return f"{pre}{BEGIN_MARKER}\n{table_md}{END_MARKER}{post}"
 
 
+# ── Prose counts ─────────────────────────────────────────────────────────────
+#
+# Every place a count of built-in tools is written in prose. A number is only
+# rewritten where the words around it say it is THE tool count, so an unrelated
+# number is never touched. History is never rewritten: docs/changelog.md is
+# skipped, and so is the README's "What's new" (a verbatim copy of the newest
+# changelog entries, pinned to it by tests/test_docs_site.py).
+
+_TOTAL_PATTERNS = [
+    re.compile(r"(\*\*)(\d+)( tools(?:, grouped by security scope\.)?\*\*)", re.I),
+    re.compile(r"(\*\*)(\d+)( MCP tools\*\*)", re.I),
+    re.compile(r"(\bThe )(\d+)( tools by what)", re.I),
+    re.compile(r"(\bsee )(\d+)( `indigo-mcp` tools)", re.I),
+    re.compile(r"(\bshould see )(\d+)( tools)", re.I),
+    re.compile(r"(\bthrough )(\d+)( tools\.)", re.I),
+    re.compile(r"(\bon top of the )(\d+)( below)", re.I),
+    re.compile(r"(\()(\d+)( tools\))", re.I),
+    re.compile(r"(— )(\d+)( tools\. Do not edit)", re.I),
+]
+_SCOPE_PATTERNS = {
+    scope: re.compile(r"(\*\*)(\d+)( " + scope + r"\*\*)") for scope in ("read", "write", "admin")
+}
+# An ASCII diagram cell like "│  (159 tools) │" must keep its width when the
+# number changes length, or the box's right edge moves.
+_DIAGRAM = re.compile(r"\((\d+) tools\)( *)(│)")
+
+
+def _protected_spans(path, text):
+    """Character ranges the count rewrite must leave alone."""
+    spans = []
+    if os.path.basename(path) == "README.md":
+        m = re.search(r"^## What's new\s*$", text, re.M)
+        if m:
+            end = re.search(r"^## ", text[m.end():], re.M)
+            spans.append((m.start(), m.end() + end.start() if end else len(text)))
+    return spans
+
+
+def _sub_outside(pattern, repl, text, spans):
+    def _fn(m):
+        if any(a <= m.start() < b for a, b in spans):
+            return m.group(0)
+        return repl(m)
+    return pattern.sub(_fn, text)
+
+
+def rewrite_counts(path, text, total, by_scope):
+    spans = _protected_spans(path, text)
+
+    def _diagram(m):
+        new = f"({total} tools)"
+        pad = len(m.group(0)) - len(m.group(3)) - len(new)
+        return new + " " * max(pad, 1) + m.group(3)
+
+    text = _sub_outside(_DIAGRAM, _diagram, text, spans)
+    spans = _protected_spans(path, text)
+    for pattern in _TOTAL_PATTERNS:
+        text = _sub_outside(pattern, lambda m: f"{m.group(1)}{total}{m.group(3)}", text, spans)
+        spans = _protected_spans(path, text)
+    for scope, pattern in _SCOPE_PATTERNS.items():
+        text = _sub_outside(pattern, lambda m, s=scope: f"{m.group(1)}{by_scope[s]}{m.group(3)}",
+                            text, spans)
+        spans = _protected_spans(path, text)
+    return text
+
+
+# A safety net for phrasings the patterns above do not know: any number
+# written within three words of "tools" that is not the current count.
+_ANY_COUNT = re.compile(r"\b(\d{2,3})((?:\s+[`*\w-]+){0,3}?)\s+tools\b")
+
+
+def stray_counts(path, text, total, by_scope):
+    """Tool counts in `text` that disagree with the registry and that
+    rewrite_counts has no pattern for. Reported, never guessed at."""
+    spans = _protected_spans(path, text)
+    found = []
+    for m in _ANY_COUNT.finditer(text):
+        if any(a <= m.start() < b for a, b in spans):
+            continue
+        scope = next((sc for sc in by_scope if sc in m.group(2)), None)
+        expected = by_scope[scope] if scope else total
+        if int(m.group(1)) != expected:
+            line = text.count("\n", 0, m.start()) + 1
+            found.append(f"{os.path.relpath(path, REPO_ROOT)}:{line}: '{m.group(0)}'")
+    return found
+
+
+def count_files():
+    files = [README_PATH, CONFIG_PATH]
+    for path in sorted(glob.glob(os.path.join(REPO_ROOT, "docs", "*.md"))):
+        if os.path.basename(path) != "changelog.md":
+            files.append(path)
+    return files
+
+
+def render_all(reg):
+    """{path: (current text, text as it should be)} for every owned file."""
+    total = len(reg)
+    by_scope = count_by_scope(reg)
+    table = build_table(reg)
+    out = {}
+    for path in count_files():
+        current = _read(path)
+        wanted = rewrite_counts(path, current, total, by_scope)
+        if path == DOC_PATH:
+            wanted = inject_table(wanted, table)
+        out[path] = (current, wanted)
+    return out
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Generate the MCP tool reference, docs/tools.md.")
-    ap.add_argument("--write", action="store_true", help="inject into docs/tools.md")
-    ap.add_argument(
-        "--check",
-        action="store_true",
-        help="exit 1 if docs/tools.md is stale or any tool is unclassified",
-    )
+    ap = argparse.ArgumentParser(description="Generate the MCP tool reference and tool counts.")
+    ap.add_argument("--write", action="store_true", help="update docs/tools.md and every count")
+    ap.add_argument("--check", action="store_true", help="exit 1 if anything is stale")
     args = ap.parse_args()
 
-    tools = parse_tools(_read(HANDLER_PATH))
-    scopes = parse_scope_sets(_read(SCOPE_PATH))
+    reg = load_registry()
+    rendered = render_all(reg)
 
-    # Mirror the registration-time augmentation so the table states the real
-    # contract for a gated delete rather than the bare literal.
-    gated, suffix = parse_delete_gate(_read(GATE_PATH))
-    for name in gated:
-        if name in tools and suffix and suffix.strip() not in tools[name]:
-            tools[name] = tools[name].rstrip() + suffix
-    table_md, warnings = build_table(tools, scopes)
-
-    for w in warnings:
-        print(f"WARNING: {w}", file=sys.stderr)
+    strays = [s for p, (_cur, want) in rendered.items()
+              for s in stray_counts(p, want, len(reg), count_by_scope(reg))]
+    for stray in strays:
+        print(f"FAIL: a tool count the generator cannot rewrite — reword it or teach "
+              f"rewrite_counts the phrase: {stray}", file=sys.stderr)
 
     if args.check:
-        current = _read(DOC_PATH)
-        expected = inject(current, table_md, len(tools))
-        stale = current != expected
-        if warnings:
-            print("FAIL: one or more tools are unclassified.", file=sys.stderr)
+        stale = [os.path.relpath(p, REPO_ROOT) for p, (cur, want) in rendered.items() if cur != want]
         if stale:
-            print(
-                "FAIL: docs/tools.md tool table is stale — run "
-                "`python3 scripts/generate_tool_doc.py --write`.",
-                file=sys.stderr,
-            )
-        sys.exit(1 if (stale or warnings) else 0)
+            print("FAIL: stale tool reference or tool count in: " + ", ".join(stale)
+                  + " — run `python3 scripts/generate_tool_doc.py --write`.", file=sys.stderr)
+        sys.exit(1 if (stale or strays) else 0)
 
     if args.write:
-        new = inject(_read(DOC_PATH), table_md, len(tools))
-        with open(DOC_PATH, "w", encoding="utf-8") as f:
-            f.write(new)
-        print(f"Wrote {len(tools)} tools into {DOC_PATH}")
+        changed = []
+        for path, (cur, want) in rendered.items():
+            if cur != want:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(want)
+                changed.append(os.path.relpath(path, REPO_ROOT))
+        print(f"{len(reg)} tools {count_by_scope(reg)}; updated: {', '.join(changed) or 'nothing'}")
+        if strays:
+            sys.exit(1)
     else:
-        print(table_md)
+        print(build_table(reg))
 
 
 if __name__ == "__main__":

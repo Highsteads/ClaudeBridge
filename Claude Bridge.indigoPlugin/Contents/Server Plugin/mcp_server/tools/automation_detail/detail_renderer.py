@@ -56,7 +56,7 @@ def decode_script_link(link_b64: Any) -> Optional[str]:
 # ── Embedded scripts ──────────────────────────────────────────────────────────
 
 # Ceiling on how much embedded source one rendered script may carry. An action
-# group can hold hundreds of lines, and get_action_group_details renders every
+# group can hold hundreds of lines, and get_automation renders every
 # step, so an uncapped renderer can hand back more text than the question was
 # worth — a context bill the caller never agreed to. Truncation is always
 # SIGNALLED, never silent: a script cut off without saying so reads as a

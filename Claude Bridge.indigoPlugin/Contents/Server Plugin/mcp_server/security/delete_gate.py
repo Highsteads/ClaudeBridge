@@ -31,23 +31,29 @@ tool gains or loses a recovery path, move it in or out of this set rather than
 adding a special case at the call site.
 """
 
-from typing import Any, Dict, Set
+from typing import Any, Dict
 
 from .. import runtime_config
 
-# Deletes with no recovery path inside Indigo or ClaudeBridge. Deliberately NOT
-# every tool whose name starts with "delete_" — see the module docstring.
-DESTRUCTIVE_TOOLS: Set[str] = {
-    "delete_trigger",
-    "delete_schedule",
-    "delete_action_group",
-    "delete_device",
-    "variable_delete",
-    # Folder deletes can cascade into their contents, so they are strictly
-    # worse than deleting one object.
-    "delete_device_folder",
-    "delete_variable_folder",
-}
+# Which tools are gated is declared on each tool (destructive=True in its
+# @tool decorator, mcp_server/registry.py): delete_device, variable_delete,
+# delete_automation and delete_folder. Folder deletes are included because they
+# can cascade into their contents, which is strictly worse than one object.
+# DESTRUCTIVE_TOOLS stays importable, derived on access.
+
+
+def __getattr__(name: str):
+    if name == "DESTRUCTIVE_TOOLS":
+        from .. import registry
+        return set(registry.destructive_names())
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def is_gated(tool_name: str) -> bool:
+    from .. import registry
+    spec = registry.spec_for(tool_name)
+    return bool(spec is not None and spec.destructive)
+
 
 # The pluginPrefs key and the label a user sees, kept together so an error
 # message can tell someone exactly which checkbox to tick.
@@ -56,10 +62,9 @@ PREFERENCE_LABEL = "Allow Claude to delete devices, variables and automations"
 
 
 # The wording appended to every gated tool's description, and the description
-# of the argument itself. Named constants because TWO things publish them: the
-# handler at registration, and scripts/generate_tool_doc.py when it writes the
-# README table. Hard-coding the text in both is how a documented contract comes
-# to disagree with the live one.
+# of the argument itself. The registry adds both when a tool is declared
+# destructive, so the live schema and the generated docs/tools.md carry the
+# same words from the same place.
 CONFIRM_DESCRIPTION_SUFFIX = (
     " Requires confirm=true AND the plugin's delete preference to be enabled."
 )
@@ -86,7 +91,7 @@ def is_enabled() -> bool:
 
 def check(tool_name: str, tool_args: Dict[str, Any]) -> None:
     """Raise DeleteDenied unless BOTH conditions hold. No-op for other tools."""
-    if tool_name not in DESTRUCTIVE_TOOLS:
+    if not is_gated(tool_name):
         return
 
     confirmed = tool_args.get("confirm") is True

@@ -5,7 +5,10 @@ Get devices by type handler for retrieving all devices of a specific type.
 import logging
 from typing import Dict, Any, Optional
 
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.indigo_device_types import IndigoDeviceType, DeviceClassifier, DeviceTypeResolver
 from ..base_handler import BaseToolHandler
 
@@ -15,7 +18,7 @@ class GetDevicesByTypeHandler(BaseToolHandler):
     
     def __init__(
         self, 
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         logger: Optional[logging.Logger] = None
     ):
         """

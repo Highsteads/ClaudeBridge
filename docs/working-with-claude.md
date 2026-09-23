@@ -39,9 +39,8 @@ Examples of how a session might go:
 Claude Code:
 1. Calls `search_entities` to find your porch light and front door sensor
 2. Calls `get_device_by_name` to confirm IDs and states
-3. Writes the script via `scaffold_automation_script` with the correct
-   IDs baked in and a `log()` helper
-4. Writes the file via `create_script`
+3. Writes the script with the correct IDs baked in and a `log()` helper
+4. Saves it with `write_script` (`create=true`)
 5. Tells you the script name and tells you to schedule it for sunset
 
 You read the result, hit Enter to commit, done. No Googling
@@ -78,8 +77,8 @@ fixes it. Each turn of the loop takes seconds, not minutes.
 
 Claude Code:
 1. `query_event_log` for recent bathroom motion events
-2. `dependency_map` for the bathroom motion sensor → which scripts and
-   action groups reference it
+2. `find_automation_references` for the bathroom motion sensor → which
+   triggers, action groups and scripts reference it
 3. `read_script` on each candidate
 4. Spots a script that compares `var.value` to `"true"` (string) when
    the variable was set as `True` (bool, coerced to `"True"`)
@@ -112,11 +111,10 @@ it in a couple of round-trips.
   click yourself.
 - **Claude reads your automations, it doesn't rewrite them blind.**
   Trigger conditions and Action Group steps used to be invisible.
-  They aren't any more — `get_trigger_details`, `get_action_group_details`
-  and `find_automation_references` read them straight out of Indigo's
-  own database, embedded scripts included. Editing them still goes
-  through `update_trigger` and `update_schedule`, which cover the
-  firing configuration rather than every step.
+  They aren't any more — `get_automation` and `find_automation_references`
+  read them straight out of Indigo's own database, embedded scripts
+  included. Editing them still goes through `update_automation`, which
+  covers names, descriptions and a trigger's event rather than every step.
 - **Vibe coding speeds you up, it doesn't think for you.** Read what
   has been written. Test the changes. The point of Claude Bridge is
   that checking is one tool call away — so use it.

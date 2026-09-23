@@ -1,7 +1,5 @@
 """
-Interfaces and abstract base classes for the MCP server components.
+Adapters between the MCP server and Indigo: the live data provider
+(indigo_data_provider.IndigoDataProvider) and the read-only .indiDb structure
+store (indidb).
 """
-
-from .data_provider import DataProvider
-
-__all__ = ['DataProvider']

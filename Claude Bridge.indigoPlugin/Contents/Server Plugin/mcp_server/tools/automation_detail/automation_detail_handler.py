@@ -26,7 +26,10 @@ except ImportError:
     pass
 
 from ..base_handler import BaseToolHandler
-from ...adapters.data_provider import DataProvider
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # type hint only — importing it here would be circular
+    from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...adapters.indidb import IndiDbStructureStore
 from ...common.script_refs import find_script_references, scripts_dirs
 from . import detail_renderer
@@ -86,7 +89,7 @@ class AutomationDetailHandler(BaseToolHandler):
 
     def __init__(
         self,
-        data_provider: DataProvider,
+        data_provider: "IndigoDataProvider",
         structure_store: IndiDbStructureStore,
         log_query_handler=None,
         logger: Optional[logging.Logger] = None,

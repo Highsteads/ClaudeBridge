@@ -25,22 +25,22 @@ def test_buckets_are_pairwise_disjoint():
 
 
 @pytest.mark.parametrize("tool", [
-    "execute_indigo_python", "run_script", "scaffold_automation_script",
-    "write_script", "create_script", "delete_script", "restart_plugin",
-    "plugin_refresh_deps", "delete_device", "delete_schedule", "delete_trigger",
-    "delete_action_group", "variable_delete", "remove_all_delayed_actions",
-    "lock_device", "unlock_device", "execute_plugin_menu_item",
-    "execute_client_menu_item",
+    "execute_indigo_python", "run_script", "write_script", "delete_script",
+    "restart_plugin", "plugin_refresh_deps", "delete_device", "delete_automation",
+    "delete_folder", "variable_delete", "remove_delayed_actions", "lock_control",
+    "execute_plugin_menu_item", "execute_client_menu_item", "execute_device_action",
+    "zwave", "webhook_create", "webhook_list", "webhook_delete", "raw_server_request",
 ])
 def test_dangerous_tools_require_admin(tool):
     assert required_scope_for(tool) == "admin", f"{tool} must be admin-scoped"
 
 
 @pytest.mark.parametrize("tool", [
-    "device_turn_on", "device_turn_off", "device_toggle", "variable_update",
-    "variable_create", "set_heat_setpoint", "set_hvac_mode", "action_execute_group",
-    "enable_schedule", "fire_trigger", "send_email", "send_notification",
-    "server_speak", "sprinkler_run", "speedcontrol_set_index", "rename_device",
+    "device_control", "thermostat_control", "speed_control", "sprinkler_control",
+    "all_devices", "variable_update", "variable_create", "action_execute_group",
+    "set_enabled", "update_automation", "fire_trigger", "send_email",
+    "send_notification", "rename_device", "duplicate", "move_to_folder",
+    "create_folder",
 ])
 def test_mutating_tools_require_at_least_write(tool):
     assert required_scope_for(tool) in ("write", "admin"), \
@@ -49,8 +49,9 @@ def test_mutating_tools_require_at_least_write(tool):
 
 @pytest.mark.parametrize("tool", [
     "list_devices", "get_device_by_id", "home_status", "search_entities",
-    "energy_status", "audit_home", "read_script", "query_event_log",
-    "find_large_files", "dependency_map", "system_health",
+    "energy_history", "audit", "read_script", "query_event_log", "server_info",
+    "get_dependencies", "get_automation", "plugin_check", "control_pages",
+    "system_health",
 ])
 def test_read_tools_are_read(tool):
     assert required_scope_for(tool) == "read"

@@ -40,6 +40,7 @@ def _make_handler(tmp_path, scopes_data=None, tools=None, per_minute=120):
     h._tool_call_log  = deque(maxlen=200)
     h._tool_error_count = 0
     h._tools          = tools or {}
+    h.entity_index_manager = None
     return h
 
 
@@ -69,11 +70,11 @@ def test_unknown_tool_returns_32602(tmp_path):
 
 def test_missing_required_argument_returns_32602_naming_the_field(tmp_path):
     h = _make_handler(tmp_path, tools={
-        "device_turn_on": _tool(lambda **kw: "ok", required=["device_id"]),
+        "device_control": _tool(lambda **kw: "ok", required=["device"]),
     })
-    resp = h._handle_tools_call(2, {"name": "device_turn_on", "arguments": {}})
+    resp = h._handle_tools_call(2, {"name": "device_control", "arguments": {}})
     assert resp["error"]["code"] == -32602
-    assert "device_id" in resp["error"]["message"]
+    assert "device" in resp["error"]["message"]
 
 
 # ── Scope enforcement through the live dispatch path ──────────────────────────
@@ -81,10 +82,10 @@ def test_missing_required_argument_returns_32602_naming_the_field(tmp_path):
 def test_read_token_denied_on_write_tool(tmp_path):
     called = []
     h = _make_handler(tmp_path, scopes_data=_READONLY_SCOPES, tools={
-        "device_turn_on": _tool(lambda **kw: called.append(1) or "ok"),
+        "device_control": _tool(lambda **kw: called.append(1) or "ok"),
     })
     resp = h._handle_tools_call(
-        3, {"name": "device_turn_on", "arguments": {"device_id": 1}},
+        3, {"name": "device_control", "arguments": {"device": 1, "action": "on"}},
         headers={"authorization": "Bearer phone"},
     )
     assert resp["error"]["code"] == -32099
@@ -205,15 +206,22 @@ def test_known_arguments_still_dispatch(tmp_path):
     assert calls == [False]
 
 
-def test_enable_device_alias_resolves(tmp_path):
+def test_enable_device_alias_resolves():
     """enable= is an accepted alias of value= and must carry the caller's
     False through to the extended handler."""
-    h = object.__new__(MCPHandler)
+    from types import SimpleNamespace
+    from mcp_server import registry
     seen = {}
-    h._ext_call = lambda name, did, value: seen.update({"name": name, "value": value}) or "ok"
-    MCPHandler._tool_enable_device(h, 42, enable=False)
-    assert seen == {"name": "enable_device", "value": False}
-    MCPHandler._tool_enable_device(h, 42)            # default stays enable
+
+    def _enable(device_id, value):
+        seen.update({"device_id": device_id, "value": value})
+        return {"success": True}
+
+    ctx = SimpleNamespace(extended_tools_handler=SimpleNamespace(enable_device=_enable))
+    fn = registry.spec_for("enable_device").func
+    fn(ctx, 42, enable=False)
+    assert seen == {"device_id": 42, "value": False}
+    fn(ctx, 42)                                  # default stays enable
     assert seen["value"] is True
-    MCPHandler._tool_enable_device(h, 42, value=False, enable=True)
+    fn(ctx, 42, value=False, enable=True)
     assert seen["value"] is False, "explicit value wins over the alias"
