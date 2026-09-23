@@ -3,9 +3,19 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5; Claude Opus 5.5 (2.27.1)
+# Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5; Claude Opus 5.5 (2.27.1-2.27.2)
 # Date:        23-09-2026
-# Version:     2.27.1
+# Version:     2.27.2
+#
+# v2.27.2 (23-09-2026): a failed execute_indigo_python / run_script now keeps
+# its traceback, stdout and stderr, with known credential VALUES replaced by
+# [redacted NAME] (new mcp_server/security/secret_redactor.py) instead of the
+# whole payload becoming "see the event log" — 85 failures in ten weeks each
+# cost a second call, and the event log never held the traceback anyway.
+# Falls back to the old scrub if the values cannot be read. A long traceback
+# now keeps its TAIL, where the exception line is. search_entities accepts
+# plural/alias entity_types ("devices", "action_groups") and its schema lists
+# the valid values — 18 of 129 calls had failed on exactly that.
 #
 # v2.27.1 (23-09-2026): every subprocess call now decodes its output as UTF-8
 # (encoding="utf-8", errors="replace"). Inside the plugin host the default

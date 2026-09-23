@@ -8,6 +8,15 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 2.27.2 (2026-09-23)
+When Claude's own code fails inside Indigo, it now gets told why.
+
+A failed `execute_indigo_python` or `run_script` used to hand back nothing but "see the Claude Bridge event log for details", and the event log held only the error's name, never the traceback or whatever the code had printed first. Claude then had to go and read the log, and over ten weeks that happened 85 times. The reply now keeps the traceback, the output and the error text, and any password, key or token that turns up in them is replaced with a marker such as `[redacted MQTT_PASSWORD]`. Claude Bridge knows which values to hide from the settings in `IndigoSecrets.py` whose names mark them as credentials, from Indigo's own API keys and from its own settings, and it reads the file afresh whenever it changes, so a new key is covered without a restart. If it cannot read those values it goes back to the old bare message rather than risk sending one. A very long traceback also used to be cut from the end, which threw away the one line that says what went wrong. It now keeps the end.
+
+`search_entities` accepts `devices`, `variables` and `action_groups` as well as the singular names it always wanted, and its description now lists the valid values. One search in seven had been failing on exactly that.
+
+34 new tests. I broke each of the six changes on purpose, and a test went red every time.
+
 ### 2.27.1 (2026-09-23)
 Clicking a plugin's menu item no longer fails when the reply contains an accent or a dash.
 

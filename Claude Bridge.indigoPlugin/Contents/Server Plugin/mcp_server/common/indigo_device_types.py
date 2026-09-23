@@ -34,6 +34,17 @@ class IndigoDeviceType(str, Enum):
         return device_type in cls.get_all_types()
 
 
+# Spellings callers reach for. 18 of 129 search_entities calls failed in ten
+# weeks on "devices" / "variables" alone (measured 23-09-2026). Module level on
+# purpose: a dict inside a str Enum class would become an enum member.
+_ENTITY_TYPE_ALIASES = {
+    "devices": "device", "variables": "variable", "var": "variable",
+    "vars": "variable", "actions": "action", "action_group": "action",
+    "action_groups": "action", "actiongroup": "action",
+    "actiongroups": "action",
+}
+
+
 class IndigoEntityType(str, Enum):
     """Enum for Indigo entity types."""
     DEVICE = "device"
@@ -49,6 +60,15 @@ class IndigoEntityType(str, Enum):
     def is_valid_type(cls, entity_type: str) -> bool:
         """Check if an entity type string is valid."""
         return entity_type in cls.get_all_types()
+
+    @classmethod
+    def normalise(cls, entity_type: Any) -> Any:
+        """Map a plural or alias to the canonical value; anything unknown is
+        returned unchanged so validation can still name it."""
+        if not isinstance(entity_type, str):
+            return entity_type
+        key = entity_type.strip().lower()
+        return _ENTITY_TYPE_ALIASES.get(key, key)
 
 
 class DeviceTypeResolver:

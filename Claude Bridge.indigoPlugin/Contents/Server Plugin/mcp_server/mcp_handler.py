@@ -5,6 +5,7 @@ Implements standards-compliant MCP protocol over Indigo's built-in web server.
 
 import json
 import logging
+import os
 import secrets
 import threading
 import time
@@ -44,6 +45,7 @@ from .tools.automation_detail import AutomationDetailHandler
 from .adapters.indidb import IndiDbStructureStore
 from .external_tools import ExternalToolManager, manifest_fingerprint
 from .security.scope_manager import register_dynamic_scope, unregister_dynamic_scopes
+from .security.secret_redactor import SecretRedactor
 from .common import device_capabilities
 
 
@@ -87,6 +89,12 @@ class MCPHandler:
         "webhook_create", "webhook_list", "webhook_delete",
     })
 
+    # The code-running subset of the above. Their failure output IS the
+    # diagnosis, so instead of dropping it whole they keep traceback, stdout
+    # and stderr with every known credential VALUE replaced (v2.27.2). If the
+    # secret values cannot be loaded they fall back to the whole-payload scrub.
+    _REDACT_ERROR_TOOLS = frozenset({"execute_indigo_python", "run_script"})
+
     # Tools that change entity STRUCTURE (the devices/variables/actions the search
     # index holds). After one of these, refresh the search index out-of-band so
     # search_entities reflects the change without waiting for the next interval.
@@ -123,6 +131,7 @@ class MCPHandler:
         self.data_provider = data_provider
         self.logger = logger or logging.getLogger("Plugin")
         self.plugin = plugin
+        self._secret_redactor: Optional[SecretRedactor] = None   # built on first failure
 
         # Session management. _sessions_lock guards every read/write/iteration
         # of _sessions under concurrent IWS dispatch.
@@ -980,7 +989,9 @@ class MCPHandler:
             if not ok:
                 with self._telemetry_lock:
                     self._tool_error_count += 1
-                if tool_name in self._SENSITIVE_ERROR_TOOLS:
+                if tool_name in self._REDACT_ERROR_TOOLS:
+                    result = self._redact_error_result(result)
+                elif tool_name in self._SENSITIVE_ERROR_TOOLS:
                     result = self._scrub_error_result(result)
             # Payload size — the real cost driver is how much the CLIENT has to
             # read, not server latency; surfaced per-tool via /health.
@@ -1033,7 +1044,9 @@ class MCPHandler:
             # Don't echo a secret-bearing tool's raw exception back to the client
             # (the response can travel over the reflector). Full detail is logged
             # above; the client gets a generic pointer to the log.
-            if tool_name in self._SENSITIVE_ERROR_TOOLS:
+            if tool_name in self._REDACT_ERROR_TOOLS:
+                detail = self._redact_error_text(str(e))
+            elif tool_name in self._SENSITIVE_ERROR_TOOLS:
                 detail = "see the Claude Bridge event log for details"
             else:
                 detail = str(e)
@@ -1112,6 +1125,50 @@ class MCPHandler:
             if key in obj:
                 scrubbed[key] = obj[key]
         return safe_json_dumps(scrubbed)
+
+    def _get_secret_redactor(self) -> SecretRedactor:
+        """Build the redactor on first use. Paths are derived from the running
+        server, never typed: IndigoSecrets.py sits at the Perceptive Automation
+        root, secrets.json under the versioned folder's Preferences."""
+        if self._secret_redactor is None:
+            import indigo
+            install = indigo.server.getInstallFolderPath()
+            plugin = self.plugin
+
+            def _plugin_prefs():
+                prefs = getattr(plugin, "pluginPrefs", None) if plugin else None
+                return dict(prefs) if prefs else {}
+
+            self._secret_redactor = SecretRedactor(
+                secrets_py_path=os.path.join(os.path.dirname(install), "IndigoSecrets.py"),
+                iws_secrets_path=os.path.join(install, "Preferences", "secrets.json"),
+                extra_values=_plugin_prefs,
+            )
+        return self._secret_redactor
+
+    def _redact_error_result(self, result: Any) -> str:
+        """Keep a code-running tool's failure output, minus every known secret
+        value. Fails closed: any problem loading the values or parsing the
+        result falls back to the whole-payload scrub."""
+        try:
+            values = self._get_secret_redactor().load()
+            obj = json.loads(result) if isinstance(result, str) else result
+            if not isinstance(obj, dict):
+                raise ValueError("failure payload is not a JSON object")
+            return safe_json_dumps(SecretRedactor.redact_obj(obj, values))
+        except Exception as exc:
+            self.logger.warning(
+                f"Error redaction unavailable ({type(exc).__name__}); "
+                f"returning the scrubbed form instead"
+            )
+            return self._scrub_error_result(result)
+
+    def _redact_error_text(self, text: str) -> str:
+        """String form of _redact_error_result, for the raised-exception path."""
+        try:
+            return SecretRedactor.redact_text(text, self._get_secret_redactor().load())
+        except Exception:
+            return "see the Claude Bridge event log for details"
 
     @staticmethod
     def _extract_bearer(headers: Dict[str, str]) -> Optional[str]:
@@ -1329,8 +1386,8 @@ class MCPHandler:
                     },
                     "entity_types": {
                         "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional entity types to search"
+                        "items": {"type": "string", "enum": ["device", "variable", "action"]},
+                        "description": "Optional entity types to search: device, variable, action (singular; 'action' means action groups). Omit to search all three."
                     },
                     "state_filter": {
                         "type": "object",
@@ -4981,15 +5038,20 @@ class MCPHandler:
                 # Use resolved types for the search
                 device_types = resolved_types
             
-            # Validate entity types
+            # Validate entity types — plurals and aliases ("devices",
+            # "action_groups") are accepted and mapped to the canonical value.
             if entity_types:
+                if isinstance(entity_types, str):
+                    entity_types = [entity_types]
+                entity_types = [IndigoEntityType.normalise(et) for et in entity_types]
                 invalid_entity_types = [
                     et for et in entity_types
                     if not IndigoEntityType.is_valid_type(et)
                 ]
                 if invalid_entity_types:
                     return safe_json_dumps({
-                        "error": f"Invalid entity types: {invalid_entity_types}",
+                        "error": (f"Invalid entity types: {invalid_entity_types} | "
+                                  f"Valid types: {IndigoEntityType.get_all_types()}"),
                         "query": query
                     })
             

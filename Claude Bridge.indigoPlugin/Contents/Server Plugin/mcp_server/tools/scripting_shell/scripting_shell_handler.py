@@ -275,7 +275,11 @@ class ScriptingShellHandler(BaseToolHandler):
             result["value"] = value_repr[:4000]
         if error_msg:
             result["error"]     = error_msg
-            result["traceback"] = (tb_text or "")[:4000]
+            # Keep the TAIL: the exception itself is the last line, and a deep
+            # traceback cut from the front used to lose exactly that line.
+            tb_text = tb_text or ""
+            result["traceback"] = (tb_text if len(tb_text) <= 4000
+                                   else "...[truncated]\n" + tb_text[-4000:])
 
         self.log_tool_outcome(
             "execute_indigo_python",

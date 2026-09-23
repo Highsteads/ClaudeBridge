@@ -49,6 +49,16 @@ says the contents are to go too.
 and it is full code execution on the Indigo server: give an admin key only to a client you would
 trust with a terminal on that Mac.
 
+When `execute_indigo_python` or `run_script` fails, the reply keeps its traceback, output and
+error text, so Claude can see what went wrong without going to the event log. Any credential
+value that appears in them is replaced with a marker such as `[redacted MQTT_PASSWORD]`. Claude
+Bridge knows the values from the settings in `IndigoSecrets.py` whose names mark them as
+credentials (KEY, TOKEN, PASSWORD, PASS, SECRET, PIN and so on), from Indigo's own API keys, and
+from its own credential settings. Addresses, usernames and email addresses are left alone, as
+are values shorter than six characters. If the values cannot be read, the reply falls back to a
+bare "see the event log". The other sensitive tools (email, notifications, webhooks, script
+creation) always return that bare message on failure.
+
 ## What a read-only key can see
 
 **A note on variable values.** The Read tools that return variables (`get_variable_by_id`,

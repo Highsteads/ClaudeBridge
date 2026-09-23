@@ -125,8 +125,10 @@ def test_sensitive_tool_error_is_scrubbed_from_client(tmp_path):
     def _boom(**kw):
         raise RuntimeError("hyper-secret /private/path leaked")
 
-    h = _make_handler(tmp_path, tools={"run_script": _tool(_boom)})
-    resp = h._handle_tools_call(6, {"name": "run_script", "arguments": {}})
+    # send_email keeps the whole-message scrub; the two code-running tools
+    # redact by value instead (see test_error_redaction.py).
+    h = _make_handler(tmp_path, tools={"send_email": _tool(_boom)})
+    resp = h._handle_tools_call(6, {"name": "send_email", "arguments": {}})
     assert resp["error"]["code"] == -32603
     assert "hyper-secret" not in resp["error"]["message"]
     assert "event log" in resp["error"]["message"]

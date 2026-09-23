@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.27.1
+**Version:** 2.27.2
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,15 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 2.27.2 (2026-09-23)
+When Claude's own code fails inside Indigo, it now gets told why.
+
+A failed `execute_indigo_python` or `run_script` used to hand back nothing but "see the Claude Bridge event log for details", and the event log held only the error's name, never the traceback or whatever the code had printed first. Claude then had to go and read the log, and over ten weeks that happened 85 times. The reply now keeps the traceback, the output and the error text, and any password, key or token that turns up in them is replaced with a marker such as `[redacted MQTT_PASSWORD]`. Claude Bridge knows which values to hide from the settings in `IndigoSecrets.py` whose names mark them as credentials, from Indigo's own API keys and from its own settings, and it reads the file afresh whenever it changes, so a new key is covered without a restart. If it cannot read those values it goes back to the old bare message rather than risk sending one. A very long traceback also used to be cut from the end, which threw away the one line that says what went wrong. It now keeps the end.
+
+`search_entities` accepts `devices`, `variables` and `action_groups` as well as the singular names it always wanted, and its description now lists the valid values. One search in seven had been failing on exactly that.
+
+34 new tests. I broke each of the six changes on purpose, and a test went red every time.
+
 ### 2.27.1 (2026-09-23)
 Clicking a plugin's menu item no longer fails when the reply contains an accent or a dash.
 
@@ -91,11 +100,6 @@ It reads menus as well as clicking them. Passing `list_only` returns the item na
 Two things it will not do. It refuses any path through Claude Bridge's own submenu, however it is spelt, because reloading the bridge kills the session that asked for it. The plugin-menu tool already refused that by name, and a tool that takes a whole path reaches the identical item by another road, so the guard had to be built again here rather than inherited. It also refuses to quit the client, that being the one click nothing on this side could undo.
 
 15 tests, each guard checked by breaking it first and watching the suite go red. The tool table is generated, and it now keeps the sentence above itself current too: adding this tool moved the table and the generated marker to 169 and left the headline reading 168, which is the same fault the 2.26.0 note records finding in seven places at once.
-
-### 2.26.2 (2026-09-11)
-The bundle now carries the standard GitHub record.
-
-Indigo plugins can carry a small note inside the bundle saying where their source lives on GitHub, spelt the way the Indigo Domotics and community plugins spell it. This one now has it, pointing at this repository. Nothing else changed.
 
 ## Vibe coding for Indigo
 
