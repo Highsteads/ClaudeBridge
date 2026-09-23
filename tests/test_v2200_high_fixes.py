@@ -18,12 +18,11 @@ import pytest
 from conftest import SERVER_PLUGIN
 
 
-# ── H1: the Configure dialog must be savable without an Anthropic key ─────────
+# ── H1: the Configure dialog must still validate what it holds ───────────────
 #
-# The field, its tooltip, its help label and startup() all call the key optional.
-# validatePrefsConfigUi disagreed, so any user without an IndigoSecrets.py could
-# not save ANY config change. Asserted against the parsed source rather than by
-# importing plugin.py, which needs the full Indigo host to construct.
+# (The Anthropic key this section once guarded went in the September 2026
+# spring clean.) Asserted against the parsed source rather than by importing
+# plugin.py, which needs the full Indigo host to construct.
 
 def _validate_prefs_source() -> str:
     path = os.path.join(SERVER_PLUGIN, "plugin.py")
@@ -35,29 +34,10 @@ def _validate_prefs_source() -> str:
     raise AssertionError("validatePrefsConfigUi not found in plugin.py")
 
 
-def test_blank_anthropic_key_is_not_a_validation_error():
-    """A blank optional key must not block the whole dialog."""
-    src = _validate_prefs_source()
-    # No error may be raised against the api-key field at all.
-    assert "errors_dict['anthropic_api_key']" not in src, (
-        "validatePrefsConfigUi still errors on the Anthropic key. The key is "
-        "optional, so a blank field must never make the dialog unsavable."
-    )
-
-
 def test_other_prefs_are_still_validated():
     """Removing the key check must not have gutted the rest of the validator."""
     src = _validate_prefs_source()
     assert "errors_dict['log_level']" in src
-
-
-def test_config_ui_does_not_call_the_key_required():
-    """The secrets banner must agree with the field: the key is optional."""
-    path = os.path.join(SERVER_PLUGIN, "PluginConfig.xml")
-    with open(path, encoding="utf-8") as fh:
-        xml = fh.read()
-    key_line = next(ln for ln in xml.splitlines() if "ANTHROPIC_API_KEY" in ln)
-    assert "required" not in key_line.lower(), key_line.strip()
 
 
 # ── H2: a wedged exec must actually refuse the next call ─────────────────────
@@ -166,54 +146,3 @@ def test_health_view_reports_worker_liveness_and_hides_the_thread():
     done.set()
     worker.join(5)
     assert exec_lock.wedged_info()["worker_alive"] is False
-
-
-# ── H3: entity-name validation must fail CLOSED ──────────────────────────────
-#
-# The names are interpolated into InfluxQL downstream. The fail-closed fix had
-# landed only in _validate_device_names, which nothing calls.
-
-def _handler_with_broken_provider():
-    from mcp_server.tools.historical_analysis.main import HistoricalAnalysisHandler
-
-    handler = object.__new__(HistoricalAnalysisHandler)
-
-    class _Boom:
-        def get_all_devices(self):
-            raise RuntimeError("data provider unavailable")
-
-        def get_all_variables(self):
-            raise RuntimeError("data provider unavailable")
-
-    handler.data_provider = _Boom()
-    handler.error_log = lambda *a, **k: None
-    handler.warning_log = lambda *a, **k: None
-    return handler
-
-
-def test_validation_error_refuses_rather_than_trusting_the_names():
-    """An exception mid-validation must not report the names as all valid."""
-    handler = _handler_with_broken_provider()
-    result = handler._validate_entity_names(["'; DROP MEASUREMENT x --"], "auto")
-
-    assert result["all_valid"] is False, (
-        "validation failed open — raw client-supplied names would reach the "
-        "InfluxQL query builder"
-    )
-    assert result["valid_entities"] == []
-    assert result["entity_classification"]["devices"] == []
-    assert result["error_message"]
-
-
-def test_the_live_validator_is_the_one_that_was_fixed():
-    """Guards the actual defect: the fix had landed in an uncalled twin.
-
-    analyze_historical_data must call the validator this test exercises.
-    """
-    path = os.path.join(SERVER_PLUGIN, "mcp_server", "tools",
-                        "historical_analysis", "main.py")
-    with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
-    entry = next(n for n in ast.walk(tree)
-                 if isinstance(n, ast.FunctionDef) and n.name == "analyze_historical_data")
-    assert "_validate_entity_names" in ast.unparse(entry)

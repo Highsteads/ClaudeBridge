@@ -2,8 +2,9 @@ name: tests
 
 # The suite runs standalone — tests/conftest.py stubs the `indigo` module and
 # falls back to the repo bundle when no live Indigo install exists, so plain
-# ubuntu runners work. Installing from the plugin's own requirements.txt also
-# proves that file is sufficient for every module the suite imports.
+# ubuntu runners work. Only pytest is installed: the plugin needs nothing beyond
+# the standard library, and running the suite on a bare Python proves it
+# (tests/test_no_third_party_deps.py checks every import as well).
 
 on:
   push:
@@ -25,10 +26,10 @@ jobs:
         with:
           python-version: "3.13"   # matches Indigo 2025.2's embedded Python
 
-      - name: Install dependencies
+      - name: Install test runner
         run: |
           python -m pip install --upgrade pip
-          pip install -r "Claude Bridge.indigoPlugin/Contents/Server Plugin/requirements.txt" pytest
+          pip install pytest
 
       - name: Run test suite
         run: python -m pytest tests -q
@@ -40,9 +41,3 @@ jobs:
 
       - name: Check the generated tool reference (docs/tools.md) is current
         run: python scripts/generate_tool_doc.py --check
-
-      - name: Dependency vulnerability audit (advisory)
-        continue-on-error: true
-        run: |
-          pip install pip-audit
-          pip-audit -r "Claude Bridge.indigoPlugin/Contents/Server Plugin/requirements.txt"

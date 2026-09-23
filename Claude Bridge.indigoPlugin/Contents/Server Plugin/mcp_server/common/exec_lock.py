@@ -153,7 +153,8 @@ def wedged_info():
 
 
 def clear_wedge() -> None:
-    """Forget a recorded wedge (used by the Clear Cache / reset menu paths)."""
+    """Forget a recorded wedge. Nothing in the plugin calls this; the tests use
+    it to reset between cases."""
     with _wedge_lock:
         _clear_wedge_locked()
 

@@ -13,90 +13,13 @@ the matching key in IndigoSecrets.py. If a value is set in NEITHER place,
 the plugin logs an ERROR pointing here and skips that feature.
 
 Keys this plugin reads:
-  ANTHROPIC_API_KEY        - Anthropic Claude API key (optional, AI summaries only)
   CLAUDEBRIDGE_BEARER_TOKEN - IWS bearer token for the MCP proxy
-  INFLUXDB_HOST / PORT / USERNAME / PASSWORD / DATABASE (optional)</Label>
+  WEBHOOK_ALLOWLIST         - extra webhook hosts (optional)
+
+No Anthropic API key is needed: Claude Code uses your own Claude account.</Label>
     </Field>
 
     <Field id="separator_secrets" type="separator"/>
-
-    <!-- Anthropic Configuration -->
-    <Field id="anthropic_api_key" type="textfield" defaultValue="" secure="true"
-           tooltip="OPTIONAL — only needed for AI summaries in the historical-analysis tool. All other tools work without it.">
-        <Label>Anthropic API Key (optional):</Label>
-    </Field>
-
-    <Field id="api_key_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
-        <Label>Optional — every MCP tool works without a key here (Claude Code uses your own
-Claude account). Only the AI summaries in the historical-analysis tool need one.
-If you want those, get a key from https://console.anthropic.com/settings/keys, or set
-ANTHROPIC_API_KEY in /Library/Application Support/Perceptive Automation/IndigoSecrets.py
-and leave this field blank.</Label>
-    </Field>
-
-    <Field id="separator1" type="separator"/>
-
-    <!-- Model Configuration -->
-    <Field id="large_model" type="menu" defaultValue="claude-sonnet-4-6">
-        <Label>Large Model:</Label>
-        <List>
-            <Option value="claude-sonnet-4-6">claude-sonnet-4-6 (Recommended)</Option>
-            <Option value="claude-opus-4-6">claude-opus-4-6 (Most Capable)</Option>
-        </List>
-    </Field>
-
-    <Field id="small_model" type="menu" defaultValue="claude-haiku-4-5-20251001">
-        <Label>Small Model:</Label>
-        <List>
-            <Option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (Fast)</Option>
-            <Option value="claude-sonnet-4-6">claude-sonnet-4-6</Option>
-        </List>
-    </Field>
-
-    <Field id="separator2" type="separator"/>
-
-    <!-- InfluxDB Configuration -->
-    <Field type="checkbox" id="enable_influxdb" defaultValue="false">
-        <Label>Enable InfluxDB Historical Data:</Label>
-        <Description>Enable access to historical device data stored in InfluxDB</Description>
-    </Field>
-
-    <Field id="influxdb_secrets_help" type="label" fontSize="small" alignWithControl="false" enabledBindingId="enable_influxdb">
-        <Label>Leave the fields below blank if INFLUXDB_HOST/PORT/USERNAME/PASSWORD/DATABASE are set in IndigoSecrets.py — those take priority.</Label>
-    </Field>
-    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_url"
-           defaultValue="">
-        <Label>InfluxDB Host:</Label>
-    </Field>
-    <Field id="label_influx_url_info" type="label">
-        <Label>InfluxDB host (e.g. 192.168.x.x) — the IndigoSecrets.py key for this is INFLUXDB_HOST. Protocol prefix is stripped.</Label>
-    </Field>
-
-    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_port"
-           defaultValue="8086">
-        <Label>InfluxDB Port:</Label>
-        <Description>InfluxDB server port (default: 8086) — the IndigoSecrets.py key for this is INFLUXDB_PORT.</Description>
-    </Field>
-
-    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_login"
-           defaultValue="">
-        <Label>InfluxDB Username:</Label>
-        <Description>Username for InfluxDB authentication</Description>
-    </Field>
-
-    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_password"
-           defaultValue="" secure="true">
-        <Label>InfluxDB Password:</Label>
-        <Description>Password for InfluxDB authentication</Description>
-    </Field>
-
-    <Field enabledBindingId="enable_influxdb" enabledBindingNegate="false" type="textfield" id="influx_database"
-           defaultValue="indigo">
-        <Label>InfluxDB Database Name:</Label>
-        <Description>Name of the database containing historical data (default: indigo)</Description>
-    </Field>
-
-    <Field id="separator_phase2" type="separator"/>
 
     <!-- Phase 2 hardening: rate limit + cache TTL  -->
     <Field id="rate_limit_per_minute" type="textfield" defaultValue="120">
@@ -170,19 +93,6 @@ and leave this field blank.</Label>
             <Option value="40">Error Messages</Option>
             <Option value="50">Critical Errors Only</Option>
         </List>
-    </Field>
-
-    <Field id="separator4" type="separator"/>
-
-    <!-- Connection Testing -->
-    <Field id="test_connections_button" type="button">
-        <Label>Test Connections</Label>
-        <Title>Test All Connections</Title>
-        <CallbackMethod>test_connections_button</CallbackMethod>
-    </Field>
-
-    <Field id="connection_status_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
-        <Label>Click to test Anthropic API and InfluxDB connections with current configuration</Label>
     </Field>
 
     <Field id="separator_deletes" type="separator"/>

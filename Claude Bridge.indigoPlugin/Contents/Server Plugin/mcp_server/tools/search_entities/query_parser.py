@@ -29,7 +29,7 @@ class QueryParser:
             
         Returns:
             Dictionary with search parameters:
-            - entity_types: List of entity types to search (plural form for vector store)
+            - entity_types: List of entity types to search (plural form, as the entity index keys them)
             - device_types: List of device types to filter by
             - top_k: Maximum number of results
             - threshold: Similarity threshold
@@ -53,7 +53,7 @@ class QueryParser:
             params["entity_types"] = ["devices"]
         # Otherwise use explicit entity_types parameter if provided
         elif entity_types is not None:
-            # Convert singular entity types to plural for vector store compatibility
+            # Convert singular entity types to the plural keys the entity index uses
             plural_mapping = {
                 "device": "devices",
                 "variable": "variables", 

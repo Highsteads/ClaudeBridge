@@ -302,12 +302,9 @@ def main():
     print("     → Enable 'Claude Bridge'")
     print("     (The plugin will auto-create its device on first enable)")
     print()
-    print("  2. If prompted for an Anthropic API key:")
-    print("     → Add ANTHROPIC_API_KEY to IndigoSecrets.py, or")
-    print("     → Enter it in Plugins → Claude Bridge → Configure")
-    print()
-    print("  3. Restart Claude Code")
-    print("     → You should see 23 indigo-mcp tools available")
+    print("  2. Restart Claude Code")
+    print("     → The indigo-mcp tools should now be available")
+    print("     (No Anthropic API key is needed — Claude Code uses your own account)")
     print()
 
 

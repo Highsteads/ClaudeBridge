@@ -3,7 +3,7 @@ Base handler class for MCP server tools with standardized logging and common fun
 """
 
 import logging
-from typing import Optional, Any
+from typing import Optional
 
 
 class BaseToolHandler:
@@ -94,54 +94,6 @@ class BaseToolHandler:
             "context": context,
             "success": False
         }
-    
-    def create_success_response(self, data: Any, message: str = "") -> dict:
-        """
-        Create a standardized success response.
-        
-        Args:
-            data: The data to include in the response
-            message: Optional success message
-            
-        Returns:
-            Dictionary with success response
-        """
-        response = {
-            "success": True,
-            "tool": self.tool_name,
-            "data": data
-        }
-        
-        if message:
-            response["message"] = message
-            self.info_log(message)
-        
-        return response
-    
-    def validate_required_params(self, params: dict, required_keys: list) -> Optional[dict]:
-        """
-        Validate that required parameters are present.
-        
-        Args:
-            params: Dictionary of parameters to validate
-            required_keys: List of required parameter keys
-            
-        Returns:
-            None if valid, error dictionary if invalid
-        """
-        missing_keys = [key for key in required_keys if key not in params or params[key] is None]
-        
-        if missing_keys:
-            error_msg = f"Missing required parameters: {', '.join(missing_keys)}"
-            self.error_log(error_msg)
-            return {
-                "error": error_msg,
-                "tool": self.tool_name,
-                "missing_parameters": missing_keys,
-                "success": False
-            }
-        
-        return None
     
     def log_incoming_request(self, operation: str, params: dict = None) -> None:
         """

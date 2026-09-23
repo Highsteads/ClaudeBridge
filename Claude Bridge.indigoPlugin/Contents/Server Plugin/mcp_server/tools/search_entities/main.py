@@ -6,7 +6,7 @@ import logging
 from typing import Dict, List, Any, Optional
 
 from ...adapters.data_provider import DataProvider
-from ...adapters.vector_store_interface import VectorStoreInterface
+from ...common.entity_index import EntityIndex
 from ...common.indigo_device_types import DeviceClassifier
 from ...common.state_filter import StateFilter
 from ..base_handler import BaseToolHandler
@@ -20,7 +20,7 @@ class SearchEntitiesHandler(BaseToolHandler):
     def __init__(
         self, 
         data_provider: DataProvider,
-        vector_store: VectorStoreInterface,
+        entity_index: EntityIndex,
         logger: Optional[logging.Logger] = None
     ):
         """
@@ -28,12 +28,12 @@ class SearchEntitiesHandler(BaseToolHandler):
         
         Args:
             data_provider: Data provider for accessing entity data
-            vector_store: Vector store instance for semantic search
+            entity_index: In-memory entity index to search
             logger: Optional logger instance
         """
         super().__init__(tool_name="search_entities", logger=logger)
         self.data_provider = data_provider
-        self.vector_store = vector_store
+        self.entity_index = entity_index
         self.query_parser = QueryParser()
         self.result_formatter = ResultFormatter()
     
@@ -75,7 +75,7 @@ class SearchEntitiesHandler(BaseToolHandler):
 
             # Text search works best with the original query — LLM expansion
             # turns "conservatory lamp" into long descriptions that break substring matching
-            raw_results, search_metadata = self.vector_store.search(
+            raw_results, search_metadata = self.entity_index.search(
                 query=query,
                 entity_types=search_params["entity_types"],
                 top_k=search_params["top_k"],
@@ -159,7 +159,7 @@ class SearchEntitiesHandler(BaseToolHandler):
         Group search results by entity type.
         
         Args:
-            raw_results: Flat list of search results from vector store
+            raw_results: Flat list of search results from the entity index
             
         Returns:
             Dictionary with entity types as keys and lists of entities as values
@@ -192,7 +192,7 @@ class SearchEntitiesHandler(BaseToolHandler):
         Filter device results by device type.
         
         Args:
-            raw_results: Raw search results from vector store
+            raw_results: Raw search results from the entity index
             device_types: List of device types to filter by
             
         Returns:

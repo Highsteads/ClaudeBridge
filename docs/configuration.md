@@ -5,8 +5,8 @@ nav_order: 6
 
 # Configuration
 
-Most people never open the Configure dialog: the installer sets up the connection, every tool works
-without an API key, and the defaults are the safe ones. This page is what each setting does when
+Most people never open the Configure dialog: the installer sets up the connection, the plugin needs
+no API key and no extra Python packages, and the defaults are the safe ones. This page is what each setting does when
 you do.
 
 ## The Configure dialog
@@ -15,9 +15,6 @@ you do.
 
 | Setting | What it does |
 |---|---|
-| Anthropic API Key | Optional. Only the AI summaries in the historical-analysis tool use it; Claude Code uses your own Claude account for everything else. Leave it blank unless you use that tool |
-| Large model / Small model | Which Claude models the historical-analysis summaries call, when a key is set |
-| Enable InfluxDB Historical Data, host, port, username, password, database | The optional InfluxDB backend for `analyze_historical_data`. `IndigoSecrets.py`'s `INFLUXDB_*` keys take priority over these fields |
 | Rate limit (per minute / per day) | How many tool calls a token may make. Defaults 120 a minute, 5,000 a day |
 | Read-cache TTL (seconds) | How long a read answer is served from cache. Mutating tools invalidate the related cache buckets themselves, and a client can send `Cache-Control: no-cache` |
 | Allow plugin-provided tools to make changes | The one switch over other plugins' write tools (see [Letting your plugin add tools](providers.md)). On by default; read tools always work |
@@ -25,7 +22,6 @@ you do.
 | Event Logging Level | How much the plugin says in the Indigo event log |
 | Allow Claude to delete devices, variables and automations | Off by default. While off, every delete is refused whatever token is in use |
 | Auto-configure Claude Code | On by default: at startup the plugin copies the go-between script into Indigo's `Scripts` folder, patches the access key into it, and keeps `~/.mcp.json` current |
-| Test Connections | Tries the Anthropic API and InfluxDB with the current settings and logs the result |
 
 ## Per-token scopes — `scopes.json`
 
@@ -69,11 +65,11 @@ If neither source supplies a value the plugin needs, it logs an ERROR naming
 the key and telling you to either fill in the matching field or add the key to
 `IndigoSecrets.py`.
 
-**Keys read by this plugin**: `ANTHROPIC_API_KEY` (optional — used only for
-the AI summaries in the historical-analysis tool, every other tool works
-without it), `CLAUDEBRIDGE_BEARER_TOKEN` (fallback for the web-server access
-key — first preference is Indigo's own `Preferences/secrets.json`), and the
-optional `INFLUXDB_*` keys for the historical-analysis tools.
+**Keys read by this plugin**: `CLAUDEBRIDGE_BEARER_TOKEN` (fallback for the
+web-server access key — first preference is Indigo's own
+`Preferences/secrets.json`) and the optional `WEBHOOK_ALLOWLIST`, which is
+added to the webhook allow-list typed into the dialog. No Anthropic API key is
+read or needed.
 
 ---
 

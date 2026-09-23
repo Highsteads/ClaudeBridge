@@ -113,11 +113,6 @@ def device_props(dev) -> Dict[str, Any]:
     return device_props_with_source(dev)[0]
 
 
-def device_prop(dev, key: str, default: Any = None) -> Any:
-    """Read a single plugin property from a device."""
-    return device_props(dev).get(key, default)
-
-
 def device_address(dev) -> str:
     """Return a device's network/bus address, native attribute or props.
 
@@ -145,7 +140,7 @@ def device_dict(dev) -> Dict[str, Any]:
     """dict(dev), with `pluginProps` repaired and its source recorded.
 
     Drop-in replacement for `dict(dev)` anywhere a device is serialised for a
-    tool response or the vector store. Adds `pluginPropsSource` so an empty
+    tool response or the entity index. Adds `pluginPropsSource` so an empty
     result is explicit rather than being read as "this device has no props".
     """
     try:

@@ -24,28 +24,13 @@ nav_order: 10
 → Bug fixes to existing tools: restart Indigo plugin only, no Claude Code restart needed.
 → New tools added: restart Claude Code once to pick up the updated tool list.
 
-**Plugin fails to start after a pip-install loop (`anthropic`/`influxdb`/etc. `__init__.py` missing)**
-→ Indigo's per-restart pip step occasionally leaves `Contents/Packages/` in a
-half-installed state: the package directory exists but the top-level
-`__init__.py` (and most other `.py` files) are gone, so every import fails with
-"cannot import name X from Y (unknown location)". `--force-reinstall` against
-the same target doesn't fix it — pip skips because the directory is "already
-present". The reliable recovery is to wipe and let Indigo re-install on the
-next start:
-```bash
-# Finds your installed bundle whatever Indigo version you are on
-DST=$(ls -d "/Library/Application Support/Perceptive Automation/Indigo "*/Plugins/"Claude Bridge.indigoPlugin" | tail -1)
-rm -rf "$DST/Contents/Packages"
-mkdir -p "$DST/Contents/Packages"
-# Then reload Claude Bridge via the Plugins menu (or the Indigo GUI), which
-# triggers a clean pip install from requirements.txt.
-```
-Confirmed 2026-05-23 — every package directory in Packages/ was missing its
-`__init__.py` after a routine restart, and clearing the whole tree restored a
-fully-working install. This can happen to any plugin that ships a
-`requirements.txt`, so treat it as the standard recovery if a restart suddenly
-starts logging `module 'X' has no attribute 'Y'` for imports that worked
-yesterday.
+**A leftover `Contents/Packages` folder from an older version**
+→ Claude Bridge needs no extra Python packages any more: the bundle ships no
+`requirements.txt`, so Indigo installs nothing for it. Versions before the
+September 2026 spring clean pulled in `anthropic`, `pydantic`, `influxdb` and
+`jinja2`, and an install upgraded in place may still carry them in
+`Contents/Packages/`. Nothing imports them, so they do no harm, and the folder
+can be deleted while the plugin is stopped.
 
 ---
 

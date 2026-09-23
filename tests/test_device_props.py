@@ -24,7 +24,6 @@ from conftest import SERVER_PLUGIN  # noqa: F401  (path wiring)
 from mcp_server.common.device_props import (  # noqa: E402
     device_address,
     device_dict,
-    device_prop,
     device_props,
     device_props_with_source,
 )
@@ -81,7 +80,7 @@ def test_empty_plugin_props_falls_through_to_global_props():
 def test_global_props_wins_over_stale_owner_props():
     dev = _shelly_like()
     # ownerProps also has data, but it lags saved versions — must not win.
-    assert device_prop(dev, "ip_address") == "192.168.1.50"
+    assert device_props(dev).get("ip_address") == "192.168.1.50"
 
 
 def test_source_is_reported_so_empty_is_never_silent():

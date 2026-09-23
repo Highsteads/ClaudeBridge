@@ -149,7 +149,7 @@ def test_dispatch_coerces_against_the_tool_schema(tmp_path):
     h.scope_manager = ScopeManager(scopes_file=str(tmp_path / "s.json"), logger=log)
     h.rate_limiter  = RateLimiter(per_minute=120, per_day=5000, admin_multiplier=1.0, logger=log)
     h.tool_cache    = ToolCache(default_ttl=0, logger=log)
-    h._emitter_local, h._telemetry_lock = threading.local(), threading.Lock()
+    h._telemetry_lock = threading.Lock()
     h._tool_call_log = deque(maxlen=10)
     h._tools = {"variable_update": {
         "description": "t", "function": _fn,

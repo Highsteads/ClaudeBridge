@@ -79,7 +79,7 @@ def is_enabled() -> bool:
     NOT `bool()`: Indigo re-serialises a checkbox as the STRING "false" after a
     Configure dialog save, and `bool("false")` is True — which would turn the
     feature ON for precisely the people who had turned it off and saved. Same
-    trap that made `is_influx_enabled` read backwards in v2.20.2.
+    trap that made the old InfluxDB switch read backwards in v2.20.2.
     """
     return runtime_config.get_bool(PREFERENCE_KEY, False)
 

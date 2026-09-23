@@ -2,6 +2,6 @@
 Common modules for the MCP Server plugin.
 """
 
-from .vector_store.main import VectorStore
+from .entity_index.main import EntityIndex
 
-__all__ = ["VectorStore"]
+__all__ = ["EntityIndex"]

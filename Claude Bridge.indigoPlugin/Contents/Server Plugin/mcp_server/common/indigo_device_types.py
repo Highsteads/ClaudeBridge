@@ -219,16 +219,6 @@ class DeviceTypeResolver:
 
         return unique_suggestions[:3]  # Limit to top 3 suggestions
 
-    @classmethod
-    def get_all_aliases(cls) -> Dict[str, str]:
-        """
-        Get all available aliases and their mappings.
-
-        Returns:
-            Dictionary mapping alias to valid device type
-        """
-        return {alias: device_type.value for alias, device_type in cls.DEVICE_TYPE_ALIASES.items()}
-
 
 class DeviceClassifier:
     """
@@ -337,21 +327,3 @@ class DeviceClassifier:
                 filtered_devices.append(device)
         
         return filtered_devices
-    
-    @classmethod
-    def get_device_type_distribution(cls, devices: List[Dict[str, Any]]) -> Dict[str, int]:
-        """
-        Get distribution of device types in a list of devices.
-        
-        Args:
-            devices: List of device dictionaries
-            
-        Returns:
-            Dictionary mapping device types to counts
-        """
-        distribution = {}
-        for device in devices:
-            device_type = cls.classify_device(device)
-            distribution[device_type] = distribution.get(device_type, 0) + 1
-        
-        return distribution

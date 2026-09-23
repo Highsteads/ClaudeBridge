@@ -844,11 +844,8 @@ except ImportError:
 import json
 import logging
 import os
-import platform
 import socket
 import time
-
-import anthropic
 
 # Master credentials file: IndigoSecrets.py at
 # /Library/Application Support/Perceptive Automation/IndigoSecrets.py
@@ -893,19 +890,7 @@ _secrets_mod = _load_module_by_path(
 def _get_secret(name: str, default=""):
     return getattr(_secrets_mod, name, default) if _secrets_mod else default
 
-ANTHROPIC_API_KEY         = _get_secret("ANTHROPIC_API_KEY")
 CLAUDEBRIDGE_BEARER_TOKEN = _get_secret("CLAUDEBRIDGE_BEARER_TOKEN")
-INFLUXDB_HOST             = _get_secret("INFLUXDB_HOST")
-# Every secret defaults to "" so that an ABSENT key falls through to its
-# PluginConfig field. INFLUXDB_PORT used to default to 8086, which is truthy, so
-# the `INFLUXDB_PORT or <dialog value>` chains below short-circuited and the
-# influx_port field could never take effect — a user on a non-default port was
-# silently connected to 8086. The 8086 default still applies, at the END of each
-# chain where it belongs.
-INFLUXDB_PORT             = _get_secret("INFLUXDB_PORT")
-INFLUXDB_USERNAME         = _get_secret("INFLUXDB_USERNAME")
-INFLUXDB_PASSWORD         = _get_secret("INFLUXDB_PASSWORD")
-INFLUXDB_DATABASE         = _get_secret("INFLUXDB_DATABASE")
 WEBHOOK_ALLOWLIST         = _get_secret("WEBHOOK_ALLOWLIST", [])
 
 # Import our modules
@@ -955,17 +940,6 @@ class Plugin(indigo.PluginBase):
         # triggers whose pluginTypeId matches the event being fired.
         self.event_triggers = {}
 
-        # Plugin configuration — credentials follow the standard resolution
-        # order: IndigoSecrets.py first, then PluginConfig (pluginPrefs) as fallback.
-        # See feedback_secrets_policy.md for the rule.
-        self.anthropic_api_key = ANTHROPIC_API_KEY or plugin_prefs.get("anthropic_api_key", "")
-        self.large_model       = plugin_prefs.get("large_model", "claude-sonnet-4-6")
-        self.small_model       = plugin_prefs.get("small_model", "claude-haiku-4-5-20251001")
-
-        # InfluxDB configuration — same resolution pattern
-        # Normalise to a real bool once here (a saved pref may be "true"/"false"
-        # strings) so callers don't each need their own bool() wrap.
-        self.enable_influxdb   = self._as_bool(plugin_prefs.get("enable_influxdb", False))
         # Default False and read the SAME way at every site — a pref that is
         # only refreshed on restart would let a Configure save appear to take
         # effect while the gate still held the old value.
@@ -978,13 +952,6 @@ class Plugin(indigo.PluginBase):
         self.external_tools_allow_writes = self._as_bool(
             plugin_prefs.get("external_tools_allow_writes", True))
         self._provider_broadcasts_subscribed = set()
-        # Strip protocol from host (clients add their own) — accept either form in config
-        _influx_url            = (INFLUXDB_HOST or plugin_prefs.get("influx_url", "")).strip()
-        self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
-        self.influx_port       = str(INFLUXDB_PORT or plugin_prefs.get("influx_port", "8086"))
-        self.influx_login      = INFLUXDB_USERNAME or plugin_prefs.get("influx_login", "")
-        self.influx_password   = INFLUXDB_PASSWORD or plugin_prefs.get("influx_password", "")
-        self.influx_database   = INFLUXDB_DATABASE or plugin_prefs.get("influx_database", "indigo")
 
         # Phase 2: rate limit / cache (with safe parsing)
         try:
@@ -1041,151 +1008,6 @@ class Plugin(indigo.PluginBase):
         if isinstance(value, str):
             return value.strip().lower() in ("1", "true", "yes", "on")
         return bool(value)
-
-    def _as_port(self, value, field="port", default=8086) -> int:
-        """Coerce a port pref to a valid 1-65535 int, falling back (with a
-        WARNING) on a blank/non-numeric/out-of-range value. isdigit() alone
-        silently accepts nothing-useful and rejects negatives oddly."""
-        try:
-            p = int(value)
-        except (TypeError, ValueError):
-            self.logger.warning(f"\t{field} {value!r} not numeric — using {default}")
-            return default
-        if not (1 <= p <= 65535):
-            self.logger.warning(f"\t{field} {p} out of range 1-65535 — using {default}")
-            return default
-        return p
-
-    def test_connections(self, include_anthropic=None) -> bool:
-        """
-        Test connections to the optional services.
-
-        The Anthropic key is used by ONE thing, the AI step of
-        analyze_historical_data, which needs InfluxDB. So the key is only
-        checked when InfluxDB is enabled, or when the user asks (the Test
-        Connections button passes include_anthropic=True). Until 2.27.3 every
-        plugin start sent a real, billed message to the API to check it.
-
-        Returns:
-            True if every connection tested is OK, False otherwise
-        """
-        all_required_connections_ok = True
-        if include_anthropic is None:
-            include_anthropic = bool(self.enable_influxdb)
-
-        # Test Anthropic API key
-        try:
-            if not include_anthropic:
-                pass
-            elif not self.anthropic_api_key:
-                self.logger.error("\t❌ Anthropic API key not configured")
-                all_required_connections_ok = False
-            else:
-                # Bounded so a slow or unreachable Anthropic API cannot stall
-                # startup() for minutes. The SDK default is connect=5s,
-                # read=600s, 2 retries — far too long for a startup-path probe.
-                test_client = anthropic.Anthropic(
-                    api_key=self.anthropic_api_key,
-                    timeout=10.0,
-                    max_retries=0,
-                )
-                try:
-                    # Listing models proves the key without spending tokens.
-                    if hasattr(test_client, "models"):
-                        resp = test_client.models.list(limit=1)
-                        ok = resp is not None
-                    else:   # very old SDK: fall back to a tiny message
-                        resp = test_client.messages.create(
-                            model=self.small_model or "claude-haiku-4-5-20251001",
-                            max_tokens=10,
-                            messages=[{"role": "user", "content": "Hi"}]
-                        )
-                        ok = bool(resp and resp.content)
-                    if ok:
-                        self.logger.info("\t✅ Anthropic API connected")
-                    else:
-                        self.logger.error("\t❌ Anthropic API returned invalid response")
-                        all_required_connections_ok = False
-                except Exception as api_error:
-                    self.logger.error(f"\t❌ Anthropic API failed: {api_error}")
-                    all_required_connections_ok = False
-
-        except Exception as e:
-            self.logger.error(f"\t❌ Anthropic connection failed: {e}")
-            all_required_connections_ok = False
-
-        # Test InfluxDB connection (optional, only if enabled)
-        if self.enable_influxdb:
-            try:
-                from influxdb import InfluxDBClient
-
-                # Validate InfluxDB configuration
-                if not self.influx_url or not self.influx_port:
-                    self.logger.warning("\t⚠️ InfluxDB enabled but not configured")
-                else:
-                    try:
-                        port = int(self.influx_port)
-                        client = InfluxDBClient(
-                            host=self.influx_url.replace("http://", "").replace(
-                                "https://", ""
-                            ),
-                            port=port,
-                            username=self.influx_login if self.influx_login else None,
-                            password=(
-                                self.influx_password if self.influx_password else None
-                            ),
-                            database=self.influx_database,
-                            timeout=10,
-                        )
-
-                        # Test connection with ping
-                        result = client.ping()
-                        if result:
-                            self.logger.info("\t✅ InfluxDB connected (historical data available)")
-                        else:
-                            self.logger.warning("\t⚠️ InfluxDB ping failed")
-
-                        client.close()
-
-                    except ValueError as ve:
-                        self.logger.warning(f"\t⚠️ InfluxDB port error: {ve}")
-                    except Exception as influx_error:
-                        self.logger.warning(f"\t⚠️ InfluxDB connection failed: {influx_error}")
-
-            except ImportError:
-                self.logger.warning("\t⚠️ InfluxDB library not available")
-            except Exception as e:
-                self.logger.warning(f"\t⚠️ InfluxDB connection failed: {e}")
-
-        return all_required_connections_ok
-
-    def check_cpu_compatibility(self) -> bool:
-        """
-        Check and log CPU architecture information.
-
-        Note: LanceDB requires Intel Haswell (2013+) or Apple Silicon processors with AVX2 support.
-        However, this check is informational only - the plugin will attempt to start regardless.
-
-        Returns:
-            Always returns True to allow plugin to start
-        """
-        machine = platform.machine()
-
-        # Apple Silicon Macs are always compatible
-        if machine == 'arm64':
-            self.logger.debug("✅ Apple Silicon detected (M1/M2/M3/M4)")
-            return True
-
-        # Log info for Intel Macs
-        if machine == 'x86_64':
-            self.logger.info("Intel Mac detected - LanceDB requires AVX2 CPU support (Intel Haswell 2013+ or newer)")
-            self.logger.info("If the plugin fails to start, your CPU may not support AVX2 instructions")
-            return True
-
-        # Unknown architecture - log warning but continue
-        self.logger.warning(f"⚠️ Unknown CPU architecture: {machine}")
-        self.logger.warning("   Plugin will attempt to start. If it fails, check system requirements.")
-        return True
 
     def _get_mcp_client_urls(self) -> list:
         """
@@ -1281,48 +1103,10 @@ class Plugin(indigo.PluginBase):
         """
         self.logger.info(f"Claude Bridge v{self.pluginVersion} ready")
 
-        # Anthropic API key is already resolved in __init__ via ANTHROPIC_API_KEY
-        # (IndigoSecrets.py) -> pluginPrefs. The key is OPTIONAL: every MCP tool
-        # works without it (Claude Code brings its own account) — it is used only
-        # for the AI step in analyze_historical_data, which needs InfluxDB. A
-        # missing key only matters when InfluxDB is on, and even then it is an
-        # unconfigured option, so INFO — not a warning at every start (2.27.3).
-        if not self.anthropic_api_key and self.enable_influxdb:
-            self.logger.info(
-                "[Config] No Anthropic API key set — all MCP tools work as normal; "
-                "only the AI summaries in analyze_historical_data are unavailable. "
-                "To enable them, set ANTHROPIC_API_KEY in /Library/Application "
-                "Support/Perceptive Automation/IndigoSecrets.py or fill in "
-                "'Anthropic API Key' under Plugins -> Claude Bridge -> Configure."
-            )
-
-        # Test connections — only InfluxDB and the key that goes with it are
-        # tested, and only when InfluxDB is enabled.
-        if self.enable_influxdb and not self.test_connections():
-            self.logger.error("\tRequired service connections failed - continuing in degraded mode")
-
-        # Log CPU architecture information
-        self.check_cpu_compatibility()
-
         # Publish runtime config to the in-process store so downstream MCP
-        # modules can read credentials without us having to write them into
-        # os.environ (which would leak to every subprocess we spawn — see
-        # mcp_server/runtime_config.py for the full reasoning).
-        db_path = os.path.join(
-            indigo.server.getInstallFolderPath(),
-            "Preferences/Plugins/com.clives.indigoplugin.claudebridge/vector_db",
-        )
+        # modules can read it without anything going through os.environ (see
+        # mcp_server/runtime_config.py).
         runtime_config.configure(
-            anthropic_api_key = self.anthropic_api_key,
-            large_model       = self.large_model,
-            small_model       = self.small_model,
-            influxdb_enabled  = bool(self.enable_influxdb),
-            influxdb_host     = self.influx_url.replace("http://", "").replace("https://", ""),
-            influxdb_port     = self._as_port(self.influx_port, "influx_port"),
-            influxdb_username = self.influx_login,
-            influxdb_password = self.influx_password,
-            influxdb_database = self.influx_database,
-            db_file           = db_path,
             allow_destructive_delete = self.allow_destructive_delete,
         )
 
@@ -1333,7 +1117,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error(f"\t❌ Data provider initialization failed: {e}")
             return
 
-        # Initialize MCP handler (includes vector store initialization)
+        # Initialize MCP handler (includes the entity index)
         try:
             scopes_file = os.path.join(
                 indigo.server.getInstallFolderPath(),
@@ -1386,7 +1170,8 @@ class Plugin(indigo.PluginBase):
             # 'Enable Event Webhooks' pref) before subscriptions go live.
             self._init_webhooks()
 
-            # Subscribe to device and variable changes for the events system
+            # Subscribe to device and variable changes: they feed the webhooks
+            # and keep the tool cache honest (see _note_cache_change).
             try:
                 indigo.devices.subscribeToChanges()
                 indigo.variables.subscribeToChanges()
@@ -1704,8 +1489,8 @@ class Plugin(indigo.PluginBase):
     # value here is purely diagnostic: a clear log marker so future
     # "claude-code couldn't reach the server between X and Y" investigations
     # can correlate the gap with the Mac sleeping rather than hunting for
-    # a fault. Vector store manager is left running (its SQLite backend
-    # survives sleep fine; no background thread holds external resources).
+    # a fault. The entity index is left running (it is in memory and holds
+    # no external resources).
     # ────────────────────────────────────────────────────────────────────────
     def prepare_to_sleep(self) -> None:
         self.logger.info("Mac going to sleep — MCP endpoint will be unreachable until wake")
@@ -2104,56 +1889,6 @@ class Plugin(indigo.PluginBase):
 
         indigo.server.log("\n".join(config_lines))
 
-    def test_connections_button(self, values_dict: indigo.Dict) -> indigo.Dict:
-        """Button action to test connections with current configuration values."""
-        self.logger.info("Testing connections with current configuration...")
-
-        # Temporarily update instance variables with dialog values for testing
-        old_api_key = self.anthropic_api_key
-        old_enable_influxdb = self.enable_influxdb
-        old_influx_url = self.influx_url
-        old_influx_port = self.influx_port
-        old_influx_login = self.influx_login
-        old_influx_password = self.influx_password
-        old_influx_database = self.influx_database
-
-        try:
-            # Apply dialog values, falling back to IndigoSecrets.py for empty fields
-            # (matches the resolution order used everywhere else in the plugin).
-            self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
-            self.enable_influxdb   = self._as_bool(values_dict.get("enable_influxdb", False))
-            self.allow_destructive_delete = self._as_bool(
-                values_dict.get("allow_destructive_delete", False))
-            _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
-            self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
-            self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))
-            self.influx_login      = INFLUXDB_USERNAME or values_dict.get("influx_login", "")
-            self.influx_password   = INFLUXDB_PASSWORD or values_dict.get("influx_password", "")
-            self.influx_database   = INFLUXDB_DATABASE or values_dict.get("influx_database", "indigo")
-
-            # Test connections — the button checks the key whenever one is set
-            connections_ok = self.test_connections(
-                include_anthropic=bool(self.anthropic_api_key))
-
-            if connections_ok:
-                self.logger.info("✅ All required connections tested successfully!")
-            else:
-                self.logger.error(
-                    "❌ Some required connections failed. Please check the logs above."
-                )
-
-        finally:
-            # Restore original values
-            self.anthropic_api_key = old_api_key
-            self.enable_influxdb = old_enable_influxdb
-            self.influx_url = old_influx_url
-            self.influx_port = old_influx_port
-            self.influx_login = old_influx_login
-            self.influx_password = old_influx_password
-            self.influx_database = old_influx_database
-
-        return values_dict
-
     ########################################
     # Configuration UI Validation
     ########################################
@@ -2166,15 +1901,6 @@ class Plugin(indigo.PluginBase):
         :return: (True/False, values_dict, errors_dict)
         """
         errors_dict = indigo.Dict()
-
-        # The Anthropic API key is OPTIONAL and is deliberately NOT validated here.
-        # Every MCP tool works without one — Claude Code uses the user's own account,
-        # and only the AI summaries in the historical-analysis tool need a key. An
-        # earlier version errored on a blank field, which made the whole dialog
-        # unsavable for anyone without an IndigoSecrets.py: they could not change the
-        # log level or enable webhooks without inventing a key the plugin says it
-        # does not need. startup() logs a warning when the key is absent, which is
-        # the right weight for an optional feature.
 
         # Validate log level
         try:
@@ -2196,52 +1922,6 @@ class Plugin(indigo.PluginBase):
                     errors_dict[fld] = f"Must be between {lo} and {hi}"
             except (ValueError, TypeError):
                 errors_dict[fld] = "Must be a whole number"
-
-        # Validate InfluxDB configuration if enabled
-        if self._as_bool(values_dict.get("enable_influxdb", False)):
-            influx_url = values_dict.get("influx_url", "").strip()
-            influx_port = values_dict.get("influx_port", "").strip()
-            influx_database = values_dict.get("influx_database", "").strip()
-
-            # A BARE HOST is what this field wants — the field's own description
-            # gives a bare-IP example and says the protocol prefix is stripped,
-            # and __init__ does strip it. Demanding http:// here contradicted both,
-            # so entering the documented example made the dialog unsavable.
-            # A prefix is still accepted, since it is simply removed.
-            if not influx_url and not INFLUXDB_HOST:
-                errors_dict["influx_url"] = (
-                    "InfluxDB host is required when InfluxDB is enabled "
-                    "(e.g. 192.168.1.20) — or set INFLUXDB_HOST in IndigoSecrets.py"
-                )
-            elif influx_url:
-                host = influx_url.replace("http://", "").replace("https://", "")
-                host = host.split("/")[0].strip()
-                if not host:
-                    errors_dict["influx_url"] = (
-                        "InfluxDB host must be a hostname or IP address, "
-                        "not just a protocol prefix"
-                    )
-
-            # Blank is fine — the field is a FALLBACK behind INFLUXDB_PORT, and
-            # __init__ defaults to 8086 either way. Only a value actually typed
-            # here is checked, so a blank field can never be parsed as a number.
-            if influx_port:
-                try:
-                    port = int(influx_port)
-                    if port < 1 or port > 65535:
-                        errors_dict["influx_port"] = (
-                            "InfluxDB port must be between 1 and 65535"
-                        )
-                except (ValueError, TypeError):
-                    errors_dict["influx_port"] = "InfluxDB port must be a valid number"
-
-            # Same fallback rule as the host and port: blank is fine when
-            # IndigoSecrets.py supplies it.
-            if not influx_database and not INFLUXDB_DATABASE:
-                errors_dict["influx_database"] = (
-                    "InfluxDB database name is required when InfluxDB is enabled "
-                    "— or set INFLUXDB_DATABASE in IndigoSecrets.py"
-                )
 
         return (len(errors_dict) == 0, values_dict, errors_dict)
 
@@ -2377,8 +2057,8 @@ class Plugin(indigo.PluginBase):
 
     def variableUpdated(self, origVar: indigo.Variable, newVar: indigo.Variable) -> None:
         """
-        Called when an Indigo variable value changes.
-        Queues the event for any active Claude subscriptions.
+        Called when an Indigo variable value changes. Marks the tool cache
+        stale and hands the change to the outbound webhooks.
         """
         super().variableUpdated(origVar, newVar)
         if origVar.value != newVar.value:
@@ -2388,45 +2068,25 @@ class Plugin(indigo.PluginBase):
             # bump, not a store walk — because this fires constantly.
             self._note_cache_change("variable")
 
-        if (
-            self.mcp_handler
-            and hasattr(self.mcp_handler, "events_handler")
-            and origVar.value != newVar.value
-        ):
-            try:
-                self.mcp_handler.events_handler.queue_event({
-                    "type":      "variable_updated",
-                    "id":        newVar.id,
-                    "name":      newVar.name,
-                    "old_value": origVar.value,
-                    "new_value": newVar.value,
-                })
-            except Exception as exc:
-                # Was a bare pass: a persistent queue_event failure disabled every
-                # subscription with nothing in the log to show for it.
-                self.logger.warning(f"Could not queue variable_updated event for "
-                                    f"'{newVar.name}': {exc}")
         # Outbound webhooks (own try/except inside; gated on the enabled flag)
         self._webhook_on_variable_change(origVar, newVar)
 
     def deviceUpdated(self, origDev: indigo.Device, newDev: indigo.Device) -> None:
         """
-        Called when a device state or configuration is updated.
-        Queues state-change events for any active Claude subscriptions,
-        then handles mcpServer-specific configuration tracking.
+        Called when a device state or configuration is updated. Marks the
+        tool cache stale and hands the change to the outbound webhooks;
+        changes to the plugin's own mcpServer device are only logged.
 
         Loop-guard: this plugin both subscribeToChanges() AND writes to its own
-        mcpServer device states (via deviceStartComm/deviceUpdated below).
-        Without this guard, every state write fires deviceUpdated again -> any
-        future state write inside the mcpServer branch would loop.  Per-device
-        self-checks aren't sufficient if the plugin ever has more than one
-        device — block the whole pluginId at the top.
+        mcpServer device states (via deviceStartComm). Without this guard, a
+        state write inside the mcpServer branch would fire deviceUpdated again
+        and loop. Per-device self-checks aren't sufficient if the plugin ever
+        has more than one device — block the whole pluginId at the top.
         """
         super().deviceUpdated(origDev, newDev)
         if newDev.pluginId == self.pluginId:
-            # Still process mcpServer config tracking for our own device, but
-            # skip the events-queue path entirely (no MCP subscriber wants
-            # change events from the bridge device itself).
+            # Our own device: config tracking only, never the cache or the
+            # webhooks. This is the ONLY place an mcpServer device reaches.
             if newDev.deviceTypeId == "mcpServer":
                 self._handle_mcp_server_device_update(origDev, newDev)
             return
@@ -2439,35 +2099,8 @@ class Plugin(indigo.PluginBase):
         # fires on every sensor event on the estate.
         self._note_cache_change("device")
 
-        # Queue event for the events system (all non-plugin devices)
-        if (
-            self.mcp_handler
-            and hasattr(self.mcp_handler, "events_handler")
-            and newDev.deviceTypeId != "mcpServer"
-        ):
-            try:
-                changed_states = {
-                    k: {"old": origDev.states.get(k), "new": v}
-                    for k, v in newDev.states.items()
-                    if origDev.states.get(k) != v
-                }
-                if changed_states:
-                    self.mcp_handler.events_handler.queue_event({
-                        "type":           "device_updated",
-                        "id":             newDev.id,
-                        "name":           newDev.name,
-                        "changed_states": changed_states,
-                    })
-            except Exception as exc:
-                # Was a bare pass — see variableUpdated.
-                self.logger.warning(f"Could not queue device_updated event for "
-                                    f"'{newDev.name}': {exc}")
-
         # Outbound webhooks (all non-plugin devices; own try/except; gated)
         self._webhook_on_device_change(origDev, newDev)
-
-        if newDev.deviceTypeId == "mcpServer":
-            self._handle_mcp_server_device_update(origDev, newDev)
 
     def _handle_mcp_server_device_update(self, origDev, newDev):
         """Track config changes on the plugin's own mcpServer device.
@@ -2531,15 +2164,6 @@ class Plugin(indigo.PluginBase):
                 count += 1
         return count
 
-    def _get_mcp_server_device(self) -> indigo.Device:
-        """
-        Get the single MCP Server device, if it exists.
-        """
-        for device in indigo.devices.iter(filter="self"):
-            if device.deviceTypeId == "mcpServer":
-                return device
-        return None
-
     # Server management methods removed - MCP is always available via IWS
     
 
@@ -2564,28 +2188,12 @@ class Plugin(indigo.PluginBase):
             self.plugin_file_handler.setLevel(self.log_level)
             logging.getLogger("Plugin").setLevel(self.log_level)
 
-            # Core configuration — IndigoSecrets.py first, dialog as fallback (matches
-            # the standard resolution order documented in feedback_secrets_policy.md)
-            self.anthropic_api_key = ANTHROPIC_API_KEY or values_dict.get("anthropic_api_key", "")
-            self.large_model       = values_dict.get("large_model", "claude-sonnet-4-6")
-            self.small_model       = values_dict.get("small_model", "claude-haiku-4-5-20251001")
-
-            # InfluxDB configuration — IndigoSecrets.py first, dialog fallback.
-            # Coerce the checkbox via _as_bool: a saved dialog re-serialises it as
-            # the string 'false', and bool('false') is True — so a user with
-            # InfluxDB off who merely opens+saves Configure would otherwise turn
-            # it ON until the next restart.
-            self.enable_influxdb   = self._as_bool(values_dict.get("enable_influxdb", False))
+            # Coerce the checkboxes via _as_bool: a saved dialog can hand back
+            # the string 'false', and bool('false') is True.
             self.allow_destructive_delete = self._as_bool(
                 values_dict.get("allow_destructive_delete", False))
             self.external_tools_allow_writes = self._as_bool(
                 values_dict.get("external_tools_allow_writes", True))
-            _influx_url            = (INFLUXDB_HOST or values_dict.get("influx_url", "")).strip()
-            self.influx_url        = _influx_url.replace("http://", "").replace("https://", "") or "localhost"
-            self.influx_port       = str(INFLUXDB_PORT or values_dict.get("influx_port", "8086"))
-            self.influx_login      = INFLUXDB_USERNAME or values_dict.get("influx_login", "")
-            self.influx_password   = INFLUXDB_PASSWORD or values_dict.get("influx_password", "")
-            self.influx_database   = INFLUXDB_DATABASE or values_dict.get("influx_database", "indigo")
 
             # Phase 2 — apply rate-limit / cache changes live (no restart needed).
             # Coerce ALL three before assigning any: a single try around both the
@@ -2623,47 +2231,15 @@ class Plugin(indigo.PluginBase):
             except Exception as _we:
                 self.logger.warning(f"\t⚠️  Could not apply webhook settings: {_we}")
 
-
             # Republish runtime config (same as startup — see runtime_config.py
-            # for why we avoid os.environ for credentials).
-            db_path = os.path.join(
-                indigo.server.getInstallFolderPath(),
-                "Preferences/Plugins/com.clives.indigoplugin.claudebridge/vector_db",
-            )
+            # for why this does not go through os.environ).
             runtime_config.configure(
-                anthropic_api_key = self.anthropic_api_key,
-                large_model       = self.large_model,
-                small_model       = self.small_model,
-                influxdb_enabled  = bool(self.enable_influxdb),
                 allow_destructive_delete = self.allow_destructive_delete,
-                influxdb_host     = self.influx_url.replace("http://", "").replace("https://", ""),
-                influxdb_port     = self._as_port(self.influx_port, "influx_port"),
-                influxdb_username = self.influx_login,
-                influxdb_password = self.influx_password,
-                influxdb_database = self.influx_database,
-                db_file           = db_path,
             )
-
-            # Test connections with new configuration
-            self.logger.info("Testing connections with new configuration...")
-            connections_ok = self.test_connections()
-
-            if not connections_ok:
-                self.logger.error(
-                    "⚠️ Some required connections failed. Configuration saved."
-                )
-                self.logger.error(
-                    "Please check your configuration and restart the plugin manually."
-                )
-                return
 
             self.logger.info(
                 "✅ Configuration updated successfully. Changes will take effect on next MCP request."
             )
-
-            # No server restart needed - MCP runs via Indigo Web Server
-            # Configuration changes (environment variables) are already applied above
-            # and will be picked up by handlers on next request
 
     ########################################
     # Menu callbacks
@@ -2684,8 +2260,6 @@ class Plugin(indigo.PluginBase):
                            and getattr(self.mcp_handler, "_tools", None) is not None
                            else "?")
             extras.append(("Tools:", str(_tool_count)))
-            extras.append(("Anthropic Key:", "configured" if self.anthropic_api_key else "MISSING"))
-            extras.append(("InfluxDB:", "enabled" if self.enable_influxdb else "disabled"))
             extras.append(("Timestamps in Log:", "ON" if self.timestamp_enabled else "OFF"))
             log_startup_banner(self.pluginId, self.pluginDisplayName, self.pluginVersion, extras=extras)
         else:

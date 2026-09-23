@@ -9,7 +9,14 @@
 #              "deployed == declared" check.
 # Author:      CliveS & Claude Fable 5; Claude Fable 5.1 (1.1)
 # Date:        10-06-2026 (1.1: 11-09-2026)
-# Version:     1.1
+# Version:     1.2
+#
+# v1.2 (23-09-2026): the registry comparisons now run only when the live plugin
+#   is running the bundle under test (the installed mcp_handler.py is the same
+#   file). Testing the repo ahead of a deploy — the spring clean removed ten
+#   tools the installed plugin still serves — used to fail on a difference the
+#   test exists to report AFTER deployment, not before it. When the suite runs
+#   against the installed bundle (conftest's default) nothing is skipped.
 #
 # v1.1 (11-09-2026): since 2.26.0 the live tools/list also carries the tools
 #   other plugins provide (the Dashboards plugin's eight, here), each with
@@ -18,6 +25,7 @@
 #   tools equal the registry and the health count equals registry + providers.
 #   Both tests had been red on this Mac since 2.26.0 shipped.
 
+import filecmp
 import glob
 import importlib.util
 import json
@@ -93,6 +101,35 @@ def _registry_count():
     return len(gtd.parse_tools(gtd._read(handler)))
 
 
+def _installed_server_plugin():
+    base = "/Library/Application Support/Perceptive Automation"
+    for d in sorted(glob.glob(os.path.join(base, "Indigo *")), reverse=True):
+        sp = os.path.join(d, "Plugins", "Claude Bridge.indigoPlugin",
+                          "Contents", "Server Plugin")
+        if os.path.isdir(sp):
+            return sp
+    return None
+
+
+def _require_live_runs_bundle_under_test():
+    """Skip a registry comparison when the live plugin runs different code.
+
+    The comparison is "deployed == declared", which only means something when
+    the deployed code IS the code under test. The registry lives in
+    mcp_handler.py, so that file decides.
+    """
+    installed = _installed_server_plugin()
+    if installed is None:
+        pytest.skip("no installed Claude Bridge bundle to compare against")
+    rel = os.path.join("mcp_server", "mcp_handler.py")
+    if os.path.realpath(installed) == os.path.realpath(SERVER_PLUGIN):
+        return
+    if not filecmp.cmp(os.path.join(installed, rel),
+                       os.path.join(SERVER_PLUGIN, rel), shallow=False):
+        pytest.skip("the live plugin is not running the bundle under test "
+                    "(installed mcp_handler.py differs) — deploy, then re-run")
+
+
 def test_live_initialize_reports_installed_version():
     body, headers = _post_mcp({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -133,6 +170,7 @@ def _live_tools():
 
 
 def test_live_tools_list_matches_static_registry():
+    _require_live_runs_bundle_under_test()
     builtin, provided = _live_tools()
     assert len(builtin) == _registry_count(), (
         f"{len(builtin)} built-in tools live against {_registry_count()} in the "
@@ -145,6 +183,7 @@ def test_live_health_endpoint():
     with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
         health = json.loads(resp.read().decode())
     assert health["status"] == "ok"
+    assert health["protocol_version"] == "2025-06-18"
+    _require_live_runs_bundle_under_test()
     _, provided = _live_tools()
     assert health["tools"] == _registry_count() + len(provided)
-    assert health["protocol_version"] == "2025-06-18"

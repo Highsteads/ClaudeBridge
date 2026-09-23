@@ -56,12 +56,6 @@
 # ============================================================
 
 # ============================
-# Anthropic (Claude API)
-# Required by: Claude Bridge plugin
-# ============================
-ANTHROPIC_API_KEY = "sk-ant-..."
-
-# ============================
 # Octopus Energy
 # Required by: SigenEnergyManager (Kraken account economics) + the
 #              octopus_tracker_rate.py rate script
@@ -220,19 +214,6 @@ CLAUDEBRIDGE_BEARER_TOKEN = ""
 # ============================
 INDIGO_URL     = ""
 INDIGO_API_KEY = ""
-
-# ============================
-# InfluxDB (optional)
-# Required by: Claude Bridge plugin (historical_analysis MCP tools)
-# ============================
-INFLUXDB_HOST     = ""
-# Leave blank to use the plugin's Configure dialog (or the 8086 default). A value
-# set HERE always wins over the dialog, so pre-filling 8086 would make the dialog's
-# port field impossible to use.
-INFLUXDB_PORT     = ""
-INFLUXDB_USERNAME = ""
-INFLUXDB_PASSWORD = ""
-INFLUXDB_DATABASE = ""
 
 # ============================
 # Alert email routing (per-plugin)

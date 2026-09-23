@@ -148,10 +148,7 @@ def test_scaffold_template_maps_level_to_int():
 
 # ── cache invalidation gaps closed ───────────────────────────────────────────
 
-def test_subscription_and_folder_invalidation_wired():
+def test_folder_invalidation_wired():
     from mcp_server.common import tool_cache as tc
-    assert "subscribe" in tc._INVALIDATION_MAP
-    assert "unsubscribe" in tc._INVALIDATION_MAP
-    assert "list_subscriptions" in tc._INVALIDATION_MAP["subscribe"]
     assert "create_variable_folder" in tc._INVALIDATION_MAP
     assert "list_variable_folders" in tc._INVALIDATION_MAP["create_variable_folder"]

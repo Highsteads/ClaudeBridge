@@ -64,8 +64,9 @@ Claude Code:
 4. Restarts the plugin via `restart_plugin`
 5. Queries the event log via `query_event_log` to confirm it started
    cleanly
-6. Asks you to trigger a setpoint change and watches the events via
-   `subscribe` + `get_events` to verify the state updates flow
+6. Asks you to trigger a setpoint change, then reads the device back with
+   `get_device_by_id` and the log with `query_event_log` to verify the
+   state updates flow
 
 When something fails, Claude sees the error in your log at once and
 fixes it. Each turn of the loop takes seconds, not minutes.

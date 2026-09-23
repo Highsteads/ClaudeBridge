@@ -16,9 +16,8 @@ from .adapters.data_provider import DataProvider
 from .common.indigo_device_types import IndigoDeviceType, IndigoEntityType, DeviceTypeResolver
 from .common.arg_coercion import coerce_to_schema
 from .common.json_encoder import safe_json_dumps
-from .common.progress import ProgressEmitter, encode_sse_response
 from .common.tool_cache import ToolCache
-from .common.vector_store.vector_store_manager import VectorStoreManager
+from .common.entity_index import EntityIndexManager
 from .handlers.list_handlers import ListHandlers
 from .security import (RateLimiter, RateLimitExceeded, ScopeManager, ScopeDenied,
                        delete_gate, DeleteDenied)
@@ -26,7 +25,6 @@ from .tools.action_control import ActionControlHandler
 from .tools.device_control import DeviceControlHandler
 from .tools.device_control.color_names import parse_color
 from .tools.get_devices_by_type import GetDevicesByTypeHandler
-from .tools.historical_analysis import HistoricalAnalysisHandler
 from .tools.log_query import LogQueryHandler
 from .tools.plugin_control import PluginControlHandler
 from .tools.search_entities import SearchEntitiesHandler
@@ -34,9 +32,7 @@ from .tools.variable_control import VariableControlHandler
 from .tools.system_tools import SystemToolsHandler
 from .tools.schedule_control import ScheduleControlHandler
 from .tools.audit import AuditHandler
-from .tools.memory import MemoryHandler
 from .tools.script_tools import ScriptToolsHandler
-from .tools.events import EventsHandler
 from .tools.home_status import HomeStatusHandler
 from .tools.energy_tools import EnergyToolsHandler
 from .tools.scripting_shell import ScriptingShellHandler
@@ -163,32 +159,18 @@ class MCPHandler:
             scopes_file=scopes_file or "",
             logger=self.logger,
         )
-        # Per-call ProgressEmitter — stored per-thread so concurrent tools/call
-        # requests cannot clobber each other's emitter (was a shared attribute).
-        self._emitter_local = threading.local()
-
-        # Get database path from the in-process runtime config (moved off
-        # os.environ in v2.4.1 — see mcp_server/runtime_config.py).
-        from mcp_server import runtime_config
-        db_path = runtime_config.get("db_file")
-        if not db_path:
-            raise ValueError("db_file must be configured via runtime_config")
-
-        # Initialize vector store manager
-        self.vector_store_manager = VectorStoreManager(
+        # In-memory entity index behind search_entities, rebuilt every 300 s.
+        self.entity_index_manager = EntityIndexManager(
             data_provider=data_provider,
-            db_path=db_path,
             logger=self.logger,
             update_interval=300,  # 5 minutes
         )
 
-        # Start vector store manager in background. The DB connection is
-        # opened synchronously so handlers wire up fine, but the slow initial
-        # embedding rebuild (60-90s on a 400-device install) runs on a daemon
-        # thread. Without this, every restart left the MCP endpoint routable
-        # but blocked until embeddings finished. See VectorStoreManager.start_async()
-        # for the split. v2.6.2 fix.
-        self.vector_store_manager.start_async()
+        # The empty index is created synchronously so handlers wire up fine,
+        # but the initial load (an IOM walk of every entity) runs on a daemon
+        # thread so a restart does not leave the MCP endpoint routable but
+        # blocked. See EntityIndexManager.start_async(). v2.6.2 fix.
+        self.entity_index_manager.start_async()
 
         # Initialize handlers
         self._init_handlers()
@@ -235,10 +217,10 @@ class MCPHandler:
         
     def _init_handlers(self):
         """Initialize all handler instances."""
-        # Search handler with vector store
+        # Search handler over the in-memory entity index
         self.search_handler = SearchEntitiesHandler(
             data_provider=self.data_provider,
-            vector_store=self.vector_store_manager.get_vector_store(),
+            entity_index=self.entity_index_manager.get_entity_index(),
             logger=self.logger,
         )
         
@@ -267,10 +249,6 @@ class MCPHandler:
             data_provider=self.data_provider, 
             logger=self.logger
         )
-        self.historical_analysis_handler = HistoricalAnalysisHandler(
-            data_provider=self.data_provider,
-            logger=self.logger
-        )
         self.log_query_handler = LogQueryHandler(
             data_provider=self.data_provider,
             logger=self.logger
@@ -291,15 +269,7 @@ class MCPHandler:
             data_provider=self.data_provider,
             logger=self.logger
         )
-        self.memory_handler = MemoryHandler(
-            data_provider=self.data_provider,
-            logger=self.logger
-        )
         self.script_tools_handler = ScriptToolsHandler(
-            data_provider=self.data_provider,
-            logger=self.logger
-        )
-        self.events_handler = EventsHandler(
             data_provider=self.data_provider,
             logger=self.logger
         )
@@ -348,8 +318,8 @@ class MCPHandler:
 
     def stop(self):
         """Stop the MCP handler and cleanup resources."""
-        if self.vector_store_manager:
-            self.vector_store_manager.stop()
+        if self.entity_index_manager:
+            self.entity_index_manager.stop()
 
     ########################################
     # Health / Diagnostics
@@ -384,7 +354,7 @@ class MCPHandler:
         """
         Return a snapshot of plugin health for the /health endpoint.
         Includes uptime, session count, tool inventory, recent tool latencies,
-        and vector-store status. Cheap to compute — safe to call frequently.
+        and entity-index status. Cheap to compute — safe to call frequently.
         """
         now = time.time()
 
@@ -410,17 +380,17 @@ class MCPHandler:
             agg["avg_ms"]    = round(agg["total_ms"] / agg["calls"], 1) if agg["calls"] else 0
             agg["avg_bytes"] = round(agg["total_bytes"] / agg["calls"]) if agg["calls"] else 0
 
-        # Vector store status (best-effort) — read via the manager's own get_stats()
-        vs_status = {"available": False}
+        # Entity index status (best-effort) — read via the manager's own get_stats()
+        index_status = {"available": False}
         try:
-            if self.vector_store_manager:
-                stats = self.vector_store_manager.get_stats()
-                vs_status["available"]       = True
-                vs_status["last_update"]     = stats.get("last_update")
-                vs_status["update_interval"] = stats.get("update_interval")
-                vs_status["is_running"]      = self.vector_store_manager.is_running
+            if self.entity_index_manager:
+                stats = self.entity_index_manager.get_stats()
+                index_status["available"]       = True
+                index_status["last_update"]     = stats.get("last_update")
+                index_status["update_interval"] = stats.get("update_interval")
+                index_status["is_running"]      = self.entity_index_manager.is_running
         except Exception as e:
-            vs_status["error"] = str(e)
+            index_status["error"] = str(e)
 
         # Exec path: set when a runaway script was abandoned and still holds the
         # stdout-swap lock. While this is present every execute_indigo_python /
@@ -455,7 +425,7 @@ class MCPHandler:
                     for e in call_log[-10:]
                 ],
             },
-            "vector_store": vs_status,
+            "entity_index": index_status,
             "rate_limiter": {
                 "per_minute":   self.rate_limiter.per_minute,
                 "per_day":      self.rate_limiter.per_day,
@@ -607,21 +577,6 @@ class MCPHandler:
             if isinstance(resp, dict) and "_mcp_session_id" in resp:
                 session_id = resp.pop("_mcp_session_id")
                 extra_headers["Mcp-Session-Id"] = session_id
-
-            # Buffered SSE response path — used by tools that emitted progress
-            # events. The body already contains valid SSE blocks ending in
-            # "data: [DONE]\n\n", which indigo_mcp_proxy.py's reader handles.
-            if isinstance(resp, dict) and "_sse_body" in resp:
-                return {
-                    "status": resp.get("_status", 200),
-                    "headers": {
-                        "Content-Type":  "text/event-stream; charset=utf-8",
-                        "Cache-Control": "no-cache",
-                        "Connection":    "keep-alive",
-                        **extra_headers,
-                    },
-                    "content": resp["_sse_body"],
-                }
 
             return {
                 "status": 200,
@@ -783,8 +738,7 @@ class MCPHandler:
                     "protocolVersion": self.PROTOCOL_VERSION,
                     # ONLY what this server can actually honour. There is no
                     # push channel to a client: IWS answers one request with
-                    # one response, and the SSE path is a BUFFERED body
-                    # composed inside a single call, not an open stream. So a
+                    # one plain JSON response, never an open stream. So a
                     # `listChanged` notification can never be sent, and
                     # `logging` (server-initiated notifications/message, plus a
                     # logging/setLevel this server does not implement) can
@@ -877,8 +831,7 @@ class MCPHandler:
     ) -> Dict[str, Any]:
         """
         Handle tools/call request with rate-limiting, per-token scope checks,
-        TTL caching of read-only tools, and optional buffered-SSE responses
-        for tools that emit progress events.
+        TTL caching of read-only tools and cache invalidation after mutators.
         """
         headers   = headers or {}
         tool_name = params.get("name")
@@ -968,10 +921,6 @@ class MCPHandler:
         # dict. A property declared as a string now gets exactly what was sent.
         tool_args = coerce_to_schema(tool_args, props)
 
-        # ── Per-call progress emitter (used by long-running tools) ───────
-        emitter = ProgressEmitter(request_id=msg_id, tool_name=tool_name)
-        self._emitter_local.emitter = emitter
-
         start = time.time()
         ok = False
         cache_hit = False
@@ -1013,10 +962,9 @@ class MCPHandler:
                     )
                 # If the tool changed entity STRUCTURE (added/removed/renamed a
                 # device/variable/action, or ran arbitrary code), refresh the
-                # search index now instead of waiting up to update_interval — the
-                # add_entity/remove_entity single-item hooks were never wired.
-                if tool_name in self._SEARCH_REFRESH_TOOLS and self.vector_store_manager:
-                    self.vector_store_manager.refresh_async()
+                # search index now instead of waiting up to update_interval.
+                if tool_name in self._SEARCH_REFRESH_TOOLS and self.entity_index_manager:
+                    self.entity_index_manager.refresh_async()
 
             response = {
                 "jsonrpc": "2.0",
@@ -1033,15 +981,6 @@ class MCPHandler:
                     },
                 },
             }
-
-            # If the tool emitted progress events, return as buffered SSE so
-            # the client sees ordered notifications/progress + final result.
-            if emitter.has_events:
-                sse_body = encode_sse_response(emitter.events, response, msg_id)
-                return {
-                    "_sse_body": sse_body,
-                    "_status":   200,
-                }
             return response
 
         except Exception as e:
@@ -1061,7 +1000,6 @@ class MCPHandler:
                 msg_id, -32603, f"Tool '{tool_name}' execution failed: {detail}"
             )
         finally:
-            self._emitter_local.emitter = None
             duration_ms = int((time.time() - start) * 1000)
             # deque(maxlen) self-trims; append is atomic but lock anyway so the
             # health snapshot never reads a torn list.
@@ -1937,32 +1875,6 @@ class MCPHandler:
             "function": self._tool_action_execute_group
         }
         
-        # Historical analysis
-        self._tools["analyze_historical_data"] = {
-            "description": "Analyze historical data patterns and trends for specific devices using AI-powered insights. IMPORTANT: Requires EXACT device names - use 'search_entities' or 'list_devices' first to find correct device names. Only works if InfluxDB historical data logging is enabled. This is the plugin's slowest tool (one Claude completion plus InfluxDB queries per device) and it blocks all other tool calls while it runs, so it stops after 120s: any entity it did not reach is listed in summary_stats.skipped_for_time — treat that as 'not queried', NOT as 'no data'.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Natural language query about what you want to analyze (e.g., 'show state changes', 'analyze usage patterns', 'track temperature trends'). This helps the system select the right device properties to analyze."
-                    },
-                    "device_names": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "maxItems": 10,
-                        "description": "EXACT device names to analyze (case-sensitive), max 10. Must match device names exactly as they appear in Indigo. Use 'search_entities' or 'list_devices' first to find correct names. Examples: ['Living Room Lamp', 'Front Door Sensor', 'Master Bedroom Thermostat']"
-                    },
-                    "time_range_days": {
-                        "type": "number",
-                        "description": "Number of days to analyze (1-365, default: 30). Larger ranges take longer to process."
-                    }
-                },
-                "required": ["query", "device_names"]
-            },
-            "function": self._tool_analyze_historical_data
-        }
-        
         # List tools
         self._tools["list_devices"] = {
             "description": "List all devices with optional state filtering",
@@ -2754,67 +2666,6 @@ class MCPHandler:
             "function": self._tool_find_conflicts
         }
 
-        # ── Memory tools ───────────────────────────────────────────────────
-
-        self._tools["remember"] = {
-            "description": (
-                "Store a persistent note under a topic, accessible across future "
-                "Claude sessions. Examples: remember(topic='devices', note='Back "
-                "door sensor false-positives in direct sunlight') or "
-                "remember(topic='energy', note='Bias factor was 1.5 as of April 2026')."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "description": "Category for this note (e.g. devices, energy, heating)"
-                    },
-                    "note": {
-                        "type": "string",
-                        "description": "The note to store"
-                    }
-                },
-                "required": ["topic", "note"]
-            },
-            "function": self._tool_remember
-        }
-        self._tools["recall"] = {
-            "description": (
-                "Retrieve stored memories. Pass a topic to filter, or omit to "
-                "return all memories. Results are newest first."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "description": "Topic to filter by (omit for all)"
-                    }
-                }
-            },
-            "function": self._tool_recall
-        }
-        self._tools["recall_topics"] = {
-            "description": "List all memory topics and how many notes each has.",
-            "inputSchema": {"type": "object", "properties": {}},
-            "function": self._tool_recall_topics
-        }
-        self._tools["forget"] = {
-            "description": "Delete a specific memory entry by its ID.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "memory_id": {
-                        "type": "number",
-                        "description": "Memory ID to delete (from recall results)"
-                    }
-                },
-                "required": ["memory_id"]
-            },
-            "function": self._tool_forget
-        }
-
         # ── Script tools ───────────────────────────────────────────────────
 
         self._tools["read_script"] = {
@@ -2929,77 +2780,6 @@ class MCPHandler:
                 "required": ["script_name"]
             },
             "function": self._tool_scaffold_automation_script
-        }
-
-        # ── Event subscription tools ───────────────────────────────────────
-
-        self._tools["subscribe"] = {
-            "description": (
-                "Subscribe to Indigo device or variable change events. ClaudeBridge "
-                "will queue any matching state changes. Use get_events() to poll "
-                "the queue. entity_type: 'device', 'variable', or 'all'. "
-                "entity_id: specific ID to watch, or omit for all of that type."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "entity_type": {
-                        "type": "string",
-                        "enum": ["device", "variable", "all"],
-                        "description": "Type to watch"
-                    },
-                    "entity_id": {
-                        "type": "number",
-                        "description": "Specific device/variable ID (omit for all)"
-                    }
-                }
-            },
-            "function": self._tool_subscribe
-        }
-        self._tools["unsubscribe"] = {
-            "description": "Remove an event subscription by its ID.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "subscription_id": {
-                        "type": "number",
-                        "description": "Subscription ID from subscribe()"
-                    }
-                },
-                "required": ["subscription_id"]
-            },
-            "function": self._tool_unsubscribe
-        }
-        self._tools["get_events"] = {
-            "description": (
-                "Drain queued Indigo change events. Pass `since` (Unix timestamp) "
-                "to get only events after a previous call. Returns up to `limit` "
-                "events (default 50). Requires at least one active subscription."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "since": {
-                        "type": "number",
-                        "description": "Unix timestamp — only return events after this"
-                    },
-                    "limit": {
-                        "type": "number",
-                        "description": "Max events to return (default 50)"
-                    }
-                }
-            },
-            "function": self._tool_get_events
-        }
-        self._tools["list_subscriptions"] = {
-            "description": "List active event subscriptions and current queue depth.",
-            "inputSchema": {"type": "object", "properties": {}},
-            "function": self._tool_list_subscriptions
-        }
-        self._tools["clear_events"] = {
-            "description": "Flush the event queue without returning its contents.",
-            "inputSchema": {"type": "object", "properties": {}},
-            "function": self._tool_clear_events
         }
 
         # ── Home status tools ──────────────────────────────────────────────
@@ -4075,8 +3855,7 @@ class MCPHandler:
         }
         self._tools["device_history"] = {
             "description": ("Read recent SQL Logger history for one device. Returns "
-                            "timestamp + non-null state columns. Far cheaper than "
-                            "analyze_historical_data for a focused trend query. "
+                            "timestamp + non-null state columns. "
                             "Column names are stored LOWERCASE (batterysoc, not "
                             "batterySoc); an unknown name is an error listing the "
                             "valid columns. Rows are sparse — only changed values "
@@ -4656,19 +4435,6 @@ class MCPHandler:
 
     # ── Audit dispatch methods ──────────────────────────────────────────────
 
-    def _emit(self, message: str, progress: float = None, data: dict = None) -> None:
-        """
-        Helper for tools that want to surface progress notifications.
-        Safe to call from any tool — does nothing if no emitter is active
-        (e.g. when invoked via direct method call rather than tools/call).
-        """
-        emitter = getattr(self._emitter_local, "emitter", None)
-        if emitter is not None:
-            try:
-                emitter.emit(message, progress=progress, data=data)
-            except Exception:
-                pass
-
     def _tool_audit_home(self) -> str:
         try:
             return safe_json_dumps(self.audit_handler.audit_home())
@@ -4716,36 +4482,6 @@ class MCPHandler:
             return safe_json_dumps(self.audit_handler.find_conflicts())
         except Exception as e:
             self.logger.error(f"find_conflicts error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    # ── Memory dispatch methods ─────────────────────────────────────────────
-
-    def _tool_remember(self, topic: str, note: str) -> str:
-        try:
-            return safe_json_dumps(self.memory_handler.remember(topic, note))
-        except Exception as e:
-            self.logger.error(f"remember error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    def _tool_recall(self, topic: str = None) -> str:
-        try:
-            return safe_json_dumps(self.memory_handler.recall(topic))
-        except Exception as e:
-            self.logger.error(f"recall error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    def _tool_recall_topics(self) -> str:
-        try:
-            return safe_json_dumps(self.memory_handler.recall_topics())
-        except Exception as e:
-            self.logger.error(f"recall_topics error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    def _tool_forget(self, memory_id: int) -> str:
-        try:
-            return safe_json_dumps(self.memory_handler.forget(memory_id))
-        except Exception as e:
-            self.logger.error(f"forget error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     # ── Script tools dispatch methods ───────────────────────────────────────
@@ -4800,49 +4536,6 @@ class MCPHandler:
             )
         except Exception as e:
             self.logger.error(f"scaffold_automation_script error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    # ── Events dispatch methods ─────────────────────────────────────────────
-
-    def _tool_subscribe(self, entity_type: str = "all", entity_id: int = None) -> str:
-        try:
-            return safe_json_dumps(self.events_handler.subscribe(entity_type, entity_id))
-        except Exception as e:
-            self.logger.error(f"subscribe error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    def _tool_unsubscribe(self, subscription_id: int) -> str:
-        try:
-            return safe_json_dumps(self.events_handler.unsubscribe(subscription_id))
-        except Exception as e:
-            self.logger.error(f"unsubscribe error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    def _tool_get_events(
-        self,
-        since: float = None,
-        limit: int = 50,
-    ) -> str:
-        try:
-            return safe_json_dumps(
-                self.events_handler.get_events(since, limit)
-            )
-        except Exception as e:
-            self.logger.error(f"get_events error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    def _tool_list_subscriptions(self) -> str:
-        try:
-            return safe_json_dumps(self.events_handler.list_subscriptions())
-        except Exception as e:
-            self.logger.error(f"list_subscriptions error: {e}")
-            return safe_json_dumps({"error": str(e)})
-
-    def _tool_clear_events(self) -> str:
-        try:
-            return safe_json_dumps(self.events_handler.clear_events())
-        except Exception as e:
-            self.logger.error(f"clear_events error: {e}")
             return safe_json_dumps({"error": str(e)})
 
     # ── Home status dispatch methods ────────────────────────────────────────
@@ -5432,22 +5125,6 @@ class MCPHandler:
             return safe_json_dumps(result)
         except Exception as e:
             self.logger.error(f"Action execute error: {e}")
-            return safe_json_dumps({"error": str(e)})
-    
-    def _tool_analyze_historical_data(
-        self, 
-        query: str, 
-        device_names: List[str], 
-        time_range_days: int = 30
-    ) -> str:
-        """Analyze historical data tool implementation."""
-        try:
-            result = self.historical_analysis_handler.analyze_historical_data(
-                query, device_names, time_range_days
-            )
-            return safe_json_dumps(result)
-        except Exception as e:
-            self.logger.error(f"Historical analysis error: {e}")
             return safe_json_dumps({"error": str(e)})
     
     def _tool_list_devices(self, state_filter: Dict = None) -> str:

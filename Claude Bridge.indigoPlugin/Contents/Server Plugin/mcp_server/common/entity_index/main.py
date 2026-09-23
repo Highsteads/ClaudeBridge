@@ -1,14 +1,15 @@
 """
-Simple in-memory text search store for Indigo entities.
-Replaces the original LanceDB vector store — no embeddings required.
-Uses difflib fuzzy matching for natural-language entity search.
+In-memory entity index for Indigo devices, variables and action groups.
+
+Plain fuzzy text search with difflib — no embeddings, no model and no
+database. The package was called "vector_store" until the September 2026
+spring clean, a name left over from the LanceDB store it replaced.
 """
 
 import logging
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
 
-from ...adapters.vector_store_interface import VectorStoreInterface
 from .synonyms import variants_for_query
 from .type_aliases import aliases_for
 
@@ -18,33 +19,29 @@ from .type_aliases import aliases_for
 _SYNONYM_DISCOUNT = 0.9
 
 
-class VectorStore(VectorStoreInterface):
-    """
-    Lightweight in-memory entity store with fuzzy text search.
-    Implements VectorStoreInterface so all callers work unchanged.
-    """
+class EntityIndex:
+    """Lightweight in-memory entity index with fuzzy text search."""
 
-    def __init__(self, db_path: str, logger: Optional[logging.Logger] = None):
-        self.db_path = db_path  # Retained for interface compatibility
+    def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger  = logger or logging.getLogger("Plugin")
         self._store: Dict[str, List[Dict[str, Any]]] = {
             "devices":   [],
             "variables": [],
             "actions":   [],
         }
-        self.logger.info("Text search store initialised (no embeddings required)")
+        self.logger.info("Entity index initialised")
 
     # ------------------------------------------------------------------
     # Population
     # ------------------------------------------------------------------
 
-    def update_embeddings(
+    def load_entities(
         self,
         devices:   List[Dict[str, Any]],
         variables: List[Dict[str, Any]],
         actions:   List[Dict[str, Any]],
     ) -> None:
-        """Store entity lists for search. Called by VectorStoreManager."""
+        """Store entity lists for search. Called by EntityIndexManager."""
         self._store["devices"]   = list(devices)
         self._store["variables"] = list(variables)
         self._store["actions"]   = list(actions)
@@ -122,7 +119,8 @@ class VectorStore(VectorStoreInterface):
             similarity_threshold: Minimum score (0-1) to include a result
 
         Returns:
-            (results, metadata) matching the VectorStoreInterface contract
+            (results, metadata) — metadata carries total_found,
+            total_returned and truncated
         """
         if entity_types is None:
             entity_types = ["devices", "variables", "actions"]
@@ -161,34 +159,14 @@ class VectorStore(VectorStoreInterface):
         return limited, metadata
 
     # ------------------------------------------------------------------
-    # Single-entity helpers
-    # ------------------------------------------------------------------
-
-    def add_entity(self, entity_type: str, entity_data: Dict[str, Any]) -> None:
-        table = entity_type if entity_type.endswith("s") else entity_type + "s"
-        if table in self._store:
-            eid = entity_data.get("id")
-            self._store[table] = [e for e in self._store[table] if e.get("id") != eid]
-            self._store[table].append(entity_data)
-
-    def remove_entity(self, entity_type: str, entity_id: int) -> None:
-        table = entity_type if entity_type.endswith("s") else entity_type + "s"
-        if table in self._store:
-            self._store[table] = [
-                e for e in self._store[table] if e.get("id") != entity_id
-            ]
-
-    # ------------------------------------------------------------------
     # Stats / lifecycle
     # ------------------------------------------------------------------
 
     def get_stats(self) -> Dict[str, Any]:
         return {
-            "database_path": self.db_path,
-            "dimension":     0,
-            "tables":        {k: len(v) for k, v in self._store.items()},
+            "tables": {k: len(v) for k, v in self._store.items()},
         }
 
     def close(self) -> None:
         self._store = {"devices": [], "variables": [], "actions": []}
-        self.logger.debug("Text search store closed")
+        self.logger.debug("Entity index closed")

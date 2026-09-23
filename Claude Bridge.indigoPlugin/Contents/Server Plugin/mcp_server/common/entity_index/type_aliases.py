@@ -16,7 +16,7 @@
 from typing import Any, Dict
 
 # deviceTypeId -> space-separated synonym string. Lower-case throughout; matched
-# as plain substring/word membership by VectorStore._score (no stemming), so
+# as plain substring/word membership by EntityIndex._score (no stemming), so
 # include the common singular forms a user would actually type.
 TYPE_ALIASES: Dict[str, str] = {
     # ── Lights / dimmers ────────────────────────────────────────────────

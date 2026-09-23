@@ -156,7 +156,7 @@ class IndigoDataProvider(DataProvider):
 
     def get_all_variables_unfiltered(self) -> List[Dict[str, Any]]:
         """
-        Get all variables from Indigo with complete data (unfiltered for vector store).
+        Get all variables from Indigo with complete data (unfiltered, for the entity index).
 
         Returns:
             List of complete variable dictionaries with all fields
@@ -221,7 +221,7 @@ class IndigoDataProvider(DataProvider):
     
     def get_all_devices_unfiltered(self) -> List[Dict[str, Any]]:
         """
-        Get all devices from Indigo with complete data (unfiltered for vector store).
+        Get all devices from Indigo with complete data (unfiltered, for the entity index).
         
         Returns:
             List of complete device dictionaries
@@ -236,9 +236,9 @@ class IndigoDataProvider(DataProvider):
             
         return devices
     
-    def get_all_entities_for_vector_store(self) -> Dict[str, List[Dict[str, Any]]]:
+    def get_all_entities_for_index(self) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Get all entities formatted for vector store updates with complete data.
+        Get all entities, with complete data, for loading the entity index.
 
         Returns:
             Dictionary with 'devices', 'variables', 'actions' keys

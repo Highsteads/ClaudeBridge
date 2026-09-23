@@ -137,7 +137,7 @@ def test_health_reports_wedged_exec(tmp_path):
     handler._sessions_lock     = threading.Lock()
     handler._sessions          = {}
     handler._resources         = {}
-    handler.vector_store_manager = None
+    handler.entity_index_manager = None
 
     health = handler.get_health_data()
     assert health["status"] == "ok"

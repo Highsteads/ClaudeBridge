@@ -32,7 +32,7 @@ CACHEABLE_TOOLS: Set[str] = {
     "get_devices_by_type", "get_devices_by_state",
     "list_devices", "list_variables", "list_action_groups",
     "list_schedules", "list_triggers", "list_plugins",
-    "list_python_scripts", "list_subscriptions", "list_script_backups",
+    "list_python_scripts", "list_script_backups",
     "list_variable_folders",
     # Get-by-id
     "get_device_by_id", "get_variable_by_id", "get_action_group_by_id",
@@ -47,8 +47,6 @@ CACHEABLE_TOOLS: Set[str] = {
     # Status reports
     "home_status", "home_status_report",
     "energy_status", "heating_status", "security_status",
-    # Memory recall
-    "recall", "recall_topics",
     # Read scripts
     "read_script",
     # Energy
@@ -74,8 +72,6 @@ _TRIGGER_TOOLS = {"list_triggers"}
 _PLUGIN_TOOLS = {"list_plugins", "get_plugin_by_id"}
 _SCRIPT_TOOLS = {"list_python_scripts", "list_script_backups", "read_script",
                  "find_orphaned_scripts"}
-_MEMORY_TOOLS = {"recall", "recall_topics"}
-_SUBSCRIPTION_TOOLS = {"list_subscriptions"}
 
 # Arbitrary-mutation tools whose effect on cached state can't be scoped to a
 # single entity bucket — invalidate EVERYTHING for these.
@@ -172,9 +168,6 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "variable_move_to_folder":  _VARIABLE_TOOLS,
     "create_variable_folder":   _VARIABLE_TOOLS,   # shows up in list_variable_folders
     "create_device_folder":     _DEVICE_TOOLS,
-    # ── Subscriptions (change list_subscriptions output) ────────────────
-    "subscribe":                _SUBSCRIPTION_TOOLS,
-    "unsubscribe":              _SUBSCRIPTION_TOOLS,
     # ── Action groups ───────────────────────────────────────────────────
     "action_execute_group":     _ACTION_TOOLS | _DEVICE_TOOLS,
     "duplicate_action_group":   _ACTION_TOOLS,
@@ -207,9 +200,6 @@ _INVALIDATION_MAP: Dict[str, Set[str]] = {
     "write_script":             _SCRIPT_TOOLS,
     "create_script":            _SCRIPT_TOOLS,
     "delete_script":            _SCRIPT_TOOLS,
-    # ── Memory ──────────────────────────────────────────────────────────
-    "remember":                 _MEMORY_TOOLS,
-    "forget":                   _MEMORY_TOOLS,
     # ── Events ──────────────────────────────────────────────────────────
     "fire_indigo_event":        _DEVICE_TOOLS | _VARIABLE_TOOLS,  # may cause side-effects
 }
@@ -240,13 +230,6 @@ class ToolCache:
         # a read that started before a mutation could reinstate a stale entry
         # AFTER the invalidation dropped it (a TOCTOU that would survive to TTL).
         self._generation = 0
-
-        # Per-key in-flight state so concurrent identical misses share one
-        # compute() (avoids the thundering-herd duplicate the cache exists to
-        # prevent). Each entry is [lock, waiter_count]; the entry is removed
-        # once the last waiter has finished, so it never leaks. Guarded by
-        # _lock for creation/cleanup.
-        self._inflight: Dict[Tuple[str, str], list] = {}
 
         # Per-domain change counters, bumped by note_external_change() from the
         # plugin's deviceUpdated / variableUpdated callbacks. See _TOOL_DOMAINS.
@@ -282,7 +265,7 @@ class ToolCache:
         """Snapshot the change counters this tool's answer depends on.
 
         MUST be called with _lock held. A tool outside _TOOL_DOMAINS (system
-        health, script listings, memory recall) is unaffected by device or
+        health, script listings) is unaffected by device or
         variable traffic and gets an empty stamp, so it caches exactly as before.
         """
         domains = _TOOL_DOMAINS.get(tool_name)
@@ -335,13 +318,12 @@ class ToolCache:
 
         key = self.make_key(tool_name, args)
 
-        # Fast path — read under lock
         with self._lock:
             now = time.monotonic()
             self._sweep_expired_locked(now)
             entry = self._store.get(key)
-            stamp = self._domain_stamp_locked(tool_name)
-            if entry and entry[0] > now and entry[2] == stamp:
+            stamp_at_start = self._domain_stamp_locked(tool_name)
+            if entry and entry[0] > now and entry[2] == stamp_at_start:
                 self.hits += 1
                 return entry[1], True
             elif entry:
@@ -349,64 +331,32 @@ class ToolCache:
                 if entry[0] > now:
                     self.stale_drops += 1
                 self._store.pop(key, None)
-            # Reserve (or join) the per-key in-flight slot for this miss so
-            # concurrent identical misses don't all run compute(). slot is
-            # [lock, waiter_count]; waiter_count tracks how many callers still
-            # hold a reference, so the slot can be removed only by the last one.
-            slot = self._inflight.get(key)
-            if slot is None:
-                slot = [threading.Lock(), 0]
-                self._inflight[key] = slot
-            slot[1] += 1
-            inflight = slot[0]
+            gen_at_start = self._generation
 
-        # Miss — serialise only callers for the SAME key (other keys still run
-        # concurrently). The first to acquire computes; the rest then find the
-        # freshly cached value.
-        try:
-            with inflight:
-                with self._lock:
-                    entry = self._store.get(key)
-                    now = time.monotonic()
-                    if entry and entry[0] > now and entry[2] == self._domain_stamp_locked(tool_name):
-                        self.hits += 1
-                        # We waited on another caller that already computed this.
-                        return entry[1], True
-                    gen_at_start = self._generation
-                    stamp_at_start = self._domain_stamp_locked(tool_name)
-
-                # Compute outside the store lock to avoid serialising callers
-                # for other keys.
-                result = compute()
-                store_it = cache_ok is None or cache_ok(result)
-                with self._lock:
-                    # If an invalidation/clear happened WHILE we were computing,
-                    # our result reflects pre-mutation state — do not store it, or
-                    # it would reinstate a stale entry the invalidation just dropped.
-                    if self._generation != gen_at_start:
-                        store_it = False
-                    # Same reasoning for real-world changes: if a device or
-                    # variable moved WHILE we were computing, the result is
-                    # already pre-change — storing it would serve known-stale
-                    # data for a full TTL.
-                    stamp_now = self._domain_stamp_locked(tool_name)
-                    if stamp_now != stamp_at_start:
-                        store_it = False
-                    if store_it:
-                        # Stamp expiry from AFTER compute() so a slow compute does
-                        # not shorten the effective TTL.
-                        self._store[key] = (time.monotonic() + self.default_ttl,
-                                            result, stamp_now)
-                    self.misses += 1
-                return result, False
-        finally:
-            # Drop our reference; remove the slot once the last waiter is done.
-            with self._lock:
-                slot = self._inflight.get(key)
-                if slot is not None:
-                    slot[1] -= 1
-                    if slot[1] <= 0:
-                        self._inflight.pop(key, None)
+        # Miss. No per-key coalescing: Indigo dispatches every IWS request on
+        # the plugin's one MainThread (see common/exec_lock.py), so two calls
+        # for the same key can never be computing at once. Compute outside
+        # the lock all the same, so the lock is never held across tool code.
+        result = compute()
+        store_it = cache_ok is None or cache_ok(result)
+        with self._lock:
+            # If an invalidation/clear happened WHILE we were computing, our
+            # result reflects pre-mutation state — do not store it, or it
+            # would reinstate a stale entry the invalidation just dropped.
+            if self._generation != gen_at_start:
+                store_it = False
+            # Same reasoning for real-world changes: if a device or variable
+            # moved WHILE we were computing, the result is already pre-change.
+            stamp_now = self._domain_stamp_locked(tool_name)
+            if stamp_now != stamp_at_start:
+                store_it = False
+            if store_it:
+                # Stamp expiry from AFTER compute() so a slow compute does not
+                # shorten the effective TTL.
+                self._store[key] = (time.monotonic() + self.default_ttl,
+                                    result, stamp_now)
+            self.misses += 1
+        return result, False
 
     def invalidate_for_tool(self, mutating_tool: str) -> int:
         """

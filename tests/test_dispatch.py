@@ -6,7 +6,7 @@
 #              dispatch, required-argument validation (-32602), sensitive-tool
 #              error scrubbing, rate limiting, and the happy-path response
 #              shape. The handler is built skeletally (object.__new__) so no
-#              vector store, runtime_config or Indigo server is needed.
+#              entity index, runtime_config or Indigo server is needed.
 # Author:      CliveS & Claude Fable 5
 # Date:        10-06-2026
 # Version:     1.0
@@ -36,7 +36,6 @@ def _make_handler(tmp_path, scopes_data=None, tools=None, per_minute=120):
     h.rate_limiter    = RateLimiter(per_minute=per_minute, per_day=5_000,
                                     admin_multiplier=1.0, logger=_LOGGER)
     h.tool_cache      = ToolCache(default_ttl=0, logger=_LOGGER)
-    h._emitter_local  = threading.local()
     h._telemetry_lock = threading.Lock()
     h._tool_call_log  = deque(maxlen=200)
     h._tool_error_count = 0

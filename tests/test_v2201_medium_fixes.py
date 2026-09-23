@@ -160,24 +160,6 @@ def test_encoder_does_not_silently_flatten_indigo_containers():
     )
 
 
-# ── InfluxQL: the unquoted parameters need an allowlist, not escaping ────────
-
-def test_aggregation_and_interval_are_allowlisted():
-    from mcp_server.common.influxdb.queries import InfluxDBQueryBuilder
-
-    b = InfluxDBQueryBuilder()
-    q = b.build_aggregation_query("Lamp", "brightness", "mean", group_by_time="1h")
-    assert "MEAN(" in q
-    assert "GROUP BY time(1h)" in q
-
-    with pytest.raises(ValueError):
-        b.build_aggregation_query("Lamp", "brightness",
-                                  "MEAN(x) FROM y; DROP MEASUREMENT z --")
-    with pytest.raises(ValueError):
-        b.build_aggregation_query("Lamp", "brightness", "mean",
-                                  group_by_time="1h) --")
-
-
 # ── The exact-match short-circuit must not pre-empt the filters ──────────────
 
 def test_short_circuit_skipped_when_a_filter_will_run():

@@ -12,8 +12,8 @@
 
 import pytest
 
-from mcp_server.common.vector_store.main import VectorStore
-from mcp_server.common.vector_store.type_aliases import aliases_for, TYPE_ALIASES
+from mcp_server.common.entity_index.main import EntityIndex
+from mcp_server.common.entity_index.type_aliases import aliases_for, TYPE_ALIASES
 
 
 # Representative slice of the real estate (deviceTypeId + class as dict(dev) yields).
@@ -42,8 +42,8 @@ ACTIONS = [
 
 @pytest.fixture
 def store():
-    s = VectorStore(db_path=":test:")
-    s.update_embeddings(DEVICES, VARIABLES, ACTIONS)
+    s = EntityIndex()
+    s.load_entities(DEVICES, VARIABLES, ACTIONS)
     return s
 
 

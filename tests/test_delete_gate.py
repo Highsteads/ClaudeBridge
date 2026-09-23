@@ -42,7 +42,7 @@ def test_default_is_off():
 @pytest.mark.parametrize("stored,expected", [
     (True, True), (False, False),
     # Indigo re-serialises a checkbox as a STRING after a dialog save. bool()
-    # on these is the bug that made is_influx_enabled read backwards.
+    # on these is the bug that made the old InfluxDB switch read backwards.
     ("true", True), ("false", False), ("", False),
     ("True", True), ("False", False), ("on", True), ("off", False),
     # Junk must not read as permission.

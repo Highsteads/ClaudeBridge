@@ -2,7 +2,7 @@
 State filtering utilities for Indigo entities.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import re
 
 
@@ -181,50 +181,6 @@ class StateFilter:
                 return False
 
         return True
-    
-    @staticmethod
-    def parse_state_requirements(query: str) -> Optional[Dict[str, Any]]:
-        """
-        Extract state requirements from natural language query.
-        
-        Args:
-            query: Natural language search query
-            
-        Returns:
-            Dictionary of state conditions or None if no state requirements detected
-        """
-        query_lower = query.lower()
-        conditions = {}
-        
-        # Detect on/off states
-        if any(word in query_lower for word in ["on", "active", "enabled", "turned on"]):
-            conditions["onState"] = True
-        elif any(word in query_lower for word in ["off", "inactive", "disabled", "turned off"]):
-            conditions["onState"] = False
-            
-        # Detect brightness levels
-        if "bright" in query_lower or "dim" in query_lower:
-            if "bright" in query_lower:
-                # Bright means > 50% brightness
-                conditions["brightnessLevel"] = {"gt": 50}
-            elif "dim" in query_lower:
-                # Dim means <= 50% brightness
-                conditions["brightnessLevel"] = {"lte": 50}
-                
-        # Detect error states
-        if "error" in query_lower or "fault" in query_lower:
-            if "no error" in query_lower or "without error" in query_lower:
-                conditions["errorState"] = ""
-            else:
-                conditions["errorState"] = {"ne": ""}
-                
-        # Detect temperature-related states for sensors
-        if "hot" in query_lower or "warm" in query_lower:
-            conditions["temperature"] = {"gt": 75}
-        elif "cold" in query_lower or "cool" in query_lower:
-            conditions["temperature"] = {"lt": 65}
-            
-        return conditions if conditions else None
     
     @staticmethod
     def has_state_keywords(query: str) -> bool:

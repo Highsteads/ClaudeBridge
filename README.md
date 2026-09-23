@@ -14,14 +14,14 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 ## How it works
 
-Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **169 tools** for reading and controlling your system.
+Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **159 tools** for reading and controlling your system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
 │  Claude Code        │         │  go-between script   │         │  Indigo web  │
 │  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
 │                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (169 tools) │
+│                     │         │  key automatically   │         │  (159 tools) │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
@@ -175,9 +175,9 @@ You read the result, hit Enter to commit, done. No Googling
 
 ## What it does
 
-Claude Bridge gives Claude Code **169 MCP tools**, enough to read and change anything on a running
-Indigo server: **70 read** tools (pure queries), **68 write** tools (they change Indigo state) and
-**30 admin** tools (deletes, code execution, plugin lifecycle, physical security). By area:
+Claude Bridge gives Claude Code **159 MCP tools**, enough to read and change anything on a running
+Indigo server: **65 read** tools (pure queries), **63 write** tools (they change Indigo state) and
+**31 admin** tools (deletes, code execution, plugin lifecycle, physical security). By area:
 
 - **Devices** — list, search and inspect by id, name, type or state; plain-English search; on, off,
   toggle, brightness, colour, fan speed, lock and unlock; timed actions that Indigo's own engine
@@ -191,14 +191,13 @@ Indigo server: **70 read** tools (pure queries), **68 write** tools (they change
 - **Scripts** — read, write with automatic backups, create, archive and run, in both script folders;
   a scaffolder that writes a script in the house style with every id resolved live.
 - **The event log** — search it by keyword, device, plugin or time, including entries older than
-  the Indigo window shows; watch a device or variable for its next change.
+  the Indigo window shows.
 - **Event webhooks** — the home posts a signed event to a URL you run, behind a default-deny
   firewall. Off until you turn it on.
 - **Plugin-provided tools** — any plugin that ships a manifest brings its own tools, listed under
   its prefix and forwarded to it.
-- **Memory, audits, health, reporting and notifications** — cross-session memory; whole-system
-  audits and finders for what is in error, quiet, orphaned or oversized; a prose status report;
-  e-mail, Pushover and log lines.
+- **Audits, health, reporting and notifications** — whole-system audits and finders for what is
+  in error, quiet, orphaned or oversized; a prose status report; e-mail, Pushover and log lines.
 - **A scripting shell** — arbitrary Python in Indigo's context, admin scope only.
 
 Every tool by name, with the scope it needs, is in the
@@ -234,26 +233,17 @@ checked on every push. The fuller tour by area is
 
 ### What this costs — read this before installing
 
-There are two Anthropic things people mix up, and only ONE of them is required:
+Claude Code (the app you chat in) needs a paid Claude account: a **Claude Pro or
+Max subscription** from [claude.ai](https://claude.ai) is the usual route. This
+is the monthly plan that pays for your conversations — every question you ask
+and every answer Claude gives. If you already pay for Claude Pro or Max, you're
+done — this plugin adds nothing to that bill. (The alternative for the
+technically inclined is an Anthropic API account with pay-as-you-go billing
+instead of a subscription.)
 
-**1. A Claude subscription — required.** Claude Code (the app you chat in) needs a
-paid Claude account: a **Claude Pro or Max subscription** from
-[claude.ai](https://claude.ai) is the usual route. This is the monthly plan that
-pays for your conversations — every question you ask and every answer Claude
-gives. If you already pay for Claude Pro or Max, you're done — this plugin adds
-nothing to that bill. (The alternative for the technically inclined is an
-Anthropic API account with pay-as-you-go billing instead of a subscription.)
-
-**2. An Anthropic API key for the plugin itself — optional, most people can skip
-it.** The plugin can hold its own API key from
-[console.anthropic.com](https://console.anthropic.com), but it only uses it for
-one thing: writing AI summaries inside the historical-analysis tool, which also
-needs an InfluxDB database set up — a niche feature. **All 169 tools work
-without this key.** If you do set one up, it bills per use (pennies a month,
-as a rule), separately from your subscription.
-
-In short: **pay for Claude Pro or Max, skip the API key**, and everything in
-this README works.
+**The plugin itself needs no API key and no extra Python packages.** It runs on
+what Indigo already ships, so there is nothing to download at install and no
+second bill.
 
 ---
 
@@ -282,14 +272,12 @@ Then do these two final steps manually:
 1. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
 
-2. **Restart Claude Code** — you should see 169 `indigo-mcp` tools available
+2. **Restart Claude Code** — you should see 159 `indigo-mcp` tools available
 
 > **Credentials policy:** All sensitive values are read from
 > `/Library/Application Support/Perceptive Automation/IndigoSecrets.py` first, and
 > the plugin's PluginConfig dialog is a fallback only. Keys this plugin reads:
-> `ANTHROPIC_API_KEY` (optional — see "What this costs" above),
-> `CLAUDEBRIDGE_BEARER_TOKEN`, and (optional) `INFLUXDB_HOST`,
-> `INFLUXDB_PORT`, `INFLUXDB_USERNAME`, `INFLUXDB_PASSWORD`, `INFLUXDB_DATABASE`.
+> `CLAUDEBRIDGE_BEARER_TOKEN` and (optional) `WEBHOOK_ALLOWLIST`.
 > If a value is missing from BOTH sources, the plugin logs an ERROR pointing
 > here and skips that feature. See `IndigoSecrets_example.py` for the template.
 

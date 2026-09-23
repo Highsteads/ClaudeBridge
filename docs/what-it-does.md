@@ -5,7 +5,7 @@ nav_order: 3
 
 # What it does
 
-Claude Bridge gives Claude Code **169 MCP tools**, enough to read and change
+Claude Bridge gives Claude Code **159 MCP tools**, enough to read and change
 anything on a running Indigo server. They fall into the groups below, and every
 tool is listed by name in the [Tool reference](tools.md).
 
@@ -75,13 +75,10 @@ tool is listed by name in the [Tool reference](tools.md).
   Indigo's GUI action runner) so ad-hoc scripts don't need their own
   `import indigo`.
 
-### Event log & live watching
+### Event log
 - Search the Indigo event log by keyword, device, plugin, or time — including
   older entries beyond what the Indigo window shows, because it reads the log
   files themselves.
-- **Watch things as they happen** — ask Claude to keep an eye on a device or
-  variable and it can pick up every change as it occurs, so "tell me the next
-  time the back door opens" actually works.
 
 ### Event webhooks — the home calls out (optional, off by default)
 - Have Indigo send a message to a web address you run the moment something
@@ -97,11 +94,6 @@ tool is listed by name in the [Tool reference](tools.md).
 ### Plugin-provided tools — other plugins bring their own
 
 Any Indigo plugin can add tools of its own to Claude Bridge by shipping one JSON file, `Contents/Resources/mcp-manifest.json`, in its bundle. Claude Bridge finds the file on its own, lists the tools to Claude under that plugin's prefix (the Dashboards plugin's come out as `dashboards_get_status`, `dashboards_set_camera` and so on), and forwards each call to the plugin, which does the work and answers. Nothing to configure on either side, and a plugin picked up the moment it starts. The format is the provider-manifest contract published by [mlamoure's Indigo MCP Server](https://github.com/mlamoure/indigo-mcp-server), so a plugin written for that server works here unchanged, and one written for Claude Bridge works there. Tools a plugin marks as writes are governed by one switch under Configure, *Allow plugin-provided tools to make changes*, on by default; read tools always work. How to make your own plugin a provider is on [its own page](providers.md).
-
-### Persistent memory
-- `remember` / `recall` / `recall_topics` / `forget` — JSON-on-disk cross-
-  session memory, topic-tagged, capped at 100 entries with per-topic
-  fairness (the oldest entry of the same topic is evicted first).
 
 ### Audit, health, diagnostics
 - Whole-system audits, a security snapshot, and a system-health summary.
@@ -119,8 +111,8 @@ Any Indigo plugin can add tools of its own to Claude Bridge by shipping one JSON
 - **`home_status_report`** — prose-markdown narrative of the whole home,
   configurable by section (energy, heating, security, devices, alerts,
   automation).
-- **`analyze_historical_data`** — runs historical device/variable analysis,
-  using InfluxDB if the `INFLUXDB_*` keys are configured.
+- **`device_history`** — a device's recent history from the SQL Logger
+  database, for trends and "when did this last change".
 
 ### Notifications
 - `send_email` via Indigo's first SMTP device, `send_notification` via

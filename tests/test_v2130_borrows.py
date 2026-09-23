@@ -17,8 +17,8 @@ import pytest
 
 from mcp_server.adapters.indidb.parser import parse_indidb
 from mcp_server.adapters.indidb.store import IndiDbStructureStore
-from mcp_server.common.vector_store.main import VectorStore
-from mcp_server.common.vector_store.synonyms import variants_for_query
+from mcp_server.common.entity_index.main import EntityIndex
+from mcp_server.common.entity_index.synonyms import variants_for_query
 
 from test_indidb_adapter import SYNTHETIC_DB, TRIG_MOTION
 
@@ -199,8 +199,8 @@ def test_variants_no_match_is_empty():
 
 
 def _store_with(devices):
-    store = VectorStore(db_path="/dev/null")
-    store.update_embeddings(devices=devices, variables=[], actions=[])
+    store = EntityIndex()
+    store.load_entities(devices=devices, variables=[], actions=[])
     return store
 
 

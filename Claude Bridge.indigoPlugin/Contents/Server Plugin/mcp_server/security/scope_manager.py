@@ -67,17 +67,17 @@ READ_TOOLS: Set[str] = {
     "search_entities", "get_devices_by_type", "get_device_by_id", "get_device_by_name",
     "get_devices_by_state", "list_devices", "list_variables", "list_schedules",
     "list_triggers", "list_action_groups", "list_control_pages", "list_plugins",
-    "list_python_scripts", "list_script_backups", "list_subscriptions", "list_variable_folders",
+    "list_python_scripts", "list_script_backups", "list_variable_folders",
     "get_variable_by_id", "get_action_group_by_id", "get_control_page", "get_plugin_by_id",
     "get_plugin_status", "home_status", "home_status_report", "heating_status", "energy_status",
-    "energy_compare", "energy_daily_summary", "energy_log_days", "analyze_historical_data",
+    "energy_compare", "energy_daily_summary", "energy_log_days",
     "device_history", "audit_home", "audit_variables", "find_conflicts", "find_devices_in_error",
     "find_low_battery", "find_orphaned_plugin_data", "find_orphaned_scripts", "find_stale_devices",
     "find_large_files", "dependency_map", "action_group_get_dependencies", "schedule_get_dependencies",
     "get_deprecated_elements", "get_latitude_longitude", "get_reflector_url", "get_web_server_url",
     "trigger_get_dependencies", "get_reflector_status", "get_indigo_paths",
-    "calculate_sunrise", "calculate_sunset", "check_plugin_updates", "read_script", "recall",
-    "recall_topics", "get_events", "query_event_log", "security_status", "system_health",
+    "calculate_sunrise", "calculate_sunset", "check_plugin_updates", "read_script",
+    "query_event_log", "security_status", "system_health",
     "plugin_diff_source_vs_installed", "plugin_lint", "plugin_node_check_html",
     "plugin_show_packages_versions", "plugin_validate_xml",
     # v2.9.0 — read-only API drift detector
@@ -112,8 +112,8 @@ WRITE_TOOLS: Set[str] = {
     "create_device_folder", "create_variable_folder",
     "enable_device", "rename_device", "move_device_to_folder", "move_trigger_to_folder",
     "duplicate_device", "duplicate_schedule", "request_status_update",
-    # Memory / events / subscriptions / logging
-    "remember", "forget", "clear_events", "subscribe", "unsubscribe", "log_message",
+    # Logging
+    "log_message",
     # Outbound side effects (send as the user)
     "send_email", "send_notification", "server_speak",
     # v2.9.0 — diagnostics, energy reset, delayed actions, native broadcasts.

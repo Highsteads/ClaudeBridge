@@ -69,7 +69,7 @@ class DataProvider(ABC):
     @abstractmethod
     def get_all_variables_unfiltered(self) -> List[Dict[str, Any]]:
         """
-        Get all variables with complete data (unfiltered for vector store).
+        Get all variables with complete data (unfiltered, for the entity index).
 
         Returns:
             List of complete variable dictionaries with all fields:

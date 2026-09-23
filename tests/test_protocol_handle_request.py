@@ -34,7 +34,6 @@ def _make_handler(tmp_path):
                                        logger=_LOGGER)
     h.rate_limiter      = RateLimiter(logger=_LOGGER)
     h.tool_cache        = ToolCache(default_ttl=0, logger=_LOGGER)
-    h._emitter_local    = threading.local()
     h._telemetry_lock   = threading.Lock()
     h._tool_call_log    = deque(maxlen=200)
     h._tool_error_count = 0

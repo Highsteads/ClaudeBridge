@@ -170,30 +170,3 @@ class PluginScanner:
             "path": bundle_path,
         }
 
-    def parse_info_plist(self, plist_path: str) -> Optional[Dict]:
-        """
-        Parse an Info.plist file and extract plugin metadata.
-
-        Args:
-            plist_path: Path to Info.plist file
-
-        Returns:
-            Dictionary with metadata or None if parsing failed
-        """
-        if not os.path.exists(plist_path):
-            return None
-
-        try:
-            with open(plist_path, "rb") as f:
-                plist_data = plistlib.load(f)
-
-            return {
-                "id": plist_data.get("CFBundleIdentifier"),
-                "name": plist_data.get("CFBundleDisplayName")
-                or plist_data.get("CFBundleName"),
-                "version": plist_data.get("PluginVersion")
-                or plist_data.get("CFBundleVersion"),
-            }
-        except Exception as e:
-            self.logger.warning(f"Failed to parse Info.plist at {plist_path}: {e}")
-            return None

@@ -159,7 +159,6 @@ def _make_handler(tmp_path, tools, redactor):
     h.rate_limiter    = RateLimiter(per_minute=120, per_day=5_000,
                                     admin_multiplier=1.0, logger=_LOGGER)
     h.tool_cache      = ToolCache(default_ttl=0, logger=_LOGGER)
-    h._emitter_local  = threading.local()
     h._telemetry_lock = threading.Lock()
     h._tool_call_log  = deque(maxlen=200)
     h._tool_error_count = 0
@@ -167,7 +166,7 @@ def _make_handler(tmp_path, tools, redactor):
     h._secret_redactor = redactor
     h.plugin          = None
     # Both code-running tools trigger a search-index refresh afterwards.
-    h.vector_store_manager = MagicMock()
+    h.entity_index_manager = MagicMock()
     return h
 
 

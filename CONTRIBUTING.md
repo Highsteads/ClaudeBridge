@@ -11,9 +11,13 @@ and resolves the plugin bundle automatically (a live installed copy if one
 exists, otherwise the bundle inside this repo).
 
 ```bash
-pip install -r "Claude Bridge.indigoPlugin/Contents/Server Plugin/requirements.txt" pytest
+pip install pytest
 python -m pytest tests -q
 ```
+
+The plugin needs nothing beyond the standard library and Indigo itself, so
+pytest is the only thing to install. `tests/test_no_third_party_deps.py` fails
+the suite if a module in the bundle ever imports anything else.
 
 To force the suite to run against this repo's bundle even on a machine with a
 live Indigo install:
@@ -21,10 +25,6 @@ live Indigo install:
 ```bash
 CB_SP="$PWD/Claude Bridge.indigoPlugin/Contents/Server Plugin" python -m pytest tests -q
 ```
-
-The repo's bundle carries no vendored `Contents/Packages`, only the installed
-one does, so run the `pip install -r ...` above first or this override fails at
-import with a missing third-party module rather than a test failure.
 
 Lint (errors only — undefined names, unused imports; no style policing) and
 the README tool-table staleness check:
@@ -49,7 +49,7 @@ Claude Bridge.indigoPlugin/Contents/Server Plugin/
     ├── tools/<category>/   # one handler module per tool category
     ├── security/           # scope manager, rate limiter, egress firewall
     ├── webhooks/           # outbound event webhook engine
-    └── common/             # tool cache, search store, influxdb, helpers
+    └── common/             # tool cache, entity (search) index, helpers
 tests/                      # pytest suite — runs standalone, <10 s
 scripts/generate_tool_doc.py # regenerates the README tool table from the registry
 ```

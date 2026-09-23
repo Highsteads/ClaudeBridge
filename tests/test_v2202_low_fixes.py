@@ -7,36 +7,6 @@
 # Date:        09-08-2026
 # Version:     1.0
 
-# ── Credentials must not appear in a diagnostic dump ─────────────────────────
-
-def test_snapshot_masks_secrets_by_default():
-    from mcp_server import runtime_config
-
-    runtime_config.configure(anthropic_api_key="sk-ant-secret-value",
-                             influxdb_password="hunter2")
-    snap = runtime_config.snapshot()
-
-    assert "sk-ant-secret-value" not in str(snap)
-    assert "hunter2" not in str(snap)
-    # Still says whether a value is SET — masking must not destroy the signal.
-    assert "set" in str(snap["anthropic_api_key"]).lower()
-
-    revealed = runtime_config.snapshot(reveal_secrets=True)
-    assert revealed["anthropic_api_key"] == "sk-ant-secret-value"
-
-
-def test_influx_enabled_is_not_fooled_by_the_string_false():
-    """Indigo re-serialises a checkbox as "false", and bool("false") is True."""
-    from mcp_server import runtime_config
-
-    for falsey in ("false", "False", "0", "no", "off", "", False):
-        runtime_config.configure(influxdb_enabled=falsey)
-        assert runtime_config.is_influx_enabled() is False, falsey
-    for truthy in ("true", "True", "1", "yes", "on", True):
-        runtime_config.configure(influxdb_enabled=truthy)
-        assert runtime_config.is_influx_enabled() is True, truthy
-
-
 # ── Battery reporting ────────────────────────────────────────────────────────
 
 class _Dev:
@@ -86,30 +56,6 @@ def test_a_string_scope_is_not_exploded_into_characters(tmp_path):
     sm = ScopeManager(str(path))
     assert sm._default == ["read"]
     assert sm._tokens["tok-abc"]["scopes"] == ["admin"]
-
-
-# ── Deleting one saved note must not delete another ─────────────────────────
-
-def test_memory_ids_are_unique_within_the_same_millisecond():
-    """forget() deletes BY id, so a shared id means collateral deletion."""
-    import time
-
-    from mcp_server.tools.memory import memory_handler
-
-    existing = [{"id": int(time.time() * 1000)}]
-    # Reproduces the generator: start at "now" and step past anything taken.
-    memory_id = existing[0]["id"]
-    taken = {m["id"] for m in existing}
-    while memory_id in taken:
-        memory_id += 1
-    assert memory_id not in taken
-
-    src = memory_handler.__file__
-    with open(src, encoding="utf-8") as fh:
-        body = fh.read()
-    assert "while memory_id in existing" in body, (
-        "remember() still trusts a bare millisecond epoch to be unique"
-    )
 
 
 # ── An audit figure must mean something ──────────────────────────────────────

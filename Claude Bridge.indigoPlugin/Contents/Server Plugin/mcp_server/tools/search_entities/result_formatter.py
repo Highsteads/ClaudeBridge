@@ -21,10 +21,10 @@ class ResultFormatter:
         Format search results for output.
         
         Args:
-            results: Raw search results from vector store
+            results: Raw search results from the entity index
             query: Original search query
             minimal_fields: Whether to use minimal fields for devices
-            search_metadata: Metadata from vector store search
+            search_metadata: Metadata from the entity index search
             
         Returns:
             Formatted results dictionary

@@ -360,7 +360,6 @@ def _handler(tmp_path, plugin_obj=None, get_plugin=None):
     h.scope_manager     = ScopeManager(scopes_file=str(tmp_path / "absent.json"), logger=_LOGGER)
     h.rate_limiter      = RateLimiter(logger=_LOGGER)
     h.tool_cache        = ToolCache(default_ttl=0, logger=_LOGGER)
-    h._emitter_local    = threading.local()
     h._telemetry_lock   = threading.Lock()
     h._tool_call_log    = deque(maxlen=200)
     h._tool_error_count = 0
@@ -371,7 +370,7 @@ def _handler(tmp_path, plugin_obj=None, get_plugin=None):
     h._sessions_lock    = threading.Lock()
     h._session_idle_ttl = 24 * 3600
     h._session_max      = 500
-    h.vector_store_manager = None
+    h.entity_index_manager = None
     h._builtin_tool_names  = frozenset(h._tools)
     h.external_tools       = ExternalToolManager(logger=_LOGGER, self_plugin_id=h.SELF_PLUGIN_ID,
                                                  write_gate_supplier=h._external_writes_allowed,
