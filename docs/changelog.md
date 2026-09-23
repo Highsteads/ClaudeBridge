@@ -8,6 +8,13 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 2.27.1 (2026-09-23)
+Clicking a plugin's menu item no longer fails when the reply contains an accent or a dash.
+
+Asking Claude to run *Scan Now* on Device Health Monitor came back with `'ascii' codec can't decode byte 0xe2`, which is the first byte of an em-dash. Inside an Indigo plugin host the text encoding defaults to plain ASCII, so any output from the Indigo client that was not plain ASCII broke the tool reading it, even though the click itself had worked. Every place Claude Bridge runs another program now reads its output as UTF-8: both menu tools, the `du` and `ps` readings behind `system_health` and `find_large_files`, and the `node` check behind `plugin_node_check_html`. A byte that still makes no sense is replaced rather than allowed to stop the tool.
+
+Five new tests. Four run a real child process under the same ASCII default the plugin host uses, and were watched failing on the old code with the exact error from the log. The fifth reads the whole bundle and fails if anything ever again runs a program as text without saying which encoding.
+
 ### 2.27.0 (2026-09-14)
 Claude can now use any of the Indigo client's own menus, not just a plugin's.
 

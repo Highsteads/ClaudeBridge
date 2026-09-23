@@ -101,7 +101,10 @@ _WALK_BUDGET_SECONDS = 10
 
 def _run(cmd: List[str], timeout: int = 5) -> str:
     try:
+        # encoding: the plugin host's locale is ASCII, so a non-ASCII file or
+        # process name would otherwise raise and blank the metric (2.27.1).
         return subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
                               timeout=timeout).stdout.strip()
     except Exception as e:
         # Don't fail silently — a missing binary or timeout otherwise looks like

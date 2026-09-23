@@ -111,3 +111,89 @@ def test_a_refused_path_never_reaches_osascript(monkeypatch):
 def test_listing_more_than_two_levels_is_refused():
     r = _Handler().execute_client_menu_item(["A", "B", "C"], list_only=True)
     assert r["success"] is False and "two levels" in r["error"]
+
+
+# ── non-ASCII output (2.27.1) ──────────────────────────────────────────────
+#
+# Inside an Indigo plugin host the locale encoding is ASCII, so a bare
+# subprocess.run(..., text=True) decodes osascript's output as ASCII and raises
+# "'ascii' codec can't decode byte 0xe2" on the first em-dash. Hit live on
+# Device Health Monitor -> Scan Now (18-09-2026). These tests reproduce the
+# host's condition for real: the default text encoding is forced to ASCII and a
+# genuine child process writes UTF-8 bytes, so what is being tested is the
+# decode subprocess itself performs, not a stand-in for it.
+
+import sys as _sys
+
+_UTF8_OUTPUT = "Scan complete — 3 devices checked, café lamp OK"
+
+
+def _host_like_run(monkeypatch, target_module):
+    """Make target_module.subprocess behave as it does inside the plugin host:
+    ASCII default decoding, and a child that prints UTF-8 in place of osascript."""
+    real_run = target_module.subprocess.run
+    monkeypatch.setattr(target_module.subprocess, "_text_encoding", lambda: "ascii")
+    child = [_sys.executable, "-c",
+             "import sys; sys.stdout.buffer.write(%r.encode('utf-8'))" % _UTF8_OUTPUT]
+
+    def _run(cmd, *a, **k):
+        return real_run(child, *a, **k)
+    monkeypatch.setattr(target_module.subprocess, "run", _run)
+
+
+def test_the_host_condition_is_really_reproduced(monkeypatch):
+    """Guard for the guard: a bare text=True run under this harness must fail
+    exactly as the plugin host did, or the two tests below prove nothing."""
+    _host_like_run(monkeypatch, mod)
+    with pytest.raises(UnicodeDecodeError):
+        mod.subprocess.run(["osascript"], capture_output=True, text=True, timeout=10)
+
+
+def test_plugin_menu_item_survives_non_ascii_output(monkeypatch):
+    _host_like_run(monkeypatch, mod)
+    r = _Handler().execute_plugin_menu_item("Device Health Monitor", "Scan Now")
+    assert r["success"] is True, r
+    assert r["stdout"] == _UTF8_OUTPUT
+
+
+def test_client_menu_item_survives_non_ascii_output(monkeypatch):
+    _host_like_run(monkeypatch, mod)
+    r = _Handler().execute_client_menu_item(["Interfaces", "Z-Wave"], list_only=True)
+    assert r["success"] is True, r
+    assert r["stdout"] == _UTF8_OUTPUT
+
+
+def test_system_tools_run_survives_non_ascii_output(monkeypatch):
+    """system_health / find_large_files read du, ps and friends through _run();
+    a file or process name with an accent must not blank the metric."""
+    from mcp_server.tools.system_tools import system_tools_handler as sys_mod
+    _host_like_run(monkeypatch, sys_mod)
+    assert sys_mod._run(["du", "-sh", "/nowhere"], timeout=10) == _UTF8_OUTPUT
+
+
+def test_every_text_mode_subprocess_call_in_the_bundle_names_its_encoding():
+    """The fix above has to hold for calls not yet written. Walks the AST (not the
+    source text, so a comment cannot satisfy it) of every bundle module and fails
+    on any subprocess call that asks for text without naming an encoding."""
+    import ast
+    import os
+    from conftest import SERVER_PLUGIN
+    offenders = []
+    for root, _dirs, files in os.walk(SERVER_PLUGIN):
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8") as fh:
+                tree = ast.parse(fh.read(), filename=path)
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "subprocess"
+                        and node.func.attr in ("run", "Popen", "check_output", "check_call", "call")):
+                    continue
+                kw = {k.arg for k in node.keywords}
+                if kw & {"text", "universal_newlines"} and "encoding" not in kw:
+                    offenders.append(f"{os.path.relpath(path, SERVER_PLUGIN)}:{node.lineno}")
+    assert not offenders, "text-mode subprocess calls with no encoding: " + ", ".join(offenders)

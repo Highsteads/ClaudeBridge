@@ -3,9 +3,16 @@
 # Filename:    plugin.py
 # Description: Claude Bridge Plugin — exposes Indigo devices, variables and actions
 #              to Claude AI via the Model Context Protocol (MCP)
-# Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5
-# Date:        11-09-2026
-# Version:     2.27.0
+# Author:      CliveS & Claude Fable 5.1 (2.26.0); Claude Opus 5; Claude Opus 5.5 (2.27.1)
+# Date:        23-09-2026
+# Version:     2.27.1
+#
+# v2.27.1 (23-09-2026): every subprocess call now decodes its output as UTF-8
+# (encoding="utf-8", errors="replace"). Inside the plugin host the default
+# text encoding is ASCII, so execute_plugin_menu_item raised "'ascii' codec
+# can't decode byte 0xe2" on the first em-dash in a menu's output (Device
+# Health Monitor -> Scan Now, 18-09-2026). Fixed at all five call sites: both
+# menu tools, system_tools._run, and the two node calls in plugin_dev_tools.
 #
 # v2.25.0 (06-09-2026): execute_device_action — run a plugin's OWN Actions.xml
 # action, the ones under Device -> Actions that no built-in tool could reach.

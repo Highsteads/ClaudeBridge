@@ -546,7 +546,8 @@ class PluginDevToolsHandler(BaseToolHandler):
                                  "/opt/homebrew/bin, /usr/local/bin, /usr/bin)"}
             try:
                 v = subprocess.run([node_bin, "--version"], capture_output=True,
-                                   text=True, timeout=5)
+                                   text=True, encoding="utf-8", errors="replace",
+                                   timeout=5)
                 node_version = v.stdout.strip()
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 return {"success": False, "error": f"node at {node_bin} failed to run"}
@@ -617,7 +618,10 @@ class PluginDevToolsHandler(BaseToolHandler):
                     try:
                         proc = subprocess.run(
                             [node_bin, "--check", _tmp],
-                            capture_output=True, text=True, timeout=10
+                            capture_output=True, text=True, timeout=10,
+                            # node's error quotes the page's own (UTF-8) source;
+                            # the plugin host would decode it as ASCII (2.27.1).
+                            encoding="utf-8", errors="replace",
                         )
                     finally:
                         try:

@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.27.0
+**Version:** 2.27.1
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,13 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 2.27.1 (2026-09-23)
+Clicking a plugin's menu item no longer fails when the reply contains an accent or a dash.
+
+Asking Claude to run *Scan Now* on Device Health Monitor came back with `'ascii' codec can't decode byte 0xe2`, which is the first byte of an em-dash. Inside an Indigo plugin host the text encoding defaults to plain ASCII, so any output from the Indigo client that was not plain ASCII broke the tool reading it, even though the click itself had worked. Every place Claude Bridge runs another program now reads its output as UTF-8: both menu tools, the `du` and `ps` readings behind `system_health` and `find_large_files`, and the `node` check behind `plugin_node_check_html`. A byte that still makes no sense is replaced rather than allowed to stop the tool.
+
+Five new tests. Four run a real child process under the same ASCII default the plugin host uses, and were watched failing on the old code with the exact error from the log. The fifth reads the whole bundle and fails if anything ever again runs a program as text without saying which encoding.
+
 ### 2.27.0 (2026-09-14)
 Claude can now use any of the Indigo client's own menus, not just a plugin's.
 
@@ -89,11 +96,6 @@ Two things it will not do. It refuses any path through Claude Bridge's own subme
 The bundle now carries the standard GitHub record.
 
 Indigo plugins can carry a small note inside the bundle saying where their source lives on GitHub, spelt the way the Indigo Domotics and community plugins spell it. This one now has it, pointing at this repository. Nothing else changed.
-
-### 2.26.1 (2026-09-11)
-The plugin's own About item pointed at the wrong page.
-
-Indigo builds the *About Claude Bridge* menu item from the support address in the plugin bundle, and that address was the Highsteads organisation page rather than this plugin's repository. It now opens github.com/Highsteads/ClaudeBridge, where the documentation site, the releases and the issue tracker are one click away. Nothing else changed.
 
 ## Vibe coding for Indigo
 

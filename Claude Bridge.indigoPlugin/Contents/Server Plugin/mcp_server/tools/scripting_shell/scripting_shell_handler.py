@@ -359,6 +359,9 @@ class ScriptingShellHandler(BaseToolHandler):
             proc = subprocess.run(
                 [_OSASCRIPT, "-e", script],
                 capture_output=True, text=True, timeout=timeout,
+                # The plugin host's locale is ASCII, so without this the first
+                # em-dash in a menu's output raised UnicodeDecodeError (2.27.1).
+                encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired:
             return {"success": False,
@@ -513,6 +516,9 @@ class ScriptingShellHandler(BaseToolHandler):
             proc = subprocess.run(
                 [_OSASCRIPT, "-e", script],
                 capture_output=True, text=True, timeout=timeout,
+                # The plugin host's locale is ASCII, so without this the first
+                # em-dash in a menu's output raised UnicodeDecodeError (2.27.1).
+                encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired:
             return {"success": False,
