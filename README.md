@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 2.27.3
+**Version:** 3.0.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,18 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 3.0.0 (2026-09-24)
+A spring clean: 69 tools where there were 169, nothing to install, and a long piece of Python no longer freezes the web server.
+
+- **Far fewer tools, nothing you could do has gone.** Most of the old list was families of near-identical tools, one per verb: seven for sprinklers, eight for thermostats, four for enabling and disabling. Each family is now one tool that takes an `action` or `kind`. The *Upgrading to 3.0* page of the documentation lists every old name against its new one, for anything you have written down that names a tool.
+- **Long Python runs go into the background.** A 10-second `execute_indigo_python` was measured holding up a dashboard request for 9.9 seconds, because Indigo's web server waits on it. A run that takes longer than `wait_seconds` (8 by default) now carries on by itself and hands back a `job_id` at once; ask again with the `job_id` to collect the answer.
+- **No API key, no extra packages.** The AI summaries in `analyze_historical_data` needed InfluxDB, an Anthropic key and four Python packages that made up 35 MB of a 39 MB plugin. That tool is gone and so are they; `device_history` reads the SQL Logger instead. Settings those features left behind, a stored API key included, are cleared the first time 3.0 starts.
+- **Search shows how things are now.** It still finds matches in its own index, but the state of each device and the value of each variable in the answer come straight from Indigo, and the index is brought up to date the moment you add, delete or rename something.
+- **Also gone:** the four `remember`/`recall` tools (Claude Code keeps its own memory) and the event queue, which no MCP client could read between messages. Outbound webhooks are unchanged.
+- **Behind the scenes:** each tool is now written in one place, where it used to take changes in up to nine, and the plugin sets Claude Code up itself, so `install.py` is gone.
+
+1,150 tests. Every new piece of logic was broken on purpose and a test caught it every time.
+
 ### 2.27.3 (2026-09-23)
 A round of fixes from a full review of the plugin, most of them in the tools Claude uses every day.
 
@@ -97,13 +109,6 @@ A failed `execute_indigo_python` or `run_script` used to hand back nothing but "
 `search_entities` accepts `devices`, `variables` and `action_groups` as well as the singular names it always wanted, and its description now lists the valid values. One search in seven had been failing on exactly that.
 
 34 new tests. I broke each of the six changes on purpose, and a test went red every time.
-
-### 2.27.1 (2026-09-23)
-Clicking a plugin's menu item no longer fails when the reply contains an accent or a dash.
-
-Asking Claude to run *Scan Now* on Device Health Monitor came back with `'ascii' codec can't decode byte 0xe2`, which is the first byte of an em-dash. Inside an Indigo plugin host the text encoding defaults to plain ASCII, so any output from the Indigo client that was not plain ASCII broke the tool reading it, even though the click itself had worked. Every place Claude Bridge runs another program now reads its output as UTF-8: both menu tools, the `du` and `ps` readings behind `system_health` and `find_large_files`, and the `node` check behind `plugin_node_check_html`. A byte that still makes no sense is replaced rather than allowed to stop the tool.
-
-Five new tests. Four run a real child process under the same ASCII default the plugin host uses, and were watched failing on the old code with the exact error from the log. The fifth reads the whole bundle and fails if anything ever again runs a program as text without saying which encoding.
 
 ## Vibe coding for Indigo
 

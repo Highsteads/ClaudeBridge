@@ -98,3 +98,53 @@ def test_an_empty_device_types_list_is_no_filter(monkeypatch):
             dict(_hit(2, "Porch Sensor"), kind="sensor")]
     names, _ = _search(hits, "porch", device_types=[])
     assert len(names) == 2, "an empty device_types list stripped every device"
+
+
+# ── Results carry Indigo's current values, not the index's copy (3.0) ──────────
+
+class _Provider:
+    def __init__(self, devices, variables=None):
+        self.devices, self.variables = devices, variables or {}
+
+    def get_device(self, dev_id):
+        return self.devices.get(dev_id)
+
+    def get_variable(self, var_id):
+        return self.variables.get(var_id)
+
+
+def test_device_hits_show_live_state_and_deleted_ones_drop_out():
+    stale = [_hit(1, "Hall Lamp"), _hit(2, "Hall Lamp Plug")]
+    stale[0]["onState"] = False
+    provider = _Provider({1: {"id": 1, "name": "Hall Lamp", "onState": True}})   # 2 deleted
+    h = SearchEntitiesHandler(provider, _Store(stale), logger=logging.getLogger("t"))
+    out = h.search("hall lamp", detail="full")
+    devs = out["results"]["devices"]
+    assert [d["name"] for d in devs] == ["Hall Lamp"]
+    assert devs[0]["onState"] is True
+
+
+def test_variable_hits_show_the_live_value():
+    hit = {"id": 7, "name": "Mode", "value": "old", "_entity_type": "variable",
+           "_similarity_score": 1.0}
+    provider = _Provider({}, {7: {"id": 7, "name": "Mode", "value": "new"}})
+    h = SearchEntitiesHandler(provider, _Store([hit]), logger=logging.getLogger("t"))
+    out = h.search("mode")
+    assert out["results"]["variables"][0]["value"] == "new"
+
+
+def test_a_state_filter_judges_the_live_state(monkeypatch):
+    from mcp_server.tools.search_entities import main as m
+    seen = {}
+
+    def _spy(devices, state_filter):
+        seen["on"] = [d.get("onState") for d in devices]
+        return devices
+
+    monkeypatch.setattr(m.StateFilter, "filter_by_state", staticmethod(_spy))
+    stale = [_hit(1, "Hall Lamp")]
+    stale[0]["onState"] = False
+    provider = _Provider({1: {"id": 1, "name": "Hall Lamp", "onState": True}})
+    h = SearchEntitiesHandler(provider, _Store(stale), logger=logging.getLogger("t"))
+    h.search("hall lamp", state_filter={"onState": True})
+    assert seen["on"] == [True]

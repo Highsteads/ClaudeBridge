@@ -94,6 +94,13 @@ class SearchEntitiesHandler(BaseToolHandler):
                 similarity_threshold=search_params["threshold"]
             )
 
+            # The index finds WHICH entities match; what they say now comes
+            # from Indigo. The index is rebuilt on renames and every 300 s, so
+            # its copy of a light's state or a variable's value can be minutes
+            # old. Refreshed before the filters run, so a state filter judges
+            # the live value too. At most top_k (<= 50) cheap reads.
+            raw_results = self._with_live_values(raw_results)
+
             # Short-circuit: strong exact match — return only the top result.
             # Rewrite the metadata to match the final set, otherwise the store's
             # pre-truncation counts make the summary claim a truncation that did
@@ -157,6 +164,32 @@ class SearchEntitiesHandler(BaseToolHandler):
         except Exception as e:
             return self.handle_exception(e, f"searching for '{query}'")
     
+    def _with_live_values(self, raw_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Replace each hit's indexed data with Indigo's current data, keeping
+        the search's own bookkeeping keys. A hit Indigo no longer has (deleted
+        since the last rebuild) is dropped rather than reported as present."""
+        live: List[Dict[str, Any]] = []
+        for hit in raw_results:
+            kind = hit.get("_entity_type")
+            keep = {k: v for k, v in hit.items() if k.startswith("_")}
+            try:
+                if kind == "device":
+                    fresh = self.data_provider.get_device(hit.get("id"))
+                    if fresh is None:
+                        continue
+                    live.append({**fresh, **keep} if isinstance(fresh, dict) else hit)
+                elif kind == "variable":
+                    fresh = self.data_provider.get_variable(hit.get("id"))
+                    if fresh is None:
+                        continue
+                    live.append({**hit, "value": fresh.get("value", hit.get("value")), **keep}
+                                if isinstance(fresh, dict) else hit)
+                else:
+                    live.append(hit)
+            except Exception:
+                live.append(hit)   # a failed read keeps the indexed copy, never loses the hit
+        return live
+
     @staticmethod
     def _exact_name_matches(raw_results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
         """Results whose name equals the query, ignoring case and outer spaces."""

@@ -4,7 +4,7 @@
 # Description: Claude Bridge - exposes Indigo to Claude over the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5.5
 # Date:        24-09-2026
-# Version:     2.27.3
+# Version:     3.0.0
 
 try:
     import indigo
@@ -1146,15 +1146,18 @@ class Plugin(indigo.PluginBase):
     def actionGroupCreated(self, group) -> None:
         super().actionGroupCreated(group)
         self._mark_index_dirty()
+        self._note_cache_change("action_group")
 
     def actionGroupDeleted(self, group) -> None:
         super().actionGroupDeleted(group)
         self._mark_index_dirty()
+        self._note_cache_change("action_group")
 
     def actionGroupUpdated(self, origGroup, newGroup) -> None:
         super().actionGroupUpdated(origGroup, newGroup)
         if index_fields_changed("action_group", origGroup, newGroup):
             self._mark_index_dirty()
+        self._note_cache_change("action_group")
 
     def variableUpdated(self, origVar: indigo.Variable, newVar: indigo.Variable) -> None:
         """

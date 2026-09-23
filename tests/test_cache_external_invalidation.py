@@ -107,3 +107,15 @@ def test_note_external_change_is_cheap_and_safe():
     after = c.stats()["domain_gen"]
     assert after["device"] == before["device"] + 1000
     assert after["variable"] == before["variable"]
+
+
+def test_action_group_change_invalidates_action_group_reads():
+    """3.0: action groups had no change counter, so a new one stayed invisible
+    to a cached list_action_groups / search for the whole TTL."""
+    for tool, args in (("list_action_groups", {}), ("search_entities", {"query": "lamp"})):
+        c = _cache()
+        c.get_or_compute(tool, args, lambda: ["old"])
+        assert c.get_or_compute(tool, args, lambda: ["old"])[1] is True
+        c.note_external_change("action_group")
+        assert c.get_or_compute(tool, args, lambda: ["new"])[1] is False, \
+            f"{tool} ignored an action group change"

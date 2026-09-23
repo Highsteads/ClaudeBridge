@@ -50,7 +50,8 @@ from typing import Any, Callable, Dict, Optional, Tuple
 # was computed under, and a read whose stamp no longer matches is a miss.
 _DOMAIN_DEVICE   = "device"
 _DOMAIN_VARIABLE = "variable"
-_DOMAINS = (_DOMAIN_DEVICE, _DOMAIN_VARIABLE)
+_DOMAIN_ACTION_GROUP = "action_group"
+_DOMAINS = (_DOMAIN_DEVICE, _DOMAIN_VARIABLE, _DOMAIN_ACTION_GROUP)
 
 
 def _registry():
@@ -98,7 +99,7 @@ class ToolCache:
 
         # Per-domain change counters, bumped by note_external_change() from the
         # plugin's deviceUpdated / variableUpdated callbacks.
-        self._domain_gen: Dict[str, int] = {_DOMAIN_DEVICE: 0, _DOMAIN_VARIABLE: 0}
+        self._domain_gen: Dict[str, int] = {d: 0 for d in _DOMAINS}
 
         # Lifetime stats — surfaced via /health
         self.hits   = 0

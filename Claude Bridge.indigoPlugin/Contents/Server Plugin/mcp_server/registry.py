@@ -58,7 +58,7 @@ BUCKETS = frozenset({
 TTL_ONLY_BUCKETS = frozenset({"external"})
 
 # The two buckets the plugin's change callbacks track (see ToolCache).
-CHANGE_DOMAINS = frozenset({"device", "variable"})
+CHANGE_DOMAINS = frozenset({"device", "variable", "action_group"})
 
 
 @dataclass(frozen=True)
