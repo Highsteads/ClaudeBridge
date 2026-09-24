@@ -81,6 +81,17 @@ class ExternalToolManager:
                         f"a built-in tool — skipped")
                     self.skipped_names.append(exposed)
                     continue
+                # Distinct prefixes can still meet: prefix "a_b" + tool "c" and
+                # prefix "a" + tool "b_c" both expose "a_b_c". The second would
+                # silently replace the first, and calls meant for one plugin
+                # would reach the other. First come keeps it.
+                if exposed in entries:
+                    holder = entries[exposed]["external_provider"]
+                    self.logger.error(
+                        f"❌ Plugin-provided tool '{exposed}' from {m.plugin_id} has the same "
+                        f"name as one from {holder} — skipped")
+                    self.skipped_names.append(exposed)
+                    continue
                 entries[exposed] = {
                     "description":       f"{tool.description} [provided by the {m.display_name} plugin]",
                     "inputSchema":       tool.input_schema,
@@ -105,7 +116,7 @@ class ExternalToolManager:
         for pid in self.rejected:
             lines.append(f"REJECTED {pid} — its prefix is already claimed (see the event log)")
         for name in self.skipped_names:
-            lines.append(f"SKIPPED {name} — collides with a built-in tool")
+            lines.append(f"SKIPPED {name} — collides with a built-in or another plugin's tool")
         return lines
 
     # ── call wrappers ────────────────────────────────────────────────────

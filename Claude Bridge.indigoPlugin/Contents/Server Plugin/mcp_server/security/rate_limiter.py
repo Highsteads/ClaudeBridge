@@ -1,5 +1,5 @@
 """
-Per-session sliding-window rate limiter for Claude Bridge MCP requests.
+Per-caller sliding-window rate limiter for Claude Bridge MCP requests.
 
 Two limits, both sliding-window (more accurate than fixed buckets):
   - Per-minute  (default 120)
@@ -36,10 +36,12 @@ class RateLimitExceeded(Exception):
 
 class RateLimiter:
     """
-    Sliding-window limiter keyed by session id.
+    Sliding-window limiter keyed by caller: the dispatcher passes the bearer
+    token when there is one (so a client that rotates sessions still shares
+    one bucket per credential), else the Mcp-Session-Id, else "anonymous".
 
     Args:
-        per_minute:   Max requests per 60-second window (per session).
+        per_minute:   Max requests per 60-second window (per caller).
         per_day:      Max requests per 86400-second window.
         admin_multiplier: Limit multiplier for sessions whose scopes include 'admin'.
                           Defaults to 10x — admin tooling shouldn't be throttled hard.
@@ -61,7 +63,7 @@ class RateLimiter:
         self.admin_multiplier = max(1.0, float(admin_multiplier))
         self.logger           = logger or logging.getLogger("Plugin")
 
-        # session_id → deque of timestamps (oldest first)
+        # caller key (bearer, session id or "anonymous") → deque of timestamps (oldest first)
         self._minute_log: Dict[str, Deque[float]] = defaultdict(deque)
         self._day_log:    Dict[str, Deque[float]] = defaultdict(deque)
         self._lock = threading.Lock()

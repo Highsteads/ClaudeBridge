@@ -42,6 +42,11 @@
         <CallbackMethod>list_webhooks_menu</CallbackMethod>
     </MenuItem>
 
+    <MenuItem id="reenable_webhooks">
+        <Name>Re-enable Quarantined Event Webhooks</Name>
+        <CallbackMethod>reenable_webhooks_menu</CallbackMethod>
+    </MenuItem>
+
     <MenuItem id="clear_webhooks">
         <Name>Clear All Event Webhook Subscriptions</Name>
         <CallbackMethod>clear_webhooks_menu</CallbackMethod>

@@ -13,6 +13,7 @@
 # source text. install.py is gone: double-clicking the bundle installs it and
 # the plugin does this setup itself at start.
 
+import ast
 import json
 import logging
 import os
@@ -65,9 +66,11 @@ def _run(env, fallback=""):
 
 
 def _token_in(proxy):
+    """The token the deployed proxy will actually USE: its BEARER_TOKEN line
+    read as the Python literal it is, not as raw text."""
     for line in proxy.read_text(encoding="utf-8").splitlines():
         if line.startswith("BEARER_TOKEN"):
-            return line.split("=", 1)[1].strip().strip('"')
+            return ast.literal_eval(line.split("=", 1)[1].strip())
     raise AssertionError("no BEARER_TOKEN line")
 
 
@@ -186,3 +189,53 @@ def test_startup_honours_the_auto_configure_checkbox(monkeypatch, tmp_path, stor
         assert kwargs["bundle_dir"] == os.getcwd()
         assert kwargs["install_folder"] == install
         assert kwargs["home"] == os.path.expanduser("~")
+
+
+# ── 1.1: a literal token, and owner-only from the first byte ─────────────────
+
+@pytest.mark.parametrize("token", ['has"quote', "back\\slash\\", "new\nline", "pound-£-and-é", "'single'"])
+def test_any_token_round_trips_as_a_python_literal(env, token):
+    _write_secrets(env, [token])
+    assert "proxy script" in _run(env)
+    assert _token_in(env.proxy) == token
+    compile(env.proxy.read_text(encoding="utf-8"), "proxy", "exec")   # still valid Python
+
+
+def test_the_proxy_is_never_written_at_a_wider_mode(env, monkeypatch):
+    """Every file the setup creates in Scripts/ is 0600 when it is created,
+    not chmodded afterwards — the bundle copy is 0644 or wider."""
+    os.chmod(env.bundle / "indigo_mcp_proxy.py", 0o755)
+    _write_secrets(env, ["iws-token-123"])
+    created = []
+    real_open = os.open
+
+    def _spy(path, flags, mode=0o777, *a, **k):
+        if flags & os.O_CREAT and "Scripts" in str(path):
+            created.append((str(path), mode))
+        return real_open(path, flags, mode, *a, **k)
+
+    monkeypatch.setattr(client_setup.os, "open", _spy)
+    _run(env)
+    assert created and all(mode == 0o600 for _, mode in created), created
+    assert stat.S_IMODE(os.stat(env.proxy).st_mode) == 0o600
+    assert not [p for p in os.listdir(env.proxy.parent) if p.endswith(".tmp")]
+
+
+def test_an_existing_readable_proxy_ends_owner_only(env):
+    env.proxy.parent.mkdir(parents=True)
+    env.proxy.write_text("old", encoding="utf-8")
+    os.chmod(env.proxy, 0o644)
+    _write_secrets(env, ["t"])
+    _run(env)
+    assert stat.S_IMODE(os.stat(env.proxy).st_mode) == 0o600
+    assert _token_in(env.proxy) == "t"
+
+
+def test_dotfiles_are_read_and_written_as_utf8(env):
+    (env.home / ".claude").mkdir()
+    (env.home / ".claude" / "settings.json").write_text(
+        json.dumps({"note": "café £5"}, ensure_ascii=False), encoding="utf-8")
+    _write_secrets(env, ["t"])
+    _run(env)
+    settings = json.loads((env.home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert settings["note"] == "café £5"

@@ -5,16 +5,15 @@
         <Label>CREDENTIALS &amp; PRIVATE VALUES</Label>
     </Field>
     <Field id="secrets_policy_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
-        <Label>All sensitive values (API keys, bearer tokens, usernames, passwords,
-private host addresses) are read from the master IndigoSecrets.py at
-/Library/Application Support/Perceptive Automation/IndigoSecrets.py FIRST.
-The fields below are a fallback only — leave them blank if you have
-the matching key in IndigoSecrets.py. If a value is set in NEITHER place,
-the plugin logs an ERROR pointing here and skips that feature.
+        <Label>This plugin has no credential fields. The two private values it can use
+are read from the master IndigoSecrets.py at
+/Library/Application Support/Perceptive Automation/IndigoSecrets.py:
 
-Keys this plugin reads:
-  CLAUDEBRIDGE_BEARER_TOKEN - IWS bearer token for the MCP proxy
-  WEBHOOK_ALLOWLIST         - extra webhook hosts (optional)
+  CLAUDEBRIDGE_BEARER_TOKEN - the IWS bearer token patched into the MCP proxy,
+                              used only when Indigo's own Preferences/secrets.json
+                              has no local secret (that file is read first)
+  WEBHOOK_ALLOWLIST         - extra webhook hosts, added to the
+                              Egress allow-list field below (optional)
 
 No Anthropic API key is needed: Claude Code uses your own Claude account.</Label>
     </Field>
@@ -41,7 +40,7 @@ No Anthropic API key is needed: Claude Code uses your own Claude account.</Label
     <Field id="separator_scopes" type="separator"/>
 
     <Field id="scopes_info" type="label" fontSize="small" alignWithControl="false">
-        <Label>Per-token scopes (read / write / admin) are configured in scopes.json under the plugin's Preferences folder. Without scopes.json, every authenticated token gets full access (backward compatible). See Show Plugin Info menu for the path.</Label>
+        <Label>Per-token scopes (read / write / admin) are configured in scopes.json under the plugin's Preferences folder. Without scopes.json, every authenticated token gets full access (backward compatible). Plugins → Claude Bridge → Show Plugin Info prints the path, and "Create Starter scopes.json" writes one (unlisted tokens get read-only).</Label>
     </Field>
 
     <Field id="separator_external_tools" type="separator"/>

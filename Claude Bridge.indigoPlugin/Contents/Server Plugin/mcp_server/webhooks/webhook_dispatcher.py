@@ -15,8 +15,21 @@ the queue and delivers each event with this discipline:
     different (malicious) address.
   * NO REDIRECTS — a 3xx is treated as a delivery failure, never followed
     (redirect-to-internal is the classic SSRF bypass).
-  * HMAC-SHA256 signing over `timestamp + "." + body`, tight timeouts, a
-    concurrency cap, and interruptible backoff so a plugin reload is clean.
+  * HMAC-SHA256 signing over `timestamp + "." + body`, tight timeouts, and
+    interruptible backoff so a plugin reload is clean. Delivery is SERIAL (one
+    worker), which is itself the concurrency cap; the unused semaphore that
+    claimed otherwise is gone.
+  * ONE failure per event. The retries of one event count as one failure
+    against the quarantine, recorded after the last attempt — counting each
+    attempt quarantined a subscription after little more than one bad event.
+
+Lifecycle: each worker has its OWN stop event. stop() sets the running
+worker's; start() drains the queue and starts a fresh worker with a fresh
+event, even if the old one is still finishing a delivery. Until 3.0.2 a
+disable->enable left a None wake-up sentinel in the queue that killed the new
+worker at once, so deliveries stopped for good with no error; and a stop()
+whose join timed out made start() return early with the stop flag still set,
+so dispatch() silently dropped everything.
 
 Original ClaudeBridge implementation, stdlib only.
 """
@@ -42,6 +55,19 @@ from ..security.egress_guard import EgressDenied, vet_url
 _RESPONSE_READ_CAP = 64 * 1024
 
 
+def host_header(url: str) -> str:
+    """The Host header for a delivery. HTTPConnection's default port is 80, so
+    left to itself it sent "Host: example.com:443" on https — legal but unusual,
+    and some receivers and proxies route on the exact string. The port is named
+    only when it is not the scheme's default."""
+    p = urlsplit(url)
+    host = p.hostname or ""
+    out = f"[{host}]" if ":" in host else host
+    if p.port and p.port != (443 if p.scheme == "https" else 80):
+        out += f":{p.port}"
+    return out
+
+
 class WebhookDispatcher:
     """Async, SSRF-revalidating, IP-pinning webhook delivery."""
 
@@ -51,7 +77,6 @@ class WebhookDispatcher:
         logger: Optional[logging.Logger] = None,
         on_expired: Optional[Callable[[Any], None]] = None,
         persist: Optional[Callable[[], None]] = None,
-        max_concurrency: int = 4,
         connect_timeout: int = 5,
         total_timeout: int = 10,
         max_retries: int = 3,
@@ -76,8 +101,10 @@ class WebhookDispatcher:
         self._queue: "queue.Queue" = queue.Queue(maxsize=max_queue)
         self._dropped = 0
         self._worker: Optional[threading.Thread] = None
+        # The CURRENT worker's stop event. Replaced by every start().
         self._stop = threading.Event()
-        self._sem = threading.Semaphore(max_concurrency)
+        self._lifecycle = threading.Lock()
+        self._tls = threading.local()    # .stop = the event of the worker on this thread
         self._recent: list = []          # delivery timestamps, for the rate cap
         self._rate_lock = threading.Lock()
 
@@ -86,27 +113,57 @@ class WebhookDispatcher:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        if self._worker and self._worker.is_alive():
-            return
-        self._stop.clear()
-        self._worker = threading.Thread(
-            target=self._worker_loop, name="webhook-dispatcher", daemon=True
-        )
-        self._worker.start()
+        with self._lifecycle:
+            if self._worker and self._worker.is_alive() and not self._stop.is_set():
+                return                      # already running
+            if self._worker is not None:
+                # A restart. Anything still queued belongs to the run that was
+                # stopped: stale events (their conditions may no longer hold,
+                # which is why a disable also cancels the dwell timers) and
+                # the None wake-up.
+                self._drain_queue()
+            # A fresh event for the new worker. An old worker still finishing
+            # a delivery keeps its own, already set, and exits after it.
+            stop = threading.Event()
+            self._stop = stop
+            self._worker = threading.Thread(
+                target=self._worker_loop, args=(stop,), name="webhook-dispatcher", daemon=True
+            )
+            self._worker.start()
 
-    def stop(self) -> None:
-        self._stop.set()
+    def stop(self, wait: bool = True) -> None:
+        """Stop the worker. wait=False signals it and returns at once, joining
+        on a short helper thread instead — for a caller on Indigo's dispatch
+        thread (a Configure save), which must not be held for up to 17 s."""
+        with self._lifecycle:
+            self._stop.set()
+            worker = self._worker
         try:
-            self._queue.put_nowait(None)   # best-effort wake; the worker also polls _stop
+            self._queue.put_nowait(None)   # best-effort wake; the worker also polls its event
         except queue.Full:
             pass
-        if self._worker and self._worker.is_alive():
-            # Join budget must exceed the worst-case single in-flight delivery
-            # (connect + total socket timeout) or the worker can be left orphaned
-            # mid-delivery on a plugin reload (the IndigoPluginHost3 orphan gotcha).
-            self._worker.join(timeout=self._connect_timeout + self._total_timeout + 2)
-            if self._worker.is_alive():
-                self._logger.warning("webhook-dispatcher worker still alive after join budget")
+        if not (worker and worker.is_alive()):
+            return
+        if wait:
+            self._join(worker)
+        else:
+            threading.Thread(target=self._join, args=(worker,),
+                             name="webhook-dispatcher-stop", daemon=True).start()
+
+    def _join(self, worker: threading.Thread) -> None:
+        # Join budget must exceed the worst-case single in-flight delivery
+        # (connect + total socket timeout) or the worker can be left orphaned
+        # mid-delivery on a plugin reload (the IndigoPluginHost3 orphan gotcha).
+        worker.join(timeout=self._connect_timeout + self._total_timeout + 2)
+        if worker.is_alive():
+            self._logger.warning("webhook-dispatcher worker still alive after join budget")
+
+    def _drain_queue(self) -> None:
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                return
 
     def dispatch(self, sub: Any, event: Any) -> None:
         """Non-blocking enqueue. Safe to call from the Indigo callback thread.
@@ -129,13 +186,25 @@ class WebhookDispatcher:
     # Worker
     # ------------------------------------------------------------------
 
-    def _worker_loop(self) -> None:
-        while not self._stop.is_set():
+    def _worker_loop(self, stop: Optional[threading.Event] = None) -> None:
+        stop = stop or self._stop
+        self._tls.stop = stop
+        while not stop.is_set():
             try:
                 item = self._queue.get(timeout=1.0)
             except queue.Empty:
                 continue
             if item is None:
+                # A wake-up. Only THIS worker's stop ends it: a sentinel left
+                # behind by an earlier stop() must not kill a newer worker.
+                continue
+            if stop.is_set():
+                # Stopped while waiting: this event belongs to whoever runs
+                # next, so hand it back rather than deliver it on the way out.
+                try:
+                    self._queue.put_nowait(item)
+                except queue.Full:
+                    pass
                 break
             sub, event = item
             try:
@@ -203,42 +272,43 @@ class WebhookDispatcher:
         if sub.auth_token:
             headers["Authorization"] = "Bearer " + sub.auth_token
 
-        # 5. deliver to the PINNED ip, with retry on 5xx / network error
+        # 5. deliver to the PINNED ip, with retry on 5xx / network error. The
+        # whole retry run is ONE event: it records one success or ONE failure,
+        # after the last attempt, so QUARANTINE_AFTER counts events.
         pinned = str(vetted[0])
-        for attempt in range(self._max_retries + 1):
+        attempts = self._max_retries + 1
+        for attempt in range(attempts):
+            retryable = False
             try:
                 status = self._post_pinned(sub.webhook_url, pinned, headers, body, sub.verify_ssl)
             except Exception as e:
-                sub.record_failure(f"delivery error: {e}")
-                self._save()
-                if attempt < self._max_retries and not self._backoff(attempt):
-                    continue
-                return
-
-            if 200 <= status < 300:
-                sub.record_success(status)
-                self._save()
-                self._maybe_expire(sub)
-                return
-            if 300 <= status < 400:
-                sub.record_failure(f"redirect ({status}) refused", http_status=status)
-                self._save()
-                return
-            if status >= 500:
-                sub.record_failure(f"receiver {status}", http_status=status)
-                self._save()
-                if attempt < self._max_retries and not self._backoff(attempt):
-                    continue
-                return
-            # 4xx — client error, do not retry
-            sub.record_failure(f"receiver {status}", http_status=status)
+                error, http_status, retryable = f"delivery error: {e}", None, True
+            else:
+                if 200 <= status < 300:
+                    sub.record_success(status)
+                    self._save()
+                    self._maybe_expire(sub)
+                    return
+                http_status = status
+                if 300 <= status < 400:
+                    error = f"redirect ({status}) refused"
+                elif status >= 500:
+                    error, retryable = f"receiver {status}", True
+                else:
+                    error = f"receiver {status}"      # 4xx — client error, do not retry
+            if retryable and attempt < attempts - 1 and not self._backoff(attempt):
+                continue
+            if retryable and attempt > 0:
+                error += f" (after {attempt + 1} attempts)"
+            sub.record_failure(error, http_status=http_status)
             self._save()
             return
 
     def _backoff(self, attempt: int) -> bool:
         """Interruptible exponential backoff. Returns True if shutdown was
         requested during the wait (caller should stop retrying)."""
-        return self._stop.wait(self._retry_base * (2 ** attempt))
+        stop = getattr(self._tls, "stop", None) or self._stop
+        return stop.wait(self._retry_base * (2 ** attempt))
 
     def _maybe_expire(self, sub: Any) -> None:
         # Only SUCCESSFUL deliveries count toward max_fires — a flapping/failing
@@ -300,9 +370,11 @@ class WebhookDispatcher:
                 sock = raw
             conn = http.client.HTTPConnection(host, port, timeout=self._total_timeout)
             conn.sock = sock                                        # pinned socket; no re-resolve
+            send_headers = dict(headers)
+            send_headers["Host"] = host_header(url)                 # makes request() skip its own
             try:
                 sock.settimeout(_remaining())
-                conn.request("POST", path, body=body, headers=headers)
+                conn.request("POST", path, body=body, headers=send_headers)
                 sock.settimeout(_remaining())
                 resp = conn.getresponse()
                 status = resp.status

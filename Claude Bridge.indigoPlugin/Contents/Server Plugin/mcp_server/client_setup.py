@@ -6,16 +6,22 @@
 #              and ~/.claude/settings.json
 # Author:      CliveS & Claude Opus 5.5
 # Date:        24-09-2026
-# Version:     1.0
+# Version:     1.1
 #
 # Moved out of plugin.py in the 3.0 spring clean so it can be tested against
 # temporary folders. Every path comes in as an argument; nothing here imports
 # indigo, so a test never touches the real home folder or Indigo install.
+#
+# 1.1 (24-09-2026): the proxy is written owner-only from the first byte (a
+#   0600 temp file renamed into place), where it used to be copied at the
+#   bundle's mode, patched, and only then chmodded - a window in which the
+#   live token sat in a readable file. The token goes in as a Python string
+#   literal (json.dumps), so no character in it can break the source. Every
+#   read and write names UTF-8.
 
 import json
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -23,8 +29,10 @@ SERVER_KEY = "indigo-mcp"
 PROXY_NAME = "indigo_mcp_proxy.py"
 
 # The line the token is written into. A rename of that line in the proxy would
-# otherwise turn the patch into a silent no-op (see patch_bearer_token).
-_TOKEN_LINE = re.compile(r'^(BEARER_TOKEN\s*=\s*")[^"]*(")', re.MULTILINE)
+# otherwise turn the patch into a silent no-op (see patch_bearer_token). The
+# value is a whole double-quoted Python string literal, escapes included, so a
+# proxy that was already patched can be patched again.
+_TOKEN_LINE = re.compile(r'^(BEARER_TOKEN\s*=\s*)"(?:[^"\\\n]|\\.)*"', re.MULTILINE)
 
 
 def scripts_dir_for(install_folder) -> Path:
@@ -46,7 +54,7 @@ def read_iws_token(install_folder, logger) -> str:
     if not secrets_path.exists():
         return ""
     try:
-        data = json.loads(secrets_path.read_text())
+        data = json.loads(secrets_path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning(f"\tIWS secrets.json read failed: {exc}")
         return ""
@@ -55,24 +63,55 @@ def read_iws_token(install_folder, logger) -> str:
     return ""
 
 
-def patch_bearer_token(proxy_path: Path, token: str, logger) -> bool:
-    """Write the token into the deployed proxy. True only when it went in."""
+def _patch_source(text: str, token: str, logger) -> Optional[str]:
+    """The proxy source with the token in it, or None if the line is missing."""
+    # json.dumps makes a valid Python string literal of any token: quotes,
+    # backslashes and non-ASCII are escaped, so the deployed proxy reads back
+    # exactly the token. A callable replacement, so nothing in the token is
+    # read as a regex backreference. subn, not sub, so a missing line is
+    # noticed instead of deploying the placeholder.
+    new_text, count = _TOKEN_LINE.subn(lambda m: m.group(1) + json.dumps(token), text)
+    if not count:
+        logger.error(
+            "[Config] BEARER_TOKEN line not found in the bundled MCP "
+            "proxy — the token was NOT patched in and Claude Code will "
+            "fail to authenticate. The proxy's token line has been "
+            "renamed or removed."
+        )
+        return None
+    return new_text
+
+
+def write_private(path: Path, text: str) -> None:
+    """Write text to path owner-only (0600) from the first byte: a temp file
+    created 0600 beside it, then renamed over it. There is never a moment when
+    the content sits in a file anyone else can read."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        text = proxy_path.read_text(encoding="utf-8")
-        # Callable replacement so a token holding backslashes, '\g<...>' or
-        # quotes goes in LITERALLY - a plain replacement string would read
-        # backreferences and silently corrupt it. subn, not sub, so a missing
-        # line is noticed instead of deploying the placeholder.
-        new_text, count = _TOKEN_LINE.subn(lambda m: m.group(1) + token + m.group(2), text)
-        if not count:
-            logger.error(
-                "[Config] BEARER_TOKEN line not found in the bundled MCP "
-                "proxy — the token was NOT patched in and Claude Code will "
-                "fail to authenticate. The proxy's token line has been "
-                "renamed or removed."
-            )
+        tmp.unlink()        # an old temp file would keep its old mode through O_TRUNC
+    except FileNotFoundError:
+        pass
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(str(tmp), str(path))
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def patch_bearer_token(proxy_path: Path, token: str, logger) -> bool:
+    """Write the token into a deployed proxy in place. True only when it went in."""
+    try:
+        new_text = _patch_source(Path(proxy_path).read_text(encoding="utf-8"), token, logger)
+        if new_text is None:
             return False
-        proxy_path.write_text(new_text, encoding="utf-8")
+        write_private(Path(proxy_path), new_text)
         return True
     except Exception as exc:
         logger.error(f"[Config] Bearer token patch failed: {exc}")
@@ -93,7 +132,7 @@ def deploy_proxy(bundle_dir, install_folder, fallback_token: str, logger) -> Opt
     scripts_dir = scripts_dir_for(install_folder)
     dest_proxy  = scripts_dir / PROXY_NAME
     scripts_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(bundle_proxy, dest_proxy)
+    source = bundle_proxy.read_text(encoding="utf-8")
 
     token = read_iws_token(install_folder, logger) or (fallback_token or "")
     patched = False
@@ -108,14 +147,14 @@ def deploy_proxy(bundle_dir, install_folder, fallback_token: str, logger) -> Opt
             "/Library/Application Support/Perceptive Automation/IndigoSecrets.py."
         )
     else:
-        patched = patch_bearer_token(dest_proxy, token, logger)
+        new_source = _patch_source(source, token, logger)
+        if new_source is not None:
+            source, patched = new_source, True
 
-    # The deployed proxy may hold the live token, so it must not be group or
-    # world readable (it used to inherit the umask's 0o640).
-    try:
-        os.chmod(dest_proxy, 0o600)
-    except Exception as exc:
-        logger.warning(f"\tCould not chmod deployed proxy to 0o600: {exc}")
+    # The deployed proxy may hold the live token, so it is written owner-only
+    # from the first byte (it used to be copied at the bundle's mode and
+    # chmodded afterwards).
+    write_private(dest_proxy, source)
     return patched
 
 
@@ -125,11 +164,12 @@ def update_mcp_json(home, proxy_path: Path, logger) -> bool:
     mcp_json_path = Path(home) / ".mcp.json"
     entry = {"command": "python3", "args": [str(proxy_path)]}
     try:
-        data = json.loads(mcp_json_path.read_text()) if mcp_json_path.exists() else {}
+        data = (json.loads(mcp_json_path.read_text(encoding="utf-8"))
+                if mcp_json_path.exists() else {})
         if data.get("mcpServers", {}).get(SERVER_KEY) == entry:
             return False
         data.setdefault("mcpServers", {})[SERVER_KEY] = entry
-        mcp_json_path.write_text(json.dumps(data, indent=2) + "\n")
+        mcp_json_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         return True
     except Exception as exc:
         logger.warning(f"\t⚠️  Could not update ~/.mcp.json: {exc}")
@@ -141,14 +181,15 @@ def update_claude_settings(home, logger) -> bool:
     True when the file changed; every other setting is left as it was."""
     settings_path = Path(home) / ".claude" / "settings.json"
     try:
-        data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        data = (json.loads(settings_path.read_text(encoding="utf-8"))
+                if settings_path.exists() else {})
         enabled = data.get("enabledMcpjsonServers", [])
         if SERVER_KEY in enabled:
             return False
         enabled.append(SERVER_KEY)
         data["enabledMcpjsonServers"] = enabled
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(data, indent=2) + "\n")
+        settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         return True
     except Exception as exc:
         logger.warning(f"\t⚠️  Could not update ~/.claude/settings.json: {exc}")

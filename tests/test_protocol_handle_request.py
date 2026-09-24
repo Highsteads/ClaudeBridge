@@ -100,13 +100,18 @@ def test_initialize_mints_session_and_returns_header(tmp_path):
     assert h._sessions[sid]["client_info"]["name"] == "tests"
 
 
-def test_initialize_with_unsupported_version_is_refused(tmp_path):
+def test_initialize_with_another_version_is_answered_with_ours(tmp_path):
+    """MCP 2025-06-18 version negotiation: a version this server does not
+    speak is answered with the one it does, not refused. The client decides
+    whether to carry on. (Until 3.0.2 this was -32602.)"""
     h = _make_handler(tmp_path)
     resp = _post(h, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
                      "params": {"protocolVersion": "1999-01-01"}})
-    err = json.loads(resp["content"])["error"]
-    assert err["code"] == -32602
-    assert MCPHandler.PROTOCOL_VERSION in err["data"]["supported"]
+    body = json.loads(resp["content"])
+    assert "error" not in body
+    assert body["id"] == 1
+    assert body["result"]["protocolVersion"] == MCPHandler.PROTOCOL_VERSION
+    assert resp["headers"].get("Mcp-Session-Id")
 
 
 def test_unknown_session_rejected_when_sessions_exist(tmp_path):

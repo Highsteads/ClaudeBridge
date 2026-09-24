@@ -21,8 +21,9 @@ This module keeps the output and removes the secrets from it. It knows the
 secret values from three places:
 
   1. IndigoSecrets.py — only the settings whose NAME says credential (KEY,
-     TOKEN, PASSWORD, PASS, SECRET, PIN, AUTH, CREDENTIAL, SIGN, BEARER,
-     PRIVATE). Addresses, usernames and emails are not secrets and redacting
+     TOKEN, PASSWORD, PASSCODE, PASS, PWD, PSK, SECRET, PIN, AUTH, CREDENTIAL,
+     SIGN, BEARER, PRIVATE — PWD and PSK added 24-09-2026: WIFI_PSK and
+     ROUTER_PWD were passing through). Addresses, usernames and emails are not secrets and redacting
      them would only blind the traceback. The file is PARSED with ``ast``,
      never executed, and re-read whenever it changes on disk, so a rotated
      key is covered without restarting the plugin.
@@ -46,7 +47,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 MIN_SECRET_LENGTH = 6
 
 _CREDENTIAL_NAME = re.compile(
-    r"(KEY|TOKEN|PASSWORD|PASSWD|PASS|SECRET|PIN|AUTH|CREDENTIAL|SIGN|BEARER|PRIVATE)",
+    r"(KEY|TOKEN|PASSWORD|PASSWD|PASSCODE|PASS|PWD|PSK|SECRET|PIN|AUTH|CREDENTIAL|SIGN|BEARER|PRIVATE)",
     re.IGNORECASE,
 )
 

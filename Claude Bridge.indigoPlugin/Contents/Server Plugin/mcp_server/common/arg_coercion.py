@@ -52,7 +52,10 @@ def allowed_types(prop_schema: Any) -> Set[str]:
 
 def _as_int(text: str):
     digits = text.lstrip("-")
-    if (digits.isdigit() and text[:1] != "+"
+    # ASCII digits only. str.isdigit() is True for "²" (which int() then
+    # refuses, raising out of the dispatcher) and for Arabic-Indic "١٢"
+    # (which int() silently reads as 12). Neither is a number anyone typed.
+    if (digits.isascii() and digits.isdigit() and text[:1] != "+"
             and not (len(digits) > 1 and digits[0] == "0")
             and text.count("-") <= 1):
         return int(text)
@@ -60,7 +63,8 @@ def _as_int(text: str):
 
 
 def _as_float(text: str):
-    if any(c in text for c in (".", "e", "E")):
+    # float() also reads non-ASCII digits, so the same ASCII-only rule applies.
+    if text.isascii() and any(c in text for c in (".", "e", "E")):
         try:
             return float(text)
         except ValueError:

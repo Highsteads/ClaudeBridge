@@ -22,7 +22,11 @@ _JOB_NOTE = (
     f"naming the running job. Results are kept {exec_lock.RESULT_TTL_SECONDS // 60} minutes.")
 
 
-@tool("list_python_scripts", scope="read", cacheable=True, reads={"script"},
+# Neither script reader is cached. Scripts are edited outside Claude Bridge
+# (an editor, the triage task, a git pull) and nothing tells the cache, so a
+# cached read_script served the old source for the whole TTL. A file read is
+# cheap; a stale one is not.
+@tool("list_python_scripts", scope="read",
       description=("List the Python scripts (.py files) in the Indigo script folders with "
                    "name, size, last-modified date and full path. With backups_for, list the "
                    "automatic backups kept for that one script instead, newest first."),
@@ -33,7 +37,7 @@ def list_python_scripts(ctx, backups_for=None):
     return ctx.system_tools_handler.list_python_scripts()
 
 
-@tool("read_script", scope="read", cacheable=True, reads={"script"},
+@tool("read_script", scope="read",
       description="Read the full content of a Python script from the Indigo Scripts folder.",
       properties={"name": string("Script filename (with or without .py)")},
       required=["name"])

@@ -25,7 +25,8 @@ from .event_model import new_event_id
 # Body-size guards: refuse to deliver an oversized payload rather than truncate it.
 DEFAULT_MAX_BODY_BYTES = 64 * 1024
 MAX_MAX_BODY_BYTES = 1024 * 1024
-# Consecutive send-time failures before a subscription auto-quarantines itself.
+# Consecutive failed EVENTS before a subscription auto-quarantines itself. The
+# dispatcher records one failure per event, after its last retry.
 QUARANTINE_AFTER = 5
 
 
@@ -167,6 +168,19 @@ class Subscription:
         # receiver can't churn the delivery worker indefinitely.
         if self.stats["consecutive_failures"] >= QUARANTINE_AFTER:
             self.enabled = False
+
+    @property
+    def quarantined(self) -> bool:
+        """Switched off by the failure count, as opposed to off for another
+        reason (a corrupt stored entity id fails closed the same way, and
+        must stay off)."""
+        return (not self.enabled
+                and self.stats.get("consecutive_failures", 0) >= QUARANTINE_AFTER)
+
+    def reenable(self) -> None:
+        """Lift a quarantine: back on, with a clean failure run."""
+        self.enabled = True
+        self.stats["consecutive_failures"] = 0
 
     def record_dropped(self, reason: str) -> None:
         """Record a pre-send DROP that is NOT attributable to this subscription's

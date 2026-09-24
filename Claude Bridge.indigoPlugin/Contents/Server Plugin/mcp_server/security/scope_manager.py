@@ -186,11 +186,24 @@ class ScopeManager:
                 f"\tscopes.json: {where} is the string {raw!r}; reading it as "
                 f'["{raw}"]. Use a JSON list to silence this.'
             )
-            return [raw]
+            return self._warn_unknown([raw], where)
         if isinstance(raw, (list, tuple, set)):
-            return [str(s) for s in raw]
+            return self._warn_unknown([str(s) for s in raw], where)
         raise ValueError(f"{where}: scopes must be a list of scope names, "
                          f"got {type(raw).__name__}")
+
+    def _warn_unknown(self, scopes: List[str], where: str) -> List[str]:
+        """Say so when a scope name is not one this server knows. It grants
+        nothing either way, but "Admin" or "wirte" looks right in the file
+        while the token silently lacks the scope the owner meant to give."""
+        from .. import registry
+        unknown = sorted({s for s in scopes if s not in registry.SCOPES})
+        if unknown:
+            self.logger.warning(
+                f"\tscopes.json: {where} names unknown scope(s) {unknown}; they grant "
+                f"nothing. The scopes are {list(registry.SCOPES)} (lower case)."
+            )
+        return scopes
 
     def reload(self) -> bool:
         """Re-read scopes.json. Returns True on success, False if missing/invalid."""

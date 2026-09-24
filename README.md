@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 3.0.1
+**Version:** 3.1.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,21 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 3.1.0 (2026-09-24)
+A second full review of the plugin, this time of the new 3.0 code, and every problem it found is fixed.
+
+- **Switching a device by name is safer.** A device whose name contained "one" or "single" could be mistaken for a longer name starting the same way, and a lone near-miss could be switched when you meant something else. Now only the exact name, or a name containing every word you gave, is acted on; anything less is refused with the candidates listed.
+- **Colour changes work.** The colour command was sending Indigo settings it does not recognise, on the wrong scale, so no colour change ever reached a bulb.
+- **Thermostats in Fahrenheit are safe.** Nudging a setpoint used to squeeze the result into a Celsius range without saying so, which on a Fahrenheit thermostat meant a setpoint of 35. Values are now checked in the thermostat's own units and refused, never quietly changed.
+- **Passwords stay hidden.** Looking a device up used to return its settings in full, SMTP and router passwords included, even to a read-only key. Those values are now masked.
+- **The security summary tells the truth.** A locked front door, a garage door opener and a relay were all being reported as open doors, and every idle heating zone as heating. The summary now goes by what Indigo says each device is rather than by words in its name, and reports unlocked locks separately.
+- **"What caused this?" looks further back.** `investigate_event` only ever saw the last day and a half of the log, whatever you asked for. It now searches the whole window, and it recognises a delayed action started by a trigger.
+- **Scripts keep their permissions** when Claude edits them, and a script that ends with `sys.exit(1)` now counts as a failure.
+- **Quieter log.** Routine reads no longer write to the event log, and a mistake in Claude's own code is no longer logged as a red error for the error watcher to chase. Only real faults are errors now.
+- **Sturdier underneath.** A failure while setting up Claude Code no longer takes the whole server down with it. Error replies always reach the request that caused them. Webhooks keep working after being switched off and on, and a new menu item brings back a webhook that was paused after repeated failures. A plugin-provided tool can no longer hold up the web server for more than 20 seconds.
+
+About 230 new tests, 1,388 in all. Every fix was broken on purpose to prove a test catches it.
+
 ### 3.0.1 (2026-09-24)
 Sunrise and sunset now come from the same day.
 
@@ -90,21 +105,6 @@ A spring clean: 69 tools where there were 169, nothing to install, and a long pi
 - **Behind the scenes:** each tool is now written in one place, where it used to take changes in up to nine, and the plugin sets Claude Code up itself, so `install.py` is gone.
 
 1,150 tests. Every new piece of logic was broken on purpose and a test caught it every time.
-
-### 2.27.3 (2026-09-23)
-A round of fixes from a full review of the plugin, most of them in the tools Claude uses every day.
-
-- **Searching now finds everything that matches.** Asking for "kitchen" returned one device out of fourteen. Any name containing the search word scored as a perfect match, and a perfect match was taken to mean "this is the one", so the rest were thrown away. Only a name that is exactly what was asked for gets that treatment now.
-- **Text you send is stored as you sent it.** Setting a variable to `21.50` stored `21.5`, and a value written as JSON came back as something JSON could not read, all while reporting success. The small program that carries Claude's requests to Indigo was guessing which words were numbers without knowing what each tool expected. Claude Bridge now does that itself, using each tool's own description of its arguments, and anything a tool expects as text arrives untouched.
-- **"Turn on the hall lamp" will not guess.** If a name matches more than one device, nothing is switched and Claude gets the list to choose from.
-- **Plugin status says whether a plugin is actually running**, not just whether it is enabled, so a plugin that falls over on start-up no longer looks healthy. A newly installed or updated plugin also shows up within half a minute rather than an hour, and restarting a mistyped plugin id now says "not found".
-- **The daily energy summary and comparison work.** They were reading lines from SigenEnergyManager's logs that it has never written, so every total came back empty. They now read its own day-by-day record, and the summary adds today's running totals.
-- **No paid API call when the plugin starts.** An Anthropic key in `IndigoSecrets.py` meant every start sent a message to Claude to check the key. The key is only used by the InfluxDB history tool, so it is now checked only when InfluxDB is switched on, or when you press Test Connections, and the check no longer spends anything.
-- **Device history with no columns named is quicker**, and no longer lists columns that are empty in every row it returns.
-- **Event log searches keep the first second of the window you ask for**, and are capped at 2,000 entries even when no count is given.
-- **Shortened output says so**, and a failing script run with `run_script` reports the kind of error and its traceback, not just the message.
-
-54 new tests. I broke each fix on purpose and watched a test fail every time.
 
 ## Vibe coding for Indigo
 

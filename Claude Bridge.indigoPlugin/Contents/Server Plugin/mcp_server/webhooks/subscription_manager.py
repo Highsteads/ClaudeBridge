@@ -40,7 +40,18 @@ class SubscriptionManager:
         self._logger = logger or logging.getLogger(__name__)
         self._subs: Dict[str, Subscription] = {}
         self._lock = threading.Lock()
+        # Held across snapshot AND write, so two saves cannot cross: with the
+        # snapshot under _lock but the write outside it, an older snapshot
+        # could land after a newer one and put back a subscription that had
+        # just been deleted.
+        self._save_lock = threading.Lock()
         self._store = store
+        # What any subscription watches, per entity type: (ids, wildcard).
+        # Read on EVERY Indigo change callback, so the plugin can skip building
+        # dict(device) for the devices nobody watches. Rebuilt on every change
+        # to the set; a quarantine only ever makes it a superset, which costs a
+        # wasted conversion and never a missed event.
+        self._watch: Dict[str, Tuple[frozenset, bool]] = {}
         self._dwell: Optional[DwellTimerQueue] = None
         if dispatch_callback:
             self.set_dispatch_callback(dispatch_callback)
@@ -53,9 +64,28 @@ class SubscriptionManager:
     # CRUD + persistence
     # ------------------------------------------------------------------
 
+    def _rebuild_watch_locked(self) -> None:
+        watch: Dict[str, Tuple[set, bool]] = {}
+        for s in self._subs.values():
+            if not s.enabled:
+                continue
+            ids, wildcard = watch.get(s.entity_type, (set(), False))
+            if s.entity_id is None:
+                wildcard = True
+            else:
+                ids.add(s.entity_id)
+            watch[s.entity_type] = (ids, wildcard)
+        self._watch = {k: (frozenset(ids), wc) for k, (ids, wc) in watch.items()}
+
+    def watches(self, entity_type: str, entity_id: Any) -> bool:
+        """True if an enabled subscription could fire for this entity."""
+        ids, wildcard = self._watch.get(entity_type, (frozenset(), False))
+        return wildcard or entity_id in ids
+
     def add(self, sub: Subscription) -> Subscription:
         with self._lock:
             self._subs[sub.subscription_id] = sub
+            self._rebuild_watch_locked()
         self._save()
         self._logger.info(
             f"Webhook subscription added: {sub.subscription_id} "
@@ -67,6 +97,7 @@ class SubscriptionManager:
     def delete(self, subscription_id: str) -> bool:
         with self._lock:
             sub = self._subs.pop(subscription_id, None)
+            self._rebuild_watch_locked()
         if sub is None:
             return False
         # Disable the popped object as well as dropping it from the store.
@@ -83,6 +114,33 @@ class SubscriptionManager:
         self._save()
         self._logger.info(f"Webhook subscription deleted: {subscription_id}")
         return True
+
+    def enable(self, subscription_id: str) -> bool:
+        """Re-enable one subscription and clear its failure run. False if there
+        is no such subscription."""
+        with self._lock:
+            sub = self._subs.get(subscription_id)
+            if sub is None:
+                return False
+            sub.reenable()
+            self._rebuild_watch_locked()
+        self._save()
+        self._logger.info(f"Webhook subscription re-enabled: {subscription_id}")
+        return True
+
+    def reenable_quarantined(self) -> List[str]:
+        """Lift every quarantine (and nothing else that is switched off).
+        Returns the ids re-enabled."""
+        with self._lock:
+            lifted = [s for s in self._subs.values() if s.quarantined]
+            for s in lifted:
+                s.reenable()
+            if lifted:
+                self._rebuild_watch_locked()
+        if lifted:
+            self._save()
+            self._logger.info(f"Re-enabled {len(lifted)} quarantined webhook subscription(s)")
+        return [s.subscription_id for s in lifted]
 
     def get(self, subscription_id: str) -> Optional[Subscription]:
         with self._lock:
@@ -103,6 +161,7 @@ class SubscriptionManager:
         with self._lock:
             for sub in loaded:
                 self._subs[sub.subscription_id] = sub
+            self._rebuild_watch_locked()
         if loaded:
             self._logger.info(f"Loaded {len(loaded)} webhook subscription(s) from disk")
         return len(loaded)
@@ -113,12 +172,13 @@ class SubscriptionManager:
     def _save(self) -> None:
         if self._store is None:
             return
-        with self._lock:
-            snapshot = list(self._subs.values())
-        try:
-            self._store.save(snapshot)
-        except Exception as e:
-            self._logger.error(f"Failed to persist webhook subscriptions: {e}")
+        with self._save_lock:
+            with self._lock:
+                snapshot = list(self._subs.values())
+            try:
+                self._store.save(snapshot)
+            except Exception as e:
+                self._logger.error(f"Failed to persist webhook subscriptions: {e}")
 
     def shutdown(self) -> None:
         if self._dwell:

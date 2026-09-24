@@ -61,11 +61,13 @@ def test_variable_change_invalidates_variable_reads():
 
 
 def test_device_change_does_not_evict_unrelated_domains():
-    """A presence-sensor storm must not flush script or memory caches."""
+    """A presence-sensor storm must not flush caches that read nothing it
+    changes. (list_python_scripts was the example until 3.0.2, when the script
+    readers stopped being cached at all; system_health reads only "external".)"""
     c = _cache()
-    c.get_or_compute("list_python_scripts", {}, lambda: ["x.py"])
+    c.get_or_compute("system_health", {}, lambda: {"ok": 1})
     c.note_external_change("device")
-    _v, hit = c.get_or_compute("list_python_scripts", {}, lambda: ["x.py"])
+    _v, hit = c.get_or_compute("system_health", {}, lambda: {"ok": 1})
     assert hit is True, "a device change wrongly invalidated an unrelated tool"
 
 

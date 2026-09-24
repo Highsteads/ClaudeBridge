@@ -42,7 +42,7 @@ Plugin-provided tools (external_tools/) are NOT in this registry. They are
 registered at runtime and keep their own dynamic-scope mechanism.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, Iterable, Optional, Tuple
 
 SCOPES = ("read", "write", "admin")
@@ -57,7 +57,8 @@ BUCKETS = frozenset({
 # Buckets freshened by the TTL alone — nothing in Claude Bridge changes them.
 TTL_ONLY_BUCKETS = frozenset({"external"})
 
-# The two buckets the plugin's change callbacks track (see ToolCache).
+# The buckets the plugin's Indigo change callbacks track (see ToolCache): a
+# device, variable or action group changed by anything, not only a tool.
 CHANGE_DOMAINS = frozenset({"device", "variable", "action_group"})
 
 
@@ -76,7 +77,6 @@ class ToolSpec:
     redact: bool = False
     destructive: bool = False
     refresh_search: bool = False
-    extras: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def input_schema(self) -> Dict[str, Any]:
@@ -179,10 +179,6 @@ def cacheable_names() -> FrozenSet[str]:
 
 def destructive_names() -> FrozenSet[str]:
     return _flagged("destructive")
-
-
-def sensitive_names() -> FrozenSet[str]:
-    return _flagged("sensitive")
 
 
 def redact_names() -> FrozenSet[str]:

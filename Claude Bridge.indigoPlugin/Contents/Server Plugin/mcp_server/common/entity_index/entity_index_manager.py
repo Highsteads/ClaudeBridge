@@ -95,6 +95,20 @@ class EntityIndexManager:
         # the index again rather than being lost.
         self._dirty = False
         self._dirty_lock = threading.Lock()
+
+        # One rebuild at a time. Warmup, the interval loop, refresh_async and
+        # refresh_if_dirty all call update_now, and two of them overlapping
+        # could finish out of order: the rebuild that read Indigo FIRST loaded
+        # LAST and put the older picture back. Serialising them makes the
+        # load order the read order.
+        self._rebuild_lock = threading.Lock()
+        # Generation numbers: _gen_started counts rebuilds begun, _gen_ok is
+        # the number of the last one that succeeded. A caller that queued
+        # behind a rebuild which STARTED after it asked has nothing left to do
+        # (that rebuild read Indigo later than its request), unless the index
+        # has been marked dirty since.
+        self._gen_started = 0
+        self._gen_ok = 0
     
     def start_async(self) -> None:
         """
@@ -247,11 +261,31 @@ class EntityIndexManager:
             raise
     
     def update_now(self) -> None:
-        """Reload the index from Indigo now."""
+        """Reload the index from Indigo now. Serialised (see _rebuild_lock);
+        on any failure the index is marked dirty again so the next search
+        retries rather than trusting it."""
         if not self.entity_index:
             self.logger.error("\t❌ Entity index not initialised")
             return
 
+        ticket = self._gen_started
+        with self._rebuild_lock:
+            if self._gen_ok > ticket and not self._dirty:
+                return          # a rebuild begun after this request already covered it
+            self._gen_started += 1
+            generation = self._gen_started
+            try:
+                self._rebuild()
+            except Exception:
+                self._dirty = True
+                raise
+            self._gen_ok = generation
+
+    def _rebuild(self) -> None:
+        """One rebuild. Call only with _rebuild_lock held."""
+        index = self.entity_index
+        if not index:
+            raise RuntimeError("entity index closed during rebuild")
         try:
             self._dirty = False
             update_start = time.time()
@@ -267,7 +301,7 @@ class EntityIndexManager:
             total_entities = device_count + variable_count + action_count
 
             # Load the index
-            self.entity_index.load_entities(
+            index.load_entities(
                 devices=entities["devices"],
                 variables=entities["variables"],
                 actions=entities["actions"]

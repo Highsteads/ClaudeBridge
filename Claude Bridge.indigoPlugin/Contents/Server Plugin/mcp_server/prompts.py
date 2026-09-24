@@ -28,12 +28,14 @@ _PROMPTS: Dict[str, Dict[str, Any]] = {
         "description": "Review today's solar / battery / grid performance and self-sufficiency.",
         "arguments": [],
         "template": (
-            "Review today's energy performance. Use home_status(section='energy'), "
-            "energy_history and the Sigenergy Inverter + Battery Manager device states to "
-            "report: PV generated, home consumption, grid import/export, battery SOC "
-            "range, and self-sufficiency. Note the current tariff and whether the "
-            "battery strategy looks right for the rest of the day. Favour keeping kWh "
-            "in the battery over exporting (self-sufficiency is the top KPI)."
+            "Review today's energy performance. Use home_status(section='energy') and "
+            "energy_history, then find this home's own solar, battery, inverter and grid "
+            "meter devices (search_entities for 'solar', 'battery', 'inverter', 'grid') and "
+            "read their states. Report what the data supports: PV generated, home "
+            "consumption, grid import/export, battery charge range and self-sufficiency. "
+            "Mention the current tariff if a device or variable records it, and whether the "
+            "battery's behaviour looks sensible for the rest of the day. If the home has no "
+            "solar or battery devices, say so plainly rather than guessing."
         ),
     },
     "battery_sweep": {

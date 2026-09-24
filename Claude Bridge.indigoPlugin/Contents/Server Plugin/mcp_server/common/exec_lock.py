@@ -95,6 +95,19 @@ _lock = threading.Lock()
 _running: Optional[Job] = None
 _finished: Dict[str, Job] = {}
 
+# Called with the Job each time a worker finishes, outside the lock. The MCP
+# handler sets it to clear the read cache: a run that outlives its call can
+# change anything, and the {"*"} invalidation at call return has already
+# happened by then, so a list_devices in between would otherwise be cached
+# from before the job's changes and served for the whole TTL.
+_on_finished: Optional[Callable[[Job], None]] = None
+
+
+def set_finish_listener(listener: Optional[Callable[[Job], None]]) -> None:
+    """Register (or with None, remove) the one finish listener."""
+    global _on_finished
+    _on_finished = listener
+
 
 def clamp_wait(value: Any, default: float = DEFAULT_WAIT_SECONDS) -> float:
     """wait_seconds as a number in 0..MAX_WAIT_SECONDS; junk means the default."""
@@ -179,6 +192,12 @@ def start(tool: str, label: str,
                 _running = None
             _finished[job.job_id] = job
         job.done.set()
+        listener = _on_finished
+        if listener is not None:
+            try:
+                listener(job)
+            except Exception:      # noqa: BLE001 — bookkeeping must not kill the worker
+                pass
 
     job.thread = threading.Thread(target=_run, daemon=True, name=f"mcp-{tool}-{job.job_id}")
     try:

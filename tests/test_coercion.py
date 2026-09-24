@@ -145,3 +145,20 @@ def test_bool_variable_stored_lowercase(monkeypatch):
     assert captured["value"] == "false"
     p.update_variable(123, "KeepMe")
     assert captured["value"] == "KeepMe"
+
+
+# ── Only ASCII digits are numbers (24-09-2026) ───────────────────────────────
+
+@pytest.mark.parametrize("text", ["²", "١٢", "１２", "-²", "١.٥"])
+def test_non_ascii_digits_are_left_as_sent(text):
+    """str.isdigit() is True for all of these. "²" then raised inside int()
+    (a -32603 with a traceback), and "١٢" silently became 12."""
+    from mcp_server.common.arg_coercion import coerce_value
+    assert coerce_value(text, {"integer", "number", "string"}) == text
+    assert coerce_value(text, set()) == text
+
+
+def test_ascii_digits_still_convert():
+    from mcp_server.common.arg_coercion import coerce_value
+    assert coerce_value("12", {"integer"}) == 12
+    assert coerce_value("-1.5", {"number"}) == -1.5

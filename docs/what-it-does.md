@@ -97,6 +97,9 @@ tool is listed by name in the [Tool reference](tools.md).
   really came from your system. The whole feature ships switched off until
   you turn it on. There's a small example receiver in `examples/` to get you
   going in minutes.
+- A destination that fails five events in a row is switched off so it cannot
+  pile up retries. Once the receiver is back, *Plugins > Claude Bridge >
+  Re-enable Quarantined Event Webhooks* turns those subscriptions on again.
 
 ### Plugin-provided tools — other plugins bring their own
 

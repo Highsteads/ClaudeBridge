@@ -3,6 +3,7 @@ MCP Handler for Indigo IWS integration.
 Implements standards-compliant MCP protocol over Indigo's built-in web server.
 """
 
+import html
 import json
 import logging
 import os
@@ -118,6 +119,11 @@ class MCPHandler:
             default_ttl=cache_ttl_seconds,
             logger=self.logger,
         )
+        # A background exec job can change anything AFTER its call returned
+        # (and after that call's cache invalidation), so clear the cache again
+        # the moment one finishes.
+        from .common import exec_lock
+        exec_lock.set_finish_listener(self._on_exec_job_finished)
         self.scope_manager = ScopeManager(
             scopes_file=scopes_file or "",
             logger=self.logger,
@@ -284,6 +290,12 @@ class MCPHandler:
         _call.__name__ = spec.name
         return _call
 
+    def _on_exec_job_finished(self, job) -> None:
+        """exec_lock finish listener: drop every cached read."""
+        dropped = self.tool_cache.clear()
+        if dropped:
+            self.logger.debug(f"Cache: dropped {dropped} entries after job {job.job_id} finished")
+
     @staticmethod
     def _get_db_file_path():
         """Path of Indigo's active database file (None outside Indigo)."""
@@ -295,6 +307,9 @@ class MCPHandler:
 
     def stop(self):
         """Stop the MCP handler and cleanup resources."""
+        from .common import exec_lock
+        if exec_lock._on_finished == self._on_exec_job_finished:
+            exec_lock.set_finish_listener(None)
         if self.entity_index_manager:
             self.entity_index_manager.stop()
 
@@ -430,26 +445,31 @@ class MCPHandler:
 
             param_lines = []
             for pname, pinfo in props.items():
+                pinfo = pinfo if isinstance(pinfo, dict) else {}
                 ptype = pinfo.get("type") or " | ".join(
-                    t.get("type", "?") for t in pinfo.get("anyOf", [])
+                    str(t.get("type", "?")) for t in pinfo.get("anyOf", []) if isinstance(t, dict)
                 ) or "?"
                 req_marker = " <em>(required)</em>" if pname in required else ""
-                desc = (pinfo.get("description") or "").replace("<", "&lt;").replace(">", "&gt;")
+                # Every inserted value is escaped: a plugin-provided tool's
+                # manifest supplies names, types and descriptions, and this page
+                # is served from the Indigo web server.
                 param_lines.append(
-                    f"<li><code>{pname}</code> <span class='ptype'>{ptype}</span>{req_marker}<br><span class='pdesc'>{desc}</span></li>"
+                    f"<li><code>{html.escape(str(pname))}</code> "
+                    f"<span class='ptype'>{html.escape(str(ptype))}</span>{req_marker}<br>"
+                    f"<span class='pdesc'>{html.escape(str(pinfo.get('description') or ''))}</span></li>"
                 )
             params_html = f"<ul class='params'>{''.join(param_lines)}</ul>" if param_lines else "<em class='no-params'>(no arguments)</em>"
 
-            description = (info.get("description") or "").replace("<", "&lt;").replace(">", "&gt;")
+            description = html.escape(str(info.get("description") or ""))
             rows.append(f"""
               <details class='tool'>
-                <summary><code class='tname'>{name}</code> — {description}</summary>
+                <summary><code class='tname'>{html.escape(str(name))}</code> — {description}</summary>
                 {params_html}
               </details>
             """)
 
         endpoint_note = (
-            f"<p class='endpoint'>Endpoint: <code>{endpoint_url}</code></p>"
+            f"<p class='endpoint'>Endpoint: <code>{html.escape(endpoint_url)}</code></p>"
             if endpoint_url else ""
         )
 
@@ -537,6 +557,11 @@ class MCPHandler:
                 status=200
             )
         
+        # The request id is read BEFORE dispatch, so even an unexpected fault
+        # below is answered against the id the client is waiting on. A reply
+        # with no id leaves that request pending in the client for ever.
+        msg_id = payload.get("id") if isinstance(payload, dict) else None
+
         # Process single message
         try:
             # Single message
@@ -567,8 +592,15 @@ class MCPHandler:
                 
         except Exception:
             self.logger.exception("Unhandled MCP error")
+            if isinstance(payload, dict) and "id" not in payload:
+                # A notification never gets a reply, fault or not.
+                return {
+                    "status": 200,
+                    "headers": {"Content-Type": "application/json; charset=utf-8"},
+                    "content": "{}"
+                }
             return self._json_response(
-                self._json_error(None, -32603, "Internal error"),
+                self._json_error(msg_id, -32603, "Internal error"),
                 status=200
             )
     
@@ -588,13 +620,21 @@ class MCPHandler:
             JSON-RPC response or None for notifications
         """
         # Validate JSON-RPC structure
-        if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0" or "method" not in msg:
+        msg_id = msg.get("id") if isinstance(msg, dict) else None  # None for notifications
+        if (not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0"
+                or not isinstance(msg.get("method"), str)):
             self.logger.debug("Invalid JSON-RPC message structure")
-            return self._json_error(msg.get("id"), -32600, "Invalid Request")
+            return self._json_error(msg_id, -32600, "Invalid Request")
 
-        msg_id = msg.get("id")  # May be None for notifications
         method = msg["method"]
-        params = msg.get("params") or {}
+        params = msg.get("params")
+        if params is None:
+            params = {}
+        elif not isinstance(params, dict):
+            # MCP parameters are always an object. A list (legal in bare
+            # JSON-RPC) used to reach params.get() and come back as -32603
+            # with a traceback in the log.
+            return self._json_error(msg_id, -32602, "Invalid params: params must be a JSON object")
 
         # Log incoming request at INFO level (concise)
         session_id = headers.get("mcp-session-id", "")
@@ -608,7 +648,9 @@ class MCPHandler:
         else:
             log_method = method
 
-        self.logger.info(f"📨 {log_method} | session: {session_short}")
+        # DEBUG, not INFO: this runs for every request, and INFO is for
+        # something that changed.
+        self.logger.debug(f"📨 {log_method} | session: {session_short}")
         
         # MCP 2025-06-18 requires MCP-Protocol-Version header for HTTP transport.
         # A PRESENT-but-mismatched version is always wrong, so enforce this
@@ -623,11 +665,11 @@ class MCPHandler:
                 return self._json_error(msg_id, -32600, f"Unsupported protocol version: {protocol_version_header}")
 
         # Session validation (skip for initialize and notifications).
-        # NOTE: the `and self._sessions` grace clause is deliberately retained —
-        # after a ClaudeBridge restart the proxy still holds the pre-restart
-        # session id and does not re-initialise on a session error, so the
-        # empty-store grace is what lets the client reconnect. Removing it would
-        # lock the client out after every restart.
+        # NOTE: the `and self._sessions` grace clause is deliberately retained.
+        # After a Claude Bridge restart every client still holds a pre-restart
+        # session id. The bundled proxy (1.4+) re-handshakes on a session error,
+        # but other clients (mcp-remote, a hand-written one) may not, and the
+        # empty-store grace is what lets those carry on after a restart.
         session_id = headers.get("mcp-session-id")
         if method != "initialize" and not method.startswith("notifications/") and self._sessions:
             with self._sessions_lock:
@@ -660,6 +702,8 @@ class MCPHandler:
             return self._handle_resources_list(msg_id, params, headers)
         elif method == "resources/read":
             return self._handle_resources_read(msg_id, params, headers)
+        elif method == "resources/templates/list":
+            return self._handle_resource_templates_list(msg_id, params, headers)
         
         # Prompt methods (stubs for now)
         elif method == "prompts/list":
@@ -672,7 +716,10 @@ class MCPHandler:
         elif method == "prompts/get":
             from .prompts import get_prompt
             p = (params or {})
-            result = get_prompt(p.get("name", ""), p.get("arguments") or {})
+            p_args = p.get("arguments") or {}
+            if not isinstance(p_args, dict):
+                return self._json_error(msg_id, -32602, "Invalid params: arguments must be a JSON object")
+            result = get_prompt(str(p.get("name") or ""), p_args)
             if result is None:
                 return self._json_error(msg_id, -32602, f"Unknown prompt: {p.get('name')!r}")
             return {"jsonrpc": "2.0", "id": msg_id, "result": result}
@@ -691,86 +738,81 @@ class MCPHandler:
         msg_id: Any,
         params: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Handle initialize request."""
+        """Handle initialize request.
+
+        Version negotiation per MCP 2025-06-18: a client asking for a version
+        this server does not speak gets a normal reply carrying the version it
+        DOES speak, and decides for itself whether to carry on. Until 3.0.2 it
+        got -32602 instead, which a client that could have spoken 2025-06-18
+        read as "this server is broken".
+        """
         requested_version = str(params.get("protocolVersion") or "")
-        client_info = params.get("clientInfo", {})
-        client_name = client_info.get("name", "Unknown")
+        client_info = params.get("clientInfo")
+        if not isinstance(client_info, dict):
+            client_info = {}      # null or junk must not fail the handshake
+        client_name = str(client_info.get("name") or "Unknown")
 
-        # Check if we support the requested version
-        if requested_version == self.PROTOCOL_VERSION:
-            # Create new session
-            session_id = secrets.token_urlsafe(24)
-            now_ts = time.time()
-            with self._sessions_lock:
-                self._prune_sessions_locked(now_ts)
-                self._sessions[session_id] = {
-                    "created": now_ts,
-                    "last_seen": now_ts,
-                    "client_info": client_info
-                }
+        if requested_version != self.PROTOCOL_VERSION:
+            self.logger.debug(f"Client asked for protocol {requested_version!r}; "
+                              f"offering {self.PROTOCOL_VERSION}")
 
-            result = {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {
-                    "protocolVersion": self.PROTOCOL_VERSION,
-                    # ONLY what this server can actually honour. There is no
-                    # push channel to a client: IWS answers one request with
-                    # one plain JSON response, never an open stream. So a
-                    # `listChanged` notification can never be sent, and
-                    # `logging` (server-initiated notifications/message, plus a
-                    # logging/setLevel this server does not implement) can
-                    # never be honoured either.
-                    #
-                    # Advertising them was not harmless. A client told it will
-                    # be notified when the tool list changes has no reason to
-                    # re-read it — which is exactly why a session connected
-                    # before v2.24.0 went on stripping the new `confirm`
-                    # argument for hours while the plugin refused calls that
-                    # were correctly made (29-08-2026). The honest declaration
-                    # makes a client re-read on its own terms instead of
-                    # waiting for a message that will never arrive.
-                    #
-                    # `subscribe: False` STAYS: that is an accurate statement
-                    # that resource subscription is unsupported. If a real push
-                    # channel is ever added, the claims can come back with it.
-                    "capabilities": {
-                        "prompts": {},
-                        "resources": {"subscribe": False},
-                        "tools": {}
-                    },
-                    "serverInfo": {
-                        "name": "Indigo Claude Bridge",
-                        "version": (self.plugin.pluginVersion
-                                    if self.plugin and hasattr(self.plugin, "pluginVersion")
-                                    else "unknown")
-                    }
-                }
+        # Create new session
+        session_id = secrets.token_urlsafe(24)
+        now_ts = time.time()
+        with self._sessions_lock:
+            self._prune_sessions_locked(now_ts)
+            self._sessions[session_id] = {
+                "created": now_ts,
+                "last_seen": now_ts,
+                "client_info": client_info
             }
 
-            # Add session ID for header
-            result["_mcp_session_id"] = session_id
-
-            self.logger.info(f"\t✅ Client initialized: {client_name} | session: {session_id[:8]}")
-
-            return result
-        else:
-            # Unsupported version
-            self.logger.debug(f"Unsupported protocol version: {requested_version}")
-
-            return {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "error": {
-                    "code": -32602,
-                    "message": "Unsupported protocol version",
-                    "data": {
-                        "supported": [self.PROTOCOL_VERSION],
-                        "requested": requested_version
-                    }
+        result = {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": self.PROTOCOL_VERSION,
+                # ONLY what this server can actually honour. There is no
+                # push channel to a client: IWS answers one request with
+                # one plain JSON response, never an open stream. So a
+                # `listChanged` notification can never be sent, and
+                # `logging` (server-initiated notifications/message, plus a
+                # logging/setLevel this server does not implement) can
+                # never be honoured either.
+                #
+                # Advertising them was not harmless. A client told it will
+                # be notified when the tool list changes has no reason to
+                # re-read it — which is exactly why a session connected
+                # before v2.24.0 went on stripping the new `confirm`
+                # argument for hours while the plugin refused calls that
+                # were correctly made (29-08-2026). The honest declaration
+                # makes a client re-read on its own terms instead of
+                # waiting for a message that will never arrive.
+                #
+                # `subscribe: False` STAYS: that is an accurate statement
+                # that resource subscription is unsupported. If a real push
+                # channel is ever added, the claims can come back with it.
+                "capabilities": {
+                    "prompts": {},
+                    "resources": {"subscribe": False},
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "Indigo Claude Bridge",
+                    "version": (self.plugin.pluginVersion
+                                if self.plugin and hasattr(self.plugin, "pluginVersion")
+                                else "unknown")
                 }
             }
-    
+        }
+
+        # Add session ID for header
+        result["_mcp_session_id"] = session_id
+
+        self.logger.info(f"\t✅ Client initialized: {client_name} | session: {session_id[:8]}")
+
+        return result
+
     def _handle_cancelled(self, params: Dict[str, Any]):
         """Handle cancellation notification."""
         # In a synchronous implementation, we can't really cancel ongoing work
@@ -787,11 +829,15 @@ class MCPHandler:
         # Convert tool functions to tool descriptions
         tools = []
         for name, info in self._tools.items():
-            tools.append({
+            entry = {
                 "name": name,
                 "description": info["description"],
                 "inputSchema": info["inputSchema"]
-            })
+            }
+            annotations = self._tool_annotations(name, info)
+            if annotations:
+                entry["annotations"] = annotations
+            tools.append(entry)
         
         return {
             "jsonrpc": "2.0",
@@ -801,6 +847,30 @@ class MCPHandler:
             }
         }
     
+    @staticmethod
+    def _tool_annotations(name: str, info: Dict[str, Any]) -> Dict[str, Any]:
+        """MCP tool annotations, derived from what the tool already declares.
+
+        readOnlyHint comes from the read scope. destructiveHint is True for
+        the gated deletes and for every admin tool — arbitrary code, plugin
+        restarts and the like can undo things as surely as a delete — and
+        False for an ordinary write. These are hints for a client's own
+        prompting; the scope and delete gates stay the real enforcement.
+        """
+        spec = registry.spec_for(name)
+        if spec is not None:
+            read_only = spec.scope == "read"
+            destructive = spec.destructive or spec.scope == "admin"
+        elif info.get("external_provider"):
+            read_only = not info.get("write", True)
+            destructive = False
+        else:
+            return {}
+        out: Dict[str, Any] = {"readOnlyHint": read_only}
+        if not read_only:
+            out["destructiveHint"] = destructive
+        return out
+
     def _handle_tools_call(
         self,
         msg_id: Any,
@@ -813,7 +883,17 @@ class MCPHandler:
         """
         headers   = headers or {}
         tool_name = params.get("name")
-        tool_args = params.get("arguments", {}) or {}
+        tool_args = params.get("arguments")
+
+        # Shape first: a list, a number or an unhashable name used to raise
+        # inside the lookups below and come back as -32603 with a traceback.
+        if not isinstance(tool_name, str):
+            return self._json_error(msg_id, -32602, "Invalid params: the tool name must be a string")
+        if tool_args is None:
+            tool_args = {}
+        elif not isinstance(tool_args, dict):
+            return self._json_error(msg_id, -32602,
+                                    f"Invalid params: arguments for {tool_name} must be a JSON object")
 
         if tool_name not in self._tools:
             return self._json_error(msg_id, -32602, f"Unknown tool: {tool_name}")
@@ -848,6 +928,25 @@ class MCPHandler:
 
         spec = registry.spec_for(tool_name)   # None for a plugin-provided tool
 
+        # ── Null arguments mean "not given" ──────────────────────────────
+        # A JSON null reached the tool as Python None and beat the default:
+        # set_enabled(enabled=null) disabled a trigger, and
+        # find_automation_references(include_server_check=null) turned its
+        # checks off. A null optional argument is now dropped, so the tool's
+        # own default applies; a null REQUIRED argument is refused by name.
+        # A misnamed one is still caught below, from the names as sent.
+        schema   = self._tools[tool_name].get("inputSchema") or {}
+        required = set(schema.get("required") or [])
+        props    = schema.get("properties") or {}
+        sent_names = list(tool_args)
+        null_required = sorted(k for k, v in tool_args.items() if v is None and k in required)
+        if null_required:
+            return self._json_error(
+                msg_id, -32602,
+                f"Required argument(s) for {tool_name} cannot be null: {', '.join(null_required)}"
+            )
+        tool_args = {k: v for k, v in tool_args.items() if v is not None}
+
         # ── Irreversible-delete gate ─────────────────────────────────────
         # Sits AFTER the scope check and is independent of it. Admin scope
         # says the caller is trusted; it cannot say anyone meant to destroy
@@ -868,8 +967,6 @@ class MCPHandler:
         # A lightweight check against the tool's declared inputSchema so a
         # missing required field returns a clear -32602 naming the field rather
         # than surfacing as an opaque -32603 from the **kwargs call below.
-        schema   = self._tools[tool_name].get("inputSchema") or {}
-        required = set(schema.get("required") or [])
         missing  = [k for k in required if k not in tool_args]
         if missing:
             return self._json_error(
@@ -885,9 +982,8 @@ class MCPHandler:
         # of what the caller asked (live-hit 17-Jul-2026: enable_device called
         # with enable=false ran with value=True and re-enabled the device while
         # reporting success). Name the unknowns AND the valid names in the error.
-        props = schema.get("properties") or {}
         if props:
-            unknown = [k for k in tool_args if k not in props]
+            unknown = [k for k in sent_names if k not in props]
             if unknown:
                 return self._json_error(
                     msg_id, -32602,
@@ -899,7 +995,11 @@ class MCPHandler:
         # Moved here from the proxy, which could not see the schemas and so
         # turned a string property's "21.50" into 21.5 and '{"a":1}' into a
         # dict. A property declared as a string now gets exactly what was sent.
-        tool_args = coerce_to_schema(tool_args, props)
+        try:
+            tool_args = coerce_to_schema(tool_args, props)
+        except Exception as exc:
+            self.logger.warning(f"⛔ Could not read the arguments for {tool_name}: {exc}")
+            return self._json_error(msg_id, -32602, f"Invalid arguments for {tool_name}: {exc}")
 
         start = time.time()
         ok = False
@@ -947,22 +1047,8 @@ class MCPHandler:
                 if spec is not None and spec.refresh_search and self.entity_index_manager:
                     self.entity_index_manager.refresh_async()
 
-            response = {
-                "jsonrpc": "2.0",
-                "id":      msg_id,
-                "result": {
-                    "content": [
-                        {"type": "text", "text": result}
-                    ],
-                    # Hint to clients: 'cache-hit' lets Claude know the data
-                    # is up to TTL seconds stale; useful when debugging.
-                    "_meta": {
-                        "cache_hit": cache_hit,
-                        "tool":      tool_name,
-                    },
-                },
-            }
-            return response
+            return self._tool_result(msg_id, tool_name, result, is_error=not ok,
+                                     cache_hit=cache_hit)
 
         except Exception as e:
             with self._telemetry_lock:
@@ -977,9 +1063,12 @@ class MCPHandler:
                 detail = "see the Claude Bridge event log for details"
             else:
                 detail = str(e)
-            return self._json_error(
-                msg_id, -32603, f"Tool '{tool_name}' execution failed: {detail}"
-            )
+            # A tool that failed is a tool RESULT with isError, not a protocol
+            # error (MCP 2025-06-18): the model reads it and can correct
+            # itself, where a JSON-RPC error is for the client, not the model.
+            return self._tool_result(msg_id, tool_name,
+                                     f"Tool '{tool_name}' execution failed: {detail}",
+                                     is_error=True)
         finally:
             duration_ms = int((time.time() - start) * 1000)
             # deque(maxlen) self-trims; append is atomic but lock anyway so the
@@ -993,6 +1082,28 @@ class MCPHandler:
                     "bytes":       resp_bytes,
                     "ts":          time.time(),
                 })
+
+    @staticmethod
+    def _tool_result(msg_id: Any, tool_name: str, text: Any, *, is_error: bool,
+                     cache_hit: bool = False) -> Dict[str, Any]:
+        """The tools/call reply. isError is always stated, so a failed call is
+        visible to a client that reads only the flag."""
+        return {
+            "jsonrpc": "2.0",
+            "id":      msg_id,
+            "result": {
+                "content": [
+                    {"type": "text", "text": text}
+                ],
+                "isError": bool(is_error),
+                # Hint to clients: 'cache-hit' lets Claude know the data
+                # is up to TTL seconds stale; useful when debugging.
+                "_meta": {
+                    "cache_hit": cache_hit,
+                    "tool":      tool_name,
+                },
+            },
+        }
 
     @staticmethod
     def _result_ok(result: Any) -> bool:
@@ -1134,8 +1245,13 @@ class MCPHandler:
         denied = self._resources_scope_denied(msg_id, headers)
         if denied:
             return denied
+        # A URI with a {placeholder} is a TEMPLATE, not a resource, and is
+        # listed by resources/templates/list. resources/list carries only URIs
+        # a client can read exactly as given.
         resources = []
         for uri, info in self._resources.items():
+            if "{" in uri:
+                continue
             resources.append({
                 "uri": uri,
                 "name": info["name"],
@@ -1150,6 +1266,27 @@ class MCPHandler:
                 "resources": resources
             }
         }
+
+    def _handle_resource_templates_list(
+        self,
+        msg_id: Any,
+        params: Dict[str, Any],
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Handle resources/templates/list: the parameterised resources."""
+        denied = self._resources_scope_denied(msg_id, headers)
+        if denied:
+            return denied
+        templates = [
+            {
+                "uriTemplate": uri,
+                "name": info["name"],
+                "description": info["description"],
+                "mimeType": "application/json",
+            }
+            for uri, info in self._resources.items() if "{" in uri
+        ]
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {"resourceTemplates": templates}}
     
     def _handle_resources_read(
         self,
@@ -1520,9 +1657,12 @@ class MCPHandler:
         message: str, 
         data: Any = None
     ) -> Dict[str, Any]:
-        """Create JSON-RPC error response."""
+        """Create JSON-RPC error response. The id is ALWAYS present — null when
+        the request's id could not be read, as JSON-RPC 2.0 requires. A reply
+        with no id at all matches no request, so the client waits for ever."""
         error = {
             "jsonrpc": "2.0",
+            "id": msg_id,
             "error": {
                 "code": code,
                 "message": message
@@ -1531,8 +1671,5 @@ class MCPHandler:
         
         if data is not None:
             error["error"]["data"] = data
-        
-        if msg_id is not None:
-            error["id"] = msg_id
         
         return error

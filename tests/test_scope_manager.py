@@ -182,3 +182,35 @@ def test_a_string_scope_is_not_exploded_into_characters(tmp_path):
     sm = ScopeManager(str(path))
     assert sm._default == ["read"]
     assert sm._tokens["tok-abc"]["scopes"] == ["admin"]
+
+
+# ── Unknown scope names are named at load (24-09-2026) ───────────────────────
+
+def test_an_unknown_scope_name_is_warned_about(tmp_path, caplog):
+    import json as _json
+    import logging as _logging
+    from mcp_server.security import ScopeManager as _SM
+    path = tmp_path / "scopes.json"
+    path.write_text(_json.dumps({"default_scopes": ["Read"],
+                                 "tokens": {"t": {"name": "x", "scopes": ["read", "wirte"]}}}),
+                    encoding="utf-8")
+    log = _logging.getLogger("test-scope-unknown")
+    with caplog.at_level(_logging.WARNING, logger=log.name):
+        mgr = _SM(scopes_file=str(path), logger=log)
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "'Read'" in text and "'wirte'" in text and "grant nothing" in text
+    assert mgr.scopes_for_token("t") == {"read", "wirte"}      # grants nothing extra
+
+
+def test_known_scope_names_raise_no_warning(tmp_path, caplog):
+    import json as _json
+    import logging as _logging
+    from mcp_server.security import ScopeManager as _SM
+    path = tmp_path / "scopes.json"
+    path.write_text(_json.dumps({"default_scopes": ["read"],
+                                 "tokens": {"t": {"scopes": ["read", "write", "admin"]}}}),
+                    encoding="utf-8")
+    log = _logging.getLogger("test-scope-known")
+    with caplog.at_level(_logging.WARNING, logger=log.name):
+        _SM(scopes_file=str(path), logger=log)
+    assert not [r for r in caplog.records if "unknown scope" in r.getMessage()]

@@ -2,9 +2,16 @@
 # -*- coding: utf-8 -*-
 # Filename:    indigo_mcp_proxy.py
 # Description: stdio-to-HTTP proxy for Indigo MCP Server plugin (no OAuth)
-# Author:      CliveS & Claude Opus 5; Claude Opus 5.5 (1.6)
-# Date:        23-09-2026
-# Version:     1.6
+# Author:      CliveS & Claude Opus 5; Claude Opus 5.5 (1.6, 1.7)
+# Date:        24-09-2026
+# Version:     1.7
+#
+# v1.7 (24-09-2026): every request gets a JSON-RPC answer. A reply that parsed
+#   as JSON but was not JSON-RPC — the plugin's own 503 "MCP server unavailable"
+#   body, a 500 — was passed through verbatim, so the client never saw an answer
+#   for its request id and waited until its own timeout. Any HTTP status of 400
+#   or more, and any body that is not a JSON-RPC message, now becomes a JSON-RPC
+#   error for the pending id. So does a request answered with nothing at all.
 #
 # v1.6 (23-09-2026): tool arguments pass through UNTOUCHED. The proxy used to
 #   convert any string that looked numeric or like JSON, without seeing the
@@ -58,8 +65,9 @@ import http.client
 INDIGO_HOST            = "localhost"
 INDIGO_PORT            = 8176
 INDIGO_MCP_PATH        = "/message/com.clives.indigoplugin.claudebridge/mcp/"
-# BEARER_TOKEN is patched in by the plugin at install time.  The plugin's
-# _setup_claude_code_integration() reads the live IWS token from
+# BEARER_TOKEN is patched in by the plugin at start-up.  The plugin's
+# mcp_server/client_setup.py (setup_claude_code_integration) reads the live
+# IWS token from
 # <install>/Preferences/secrets.json (with IndigoSecrets.py
 # CLAUDEBRIDGE_BEARER_TOKEN as a fallback) and rewrites this line in the
 # destination copy at /Library/Application Support/Perceptive
@@ -121,6 +129,9 @@ class _HttpError(Exception):
                     "an error if it could not).")
         elif status == 404:
             hint = " — endpoint not found. Is the Claude Bridge plugin enabled?"
+        elif status == 503:
+            hint = (" — Claude Bridge is running but its MCP server did not start. "
+                    "The Indigo event log says why; reload the plugin once it is fixed.")
         detail = f": {body.strip()[:200]}" if body.strip() else ""
         super().__init__(f"HTTP {status} from Indigo's web server{hint}{detail}")
 
@@ -232,18 +243,43 @@ def _read_response(resp):
         body_str = resp.read().decode("utf-8").strip()
         if body_str:
             try:
-                messages.append(json.loads(body_str))
-                # Only pass a body through to stdout once it has parsed as JSON.
-                # An HTML 401/404/500 page written verbatim corrupts the client's
-                # JSON-RPC stream, and the pending request id is never answered.
-                emit_lines.append(body_str + "\n")
+                parsed = json.loads(body_str)
             except json.JSONDecodeError:
                 raise _HttpError(status, body_str[:400])
+            # "{}" is the server's acknowledgement of a notification — nothing
+            # to pass on. Anything else is checked below: only a JSON-RPC
+            # message is passed through to stdout. An HTML page, or JSON that
+            # is not JSON-RPC, written verbatim corrupts the client's stream
+            # AND leaves the pending request id unanswered.
+            if not (isinstance(parsed, dict) and not parsed and status < 400):
+                messages.append(parsed)
+                emit_lines.append(body_str + "\n")
 
-    if status >= 400 and not messages:
-        raise _HttpError(status, "")
+    if status >= 400:
+        raise _HttpError(status, _error_text(messages))
+    for m in messages:
+        if not _is_jsonrpc(m):
+            raise _HttpError(status, json.dumps(m)[:400])
 
     return messages, emit_lines
+
+
+def _is_jsonrpc(msg) -> bool:
+    return isinstance(msg, dict) and msg.get("jsonrpc") == "2.0"
+
+
+def _error_text(messages) -> str:
+    """The most useful line from an error body: a JSON-RPC error message, a
+    plain {"error": ...}, or the body itself."""
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        err = m.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])
+        if isinstance(err, str) and err:
+            return err
+    return json.dumps(messages[0])[:400] if messages else ""
 
 
 def _attempt(body: bytes, headers: dict, method, is_notification: bool):
@@ -430,6 +466,11 @@ def post_message(data: dict):
             _write_error(data.get("id"), f"Connection error: {e}")
         return
 
+    if not is_notification and not emit_lines:
+        # A request must always be answered, or the client waits for ever.
+        _write_error(data.get("id"), "Indigo's web server sent an empty reply")
+        return
+
     # Transparent session recovery: the server rejected our stale session id
     # (IWS reloaded, or our session was pruned). Re-handshake with the cached
     # initialize, then replay this request ONCE with the new session id. Only
@@ -441,11 +482,14 @@ def post_message(data: dict):
             and _rehandshake()):
         try:
             messages, emit_lines = _attempt(body, _build_headers(), method, is_notification)
-        except _SendFailed as e:
+        except (_SendFailed, _HttpError) as e:
             _write_error(data.get("id"), str(e))
             return
         except Exception as e:
             _write_error(data.get("id"), f"Connection error after re-handshake: {e}")
+            return
+        if not emit_lines:
+            _write_error(data.get("id"), "Indigo's web server sent an empty reply")
             return
 
     _emit(emit_lines, is_notification)

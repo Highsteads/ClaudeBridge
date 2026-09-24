@@ -108,7 +108,16 @@ def check(tool_name: str, tool_args: Dict[str, Any]) -> None:
             f"deletion is disabled in the plugin preferences — tick "
             f"'{PREFERENCE_LABEL}' in Plugins → Claude Bridge → Configure to allow it"
         )
-    if not confirmed:
+    raw_confirm = tool_args.get("confirm")
+    if not confirmed and isinstance(raw_confirm, str):
+        # A string "true" is still refused — only the JSON boolean counts —
+        # but the caller DID pass something, so the stale-tool-list advice
+        # below would send them round in a circle. Say what is wrong instead.
+        reasons.append(
+            f"confirm was the string {raw_confirm!r}; it must be the JSON boolean true "
+            f"(confirm: true, not confirm: \"true\")"
+        )
+    elif not confirmed:
         # The stale-tool-list case is named explicitly. An MCP client caches
         # the tool list at connect time and DROPS arguments the cached schema
         # does not know about, so a client connected before this gate existed

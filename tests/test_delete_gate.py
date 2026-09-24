@@ -168,3 +168,16 @@ def test_every_gated_tool_also_requires_admin_scope():
     """The gate is a THIRD boundary, never a replacement for the scope check."""
     from mcp_server.security.scope_manager import ADMIN_TOOLS
     assert delete_gate.DESTRUCTIVE_TOOLS <= ADMIN_TOOLS
+
+
+@pytest.mark.parametrize("text", ["true", "True", "yes"])
+def test_a_string_confirm_is_refused_with_the_real_reason(text):
+    """confirm:"true" is still refused, but the stale-tool-list advice would
+    send the caller round in a circle: they DID pass it. Say what is wrong."""
+    _allow(True)
+    with pytest.raises(DeleteDenied) as exc:
+        delete_gate.check("delete_automation", {"confirm": text})
+    message = str(exc.value)
+    assert "JSON boolean true" in message
+    assert repr(text) in message
+    assert "reconnect" not in message

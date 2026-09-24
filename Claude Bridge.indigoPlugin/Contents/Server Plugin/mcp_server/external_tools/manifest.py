@@ -141,6 +141,19 @@ def parse_manifest(text: str, expected_plugin_id: str, path: str = "") -> Provid
         if not isinstance(schema, dict) or schema.get("type") != "object":
             raise ManifestError(
                 f"tools[{i}].inputSchema must be a JSON Schema object with type 'object'")
+        # The dispatcher reads these two directly (required names, then each
+        # property's declared type), so a string or a list where an object
+        # belongs raised inside every call instead of being refused here once.
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict) or not all(
+                isinstance(k, str) and isinstance(v, dict) for k, v in properties.items()):
+            raise ManifestError(
+                f"tools[{i}].inputSchema.properties must be an object whose every value "
+                f"is an object (one JSON Schema per argument)")
+        required = schema.get("required", [])
+        if not isinstance(required, list) or not all(isinstance(r, str) for r in required):
+            raise ManifestError(
+                f"tools[{i}].inputSchema.required must be an array of argument names")
 
         # An undeclared write flag is treated as a write, so the write gate
         # fails safe for a provider that forgot to say.

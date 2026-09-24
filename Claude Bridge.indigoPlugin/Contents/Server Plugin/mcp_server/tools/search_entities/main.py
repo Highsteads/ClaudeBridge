@@ -82,7 +82,7 @@ class SearchEntitiesHandler(BaseToolHandler):
 
             # Concise query logging
             query_short = query[:50] + "..." if len(query) > 50 else query
-            self.info_log(f"Searching: '{query_short}'")
+            self.debug_log(f"Searching: '{query_short}'")
 
             # Rebuild first if Indigo has told us the index is out of date.
             if self._freshen is not None:
@@ -153,7 +153,7 @@ class SearchEntitiesHandler(BaseToolHandler):
             device_count = len(grouped_results.get("devices", []))
             variable_count = len(grouped_results.get("variables", []))
             action_count = len(grouped_results.get("actions", []))
-            self.info_log(f"\t✅ Found: {device_count} devices, {variable_count} variables, {action_count} actions")
+            self.debug_log(f"\t✅ Found: {device_count} devices, {variable_count} variables, {action_count} actions")
 
             # slim by default; full only when explicitly requested
             use_minimal = (detail != "full")

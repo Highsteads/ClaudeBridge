@@ -8,6 +8,21 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 3.1.0 (2026-09-24)
+A second full review of the plugin, this time of the new 3.0 code, and every problem it found is fixed.
+
+- **Switching a device by name is safer.** A device whose name contained "one" or "single" could be mistaken for a longer name starting the same way, and a lone near-miss could be switched when you meant something else. Now only the exact name, or a name containing every word you gave, is acted on; anything less is refused with the candidates listed.
+- **Colour changes work.** The colour command was sending Indigo settings it does not recognise, on the wrong scale, so no colour change ever reached a bulb.
+- **Thermostats in Fahrenheit are safe.** Nudging a setpoint used to squeeze the result into a Celsius range without saying so, which on a Fahrenheit thermostat meant a setpoint of 35. Values are now checked in the thermostat's own units and refused, never quietly changed.
+- **Passwords stay hidden.** Looking a device up used to return its settings in full, SMTP and router passwords included, even to a read-only key. Those values are now masked.
+- **The security summary tells the truth.** A locked front door, a garage door opener and a relay were all being reported as open doors, and every idle heating zone as heating. The summary now goes by what Indigo says each device is rather than by words in its name, and reports unlocked locks separately.
+- **"What caused this?" looks further back.** `investigate_event` only ever saw the last day and a half of the log, whatever you asked for. It now searches the whole window, and it recognises a delayed action started by a trigger.
+- **Scripts keep their permissions** when Claude edits them, and a script that ends with `sys.exit(1)` now counts as a failure.
+- **Quieter log.** Routine reads no longer write to the event log, and a mistake in Claude's own code is no longer logged as a red error for the error watcher to chase. Only real faults are errors now.
+- **Sturdier underneath.** A failure while setting up Claude Code no longer takes the whole server down with it. Error replies always reach the request that caused them. Webhooks keep working after being switched off and on, and a new menu item brings back a webhook that was paused after repeated failures. A plugin-provided tool can no longer hold up the web server for more than 20 seconds.
+
+About 230 new tests, 1,388 in all. Every fix was broken on purpose to prove a test catches it.
+
 ### 3.0.1 (2026-09-24)
 Sunrise and sunset now come from the same day.
 

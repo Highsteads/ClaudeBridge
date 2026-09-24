@@ -16,6 +16,8 @@ import threading
 from collections import deque
 from unittest.mock import MagicMock
 
+import pytest
+
 from mcp_server.common.tool_cache import ToolCache
 from mcp_server.mcp_handler import MCPHandler
 from mcp_server.security import RateLimiter, ScopeManager
@@ -225,7 +227,8 @@ def test_raised_exception_text_is_redacted_not_hidden(tmp_path):
 
     h = _make_handler(tmp_path, {"execute_indigo_python": _tool(_boom)}, r)
     resp = h._handle_tools_call(4, {"name": "execute_indigo_python", "arguments": {}})
-    msg = resp["error"]["message"]
+    assert resp["result"]["isError"] is True
+    msg = resp["result"]["content"][0]["text"]
     assert "hunter2-mqtt" not in msg
     assert "auth failed with [redacted MQTT_PASSWORD] at step 3" in msg
 
@@ -348,3 +351,17 @@ def test_error_scrub_drops_traceback_and_output():
     for leaked in ("traceback", "stdout", "stderr", "path"):
         assert leaked not in out, f"{leaked} survived the scrub"
     assert "sk-secret-123" not in json.dumps(out)
+
+
+@pytest.mark.parametrize("name", ["WIFI_PSK", "ROUTER_PWD", "ALARM_PASSCODE", "db_pwd"])
+def test_pwd_psk_and_passcode_names_are_credentials(name):
+    from mcp_server.security.secret_redactor import is_credential_name
+    assert is_credential_name(name)
+    found = credential_values_from_source(f'{name} = "a-long-secret-value"\n')
+    assert found == {"a-long-secret-value": name}
+
+
+@pytest.mark.parametrize("name", ["MQTT_BROKER", "UNIFI_HOST", "MQTT_USERNAME"])
+def test_addresses_and_usernames_still_are_not(name):
+    from mcp_server.security.secret_redactor import is_credential_name
+    assert not is_credential_name(name)

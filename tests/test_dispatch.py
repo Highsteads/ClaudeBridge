@@ -129,9 +129,12 @@ def test_sensitive_tool_error_is_scrubbed_from_client(tmp_path):
     # redact by value instead (see test_error_redaction.py).
     h = _make_handler(tmp_path, tools={"send_email": _tool(_boom)})
     resp = h._handle_tools_call(6, {"name": "send_email", "arguments": {}})
-    assert resp["error"]["code"] == -32603
-    assert "hyper-secret" not in resp["error"]["message"]
-    assert "event log" in resp["error"]["message"]
+    # A failed tool is a tool RESULT with isError (MCP 2025-06-18), not -32603.
+    assert "error" not in resp
+    assert resp["result"]["isError"] is True
+    text = resp["result"]["content"][0]["text"]
+    assert "hyper-secret" not in text
+    assert "event log" in text
 
 
 def test_normal_tool_error_text_passes_through(tmp_path):
@@ -140,8 +143,9 @@ def test_normal_tool_error_text_passes_through(tmp_path):
 
     h = _make_handler(tmp_path, tools={"list_devices": _tool(_boom)})
     resp = h._handle_tools_call(7, {"name": "list_devices", "arguments": {}})
-    assert resp["error"]["code"] == -32603
-    assert "device 42 not found" in resp["error"]["message"]
+    assert resp["id"] == 7
+    assert resp["result"]["isError"] is True
+    assert "device 42 not found" in resp["result"]["content"][0]["text"]
 
 
 # ── Rate limiting & telemetry ─────────────────────────────────────────────────

@@ -43,15 +43,15 @@ from typing import Any, Callable, Dict, Optional, Tuple
 # The invalidation above only covers ClaudeBridge's OWN mutating tools. But the
 # world changes without asking us: a light switched at the wall, by a Z-Wave
 # association, by an Indigo trigger, or by any other plugin. The plugin sees
-# every one of those in deviceUpdated / variableUpdated. Rather than drop
-# entries eagerly on each (a presence-sensor storm would thrash the store under
-# a lock), the "device" and "variable" buckets each carry a counter that those
-# callbacks bump — O(1), no iteration. A cached entry records the counters it
-# was computed under, and a read whose stamp no longer matches is a miss.
-_DOMAIN_DEVICE   = "device"
-_DOMAIN_VARIABLE = "variable"
-_DOMAIN_ACTION_GROUP = "action_group"
-_DOMAINS = (_DOMAIN_DEVICE, _DOMAIN_VARIABLE, _DOMAIN_ACTION_GROUP)
+# every one of those in deviceUpdated / variableUpdated / actionGroupUpdated.
+# Rather than drop entries eagerly on each (a presence-sensor storm would
+# thrash the store under a lock), each change domain — registry.CHANGE_DOMAINS:
+# device, variable, action_group — carries a counter that those callbacks bump
+# — O(1), no iteration. A cached entry records the counters it was computed
+# under, and a read whose stamp no longer matches is a miss.
+from ..registry import CHANGE_DOMAINS
+
+_DOMAINS = tuple(sorted(CHANGE_DOMAINS))
 
 
 def _registry():

@@ -4,7 +4,7 @@
 # Description: Claude Bridge - exposes Indigo to Claude over the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5.5
 # Date:        24-09-2026
-# Version:     3.0.1
+# Version:     3.1.0
 
 try:
     import indigo
@@ -160,6 +160,9 @@ class Plugin(indigo.PluginBase):
 
         # Plugin start time (used by /health endpoint)
         self._start_time = time.time()
+        # When lastActivity was last written (monotonic). Written at most once a
+        # minute: every write is an Indigo state change and a SQL Logger row.
+        self._last_activity_write = 0.0
 
         # Set up logging properly — guard the coercion (a blank/non-numeric
         # stored value must not crash plugin start).
@@ -297,10 +300,7 @@ class Plugin(indigo.PluginBase):
 
         # Initialize MCP handler (includes the entity index)
         try:
-            scopes_file = os.path.join(
-                indigo.server.getInstallFolderPath(),
-                "Preferences/Plugins/com.clives.indigoplugin.claudebridge/scopes.json",
-            )
+            scopes_file = self._scopes_path()
             self.mcp_handler = MCPHandler(
                 data_provider=self.data_provider,
                 logger=self.logger,
@@ -332,24 +332,6 @@ class Plugin(indigo.PluginBase):
             except Exception as _dev_e:
                 self.logger.warning(f"\t⚠️  Could not auto-create device: {_dev_e}")
 
-            # Auto-configure Claude Code integration (proxy + ~/.mcp.json +
-            # ~/.claude/settings.json edits).  Opt-in via PluginConfig — defaults
-            # to True so existing users keep their current setup, but lets a user
-            # disable silent dotfile rewriting if they manage these themselves.
-            # as_bool, not raw truthiness: a saved dialog stores this as the string
-            # "false", which is truthy — so a user who unticked it would still get
-            # their ~/.mcp.json / settings.json rewritten on every startup.
-            if as_bool(self.pluginPrefs.get("auto_configure_claude_code"), True):
-                client_setup.setup_claude_code_integration(
-                    self.logger,
-                    bundle_dir     = os.getcwd(),
-                    install_folder = indigo.server.getInstallFolderPath(),
-                    home           = os.path.expanduser("~"),
-                    fallback_token = CLAUDEBRIDGE_BEARER_TOKEN,
-                )
-            else:
-                self.logger.info("Claude Code auto-configure disabled in PluginConfig — skipping ~/.mcp.json and ~/.claude/settings.json updates")
-
             # Build the outbound webhook subsystem (ships dark — gated on the
             # 'Enable Event Webhooks' pref) before subscriptions go live.
             self._init_webhooks()
@@ -369,9 +351,55 @@ class Plugin(indigo.PluginBase):
 
         except Exception as e:
             self.logger.error(f"\t❌ MCP handler initialization failed: {e}")
-            self.mcp_handler = None
             self.logger.error("\t❌ MCP server unavailable - plugin restart required")
+            # Stop whatever did start, or its threads (the entity index, the
+            # webhook worker) run on for the life of the process with nothing
+            # able to reach them.
+            self._stop_started_components()
+            self._set_server_status("Unavailable")
             return
+
+        # Claude Code integration LAST and on its own: it edits files outside
+        # Indigo (Scripts/, ~/.mcp.json, ~/.claude/settings.json), and a
+        # permissions error there used to abort startup half-way — no webhooks,
+        # no change subscriptions, and the handler thrown away.
+        self._configure_claude_code()
+
+    def _configure_claude_code(self) -> None:
+        """Deploy the proxy and register it with Claude Code, if the user has
+        not turned that off. A failure is a WARNING: the MCP server itself is
+        up and every other client still works."""
+        # as_bool, not raw truthiness: a saved dialog stores this as the string
+        # "false", which is truthy — so a user who unticked it would still get
+        # their ~/.mcp.json / settings.json rewritten on every startup.
+        if not as_bool(self.pluginPrefs.get("auto_configure_claude_code"), True):
+            self.logger.info("Claude Code auto-configure disabled in PluginConfig — skipping "
+                             "~/.mcp.json and ~/.claude/settings.json updates")
+            return
+        try:
+            client_setup.setup_claude_code_integration(
+                self.logger,
+                bundle_dir     = os.getcwd(),
+                install_folder = indigo.server.getInstallFolderPath(),
+                home           = os.path.expanduser("~"),
+                fallback_token = CLAUDEBRIDGE_BEARER_TOKEN,
+            )
+        except Exception as exc:
+            self.logger.warning(f"\t⚠️  Claude Code auto-configure failed ({type(exc).__name__}: "
+                                f"{exc}). The MCP server is running; set Claude Code up by hand "
+                                f"or fix the permissions and restart the plugin.")
+
+    def _stop_started_components(self) -> None:
+        """Undo a half-finished startup: stop the webhook worker and the
+        handler (its entity-index threads) if they were built."""
+        for label, stop in (("webhook dwell timers", lambda: self.webhook_manager and self.webhook_manager.shutdown()),
+                            ("webhook dispatcher", lambda: self.webhook_dispatcher and self.webhook_dispatcher.stop()),
+                            ("MCP handler", lambda: self.mcp_handler and self.mcp_handler.stop())):
+            try:
+                stop()
+            except Exception as exc:
+                self.logger.warning(f"\t⚠️  Could not stop the {label}: {exc}")
+        self.mcp_handler = None
 
     # ────────────────────────────────────────────────────────────────────────
     # Outbound webhook subsystem (event subscriptions). Ships dark — gated on the
@@ -456,13 +484,21 @@ class Plugin(indigo.PluginBase):
             # Cancel pending dwell timers too, or a disable->re-enable within the
             # dwell window could fire a stale event whose condition no longer holds.
             self.webhook_manager.shutdown()
-            self.webhook_dispatcher.stop()
+            # wait=False: this runs on Indigo's dispatch thread (a Configure
+            # save), which a join of up to 17 s would freeze. The worker is
+            # signalled now and joined on a helper thread.
+            self.webhook_dispatcher.stop(wait=False)
             self.logger.info("\tEvent Webhooks disabled")
 
     def _webhook_on_device_change(self, origDev, newDev) -> None:
         if not (self.webhooks_enabled and self.webhook_manager and self.webhook_dispatcher):
             return
         try:
+            # dict(indigo.Device) copies every state and prop, and this runs on
+            # every sensor event on the estate. Only pay for it when some
+            # subscription watches this device (or all devices).
+            if not self.webhook_manager.watches("device", newDev.id):
+                return
             for sub, event in self.webhook_manager.evaluate_device_change(dict(origDev), dict(newDev)):
                 self.webhook_dispatcher.dispatch(sub, event)
         except Exception:
@@ -472,6 +508,8 @@ class Plugin(indigo.PluginBase):
         if not (self.webhooks_enabled and self.webhook_manager and self.webhook_dispatcher):
             return
         try:
+            if not self.webhook_manager.watches("variable", newVar.id):
+                return
             for sub, event in self.webhook_manager.evaluate_variable_change(dict(origVar), dict(newVar)):
                 self.webhook_dispatcher.dispatch(sub, event)
         except Exception:
@@ -491,6 +529,20 @@ class Plugin(indigo.PluginBase):
                 f"  {d['subscription_id']}  {d['entity_type']}{tail} -> {d['webhook_url']}  "
                 f"enabled={d['enabled']} fires={d['stats']['fires']} "
                 f"last={d['stats'].get('last_error') or 'ok'}")
+
+    def reenable_webhooks_menu(self) -> None:
+        """Plugins menu: switch back on every subscription the failure count
+        quarantined. One switched off for another reason (a corrupt stored
+        entity id) stays off."""
+        if not self.webhook_manager:
+            indigo.server.log("Webhook subsystem not initialised")
+            return
+        lifted = self.webhook_manager.reenable_quarantined()
+        if lifted:
+            indigo.server.log(f"Re-enabled {len(lifted)} quarantined webhook subscription(s): "
+                              f"{', '.join(lifted)}")
+        else:
+            indigo.server.log("No webhook subscription is quarantined")
 
     def clear_webhooks_menu(self) -> None:
         """Plugins menu: delete ALL webhook subscriptions (idempotent)."""
@@ -581,25 +633,58 @@ class Plugin(indigo.PluginBase):
         # Validate MCP handler is available
         if not self.mcp_handler:
             self.logger.error("❌ MCP handler not initialized")
-            return {
-                "status": 503,  # Service Unavailable
-                "headers": {"Content-Type": "application/json"},
-                "content": json.dumps({
-                    "error": "MCP server unavailable - plugin initialization failed"
-                })
-            }
+            return self._jsonrpc_http_error(
+                503, body, "MCP server unavailable - plugin initialization failed; "
+                           "see the Indigo event log and reload the plugin")
 
         # Delegate to MCP handler (it will handle logging)
         try:
             response = self.mcp_handler.handle_request(method, headers, body)
-            return response
-
         except Exception as e:
             self.logger.error(f"❌ MCP endpoint error: {e}")
-            return {
-                "status": 500,
-                "content": json.dumps({"error": str(e)})
-            }
+            return self._jsonrpc_http_error(500, body, f"Claude Bridge internal error: {e}")
+        self._note_activity()
+        return response
+
+    @staticmethod
+    def _jsonrpc_http_error(status: int, body: str, message: str) -> dict:
+        """An HTTP error whose body is still a JSON-RPC error for the request's
+        id, so any client — the bundled proxy or another — can match it to the
+        request it is waiting on. A bare {"error": ...} matched nothing."""
+        try:
+            request = json.loads(body) if body else None
+        except (TypeError, ValueError):
+            request = None
+        request_id = request.get("id") if isinstance(request, dict) else None
+        return {
+            "status": status,
+            "headers": {"Content-Type": "application/json; charset=utf-8"},
+            "content": json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                   "error": {"code": -32603, "message": message}}),
+        }
+
+    def _note_activity(self) -> None:
+        """Stamp lastActivity on the Claude Bridge device, at most once a
+        minute. Never raises: it runs after every MCP request."""
+        now = time.monotonic()
+        if now - self._last_activity_write < 60:
+            return
+        self._last_activity_write = now
+        try:
+            dev = self.mcp_server_device
+            if dev is not None:
+                dev.updateStateOnServer(key="lastActivity", value=str(indigo.server.getTime()))
+        except Exception as exc:
+            self.logger.debug(f"Could not update lastActivity: {exc}")
+
+    def _set_server_status(self, value: str) -> None:
+        """Set serverStatus on the Claude Bridge device if it differs."""
+        try:
+            dev = self.mcp_server_device
+            if dev is not None and dev.states.get("serverStatus") != value:
+                dev.updateStateOnServer(key="serverStatus", value=value)
+        except Exception as exc:
+            self.logger.debug(f"Could not update serverStatus: {exc}")
 
     ########################################
     # Health / Diagnostics IWS endpoint
@@ -692,8 +777,11 @@ class Plugin(indigo.PluginBase):
         if scopes_path.exists():
             indigo.server.log(f"Claude Bridge: scopes.json already exists at: {scopes_path}")
             return
+        # default_scopes is READ for a new file: a token nobody listed gets
+        # read-only access, not everything. Only a NEW file gets this — an
+        # existing scopes.json is never rewritten.
         starter = {
-            "default_scopes": ["read", "write", "admin"],
+            "default_scopes": ["read"],
             "tokens": {
                 "REPLACE_WITH_FULL_BEARER_TOKEN_FOR_CLAUDE_CODE": {
                     "name":   "claude-code",
@@ -707,7 +795,7 @@ class Plugin(indigo.PluginBase):
         }
         try:
             scopes_path.parent.mkdir(parents=True, exist_ok=True)
-            scopes_path.write_text(json.dumps(starter, indent=2) + "\n")
+            scopes_path.write_text(json.dumps(starter, indent=2) + "\n", encoding="utf-8")
             # This file is KEYED BY FULL BEARER TOKENS once the user fills it in,
             # so it must not inherit a group/world-readable umask — same reasoning
             # as webhooks.json and the deployed proxy. ScopeManager re-asserts this
@@ -833,6 +921,18 @@ class Plugin(indigo.PluginBase):
         # Get all available connection URLs
         urls = self._get_mcp_client_urls()
 
+        # The docs link and the secrets.json path follow the running server,
+        # never a typed version number.
+        try:
+            install_folder = indigo.server.getInstallFolderPath()
+            docs_version = ".".join(str(indigo.server.version).split(".")[:2])
+        except Exception:
+            install_folder = "/Library/Application Support/Perceptive Automation/Indigo <version>"
+            docs_version = "2025.2"
+        secrets_json = os.path.join(install_folder, "Preferences", "secrets.json")
+        docs_url = (f"https://docs.indigodomo.com/{docs_version}/user/remote-access/"
+                    f"web-server/#authentication")
+
         config_lines = [
             "🌐 Claude Desktop MCP Client Connection Information:",
             "",
@@ -841,8 +941,8 @@ class Plugin(indigo.PluginBase):
             "📚 In all cases, you will need an API Key. For this, you have two choices:",
             "  • Indigo Reflector API Key: Obtained from your Reflector settings",
             "  • Local Secret: Created in secrets.json file",
-            "    Location: /Library/Application Support/Perceptive Automation/Indigo [VERSION]/Preferences/secrets.json",
-            "    Details: https://wiki.indigodomo.com/doku.php?id=indigo_2024.2_documentation:indigo_web_server#local_secrets",
+            f"    Location: {secrets_json}",
+            f"    Details: {docs_url}",
             "    Note: Restart Indigo Web Server after creating/modifying this file",
             "",
             "=" * 80,
@@ -903,13 +1003,17 @@ class Plugin(indigo.PluginBase):
                             "Authorization:Bearer YOUR_LOCAL_SECRET_KEY"
                         ],
                         "env": {
-                            "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+                            "NODE_EXTRA_CA_CERTS": "/path/to/your-indigo-certificate.pem"
                         }
                     }
                 }
             }
             config_lines.append(json.dumps(scenario2_config, indent=2))
-            config_lines.extend(["", "Setup:", "  1. Create a local secret (see documentation link above)", "  2. Replace your-local-hostname-or-ip with your Indigo server IP/hostname", "  3. Replace YOUR_LOCAL_SECRET_KEY with your generated local secret", "  4. NODE_TLS_REJECT_UNAUTHORIZED=0 disables certificate validation (required)", "  5. Replace port 8176 if you are not using the default Indigo Web Server port", ""])
+            # Trust the one certificate rather than switching verification off:
+            # NODE_TLS_REJECT_UNAUTHORIZED=0 turns off certificate checks for
+            # every connection that Node process makes, which is exactly what
+            # HTTPS is there to prevent.
+            config_lines.extend(["", "Setup:", "  1. Create a local secret (see documentation link above)", "  2. Replace YOUR_LOCAL_SECRET_KEY with your generated local secret", "  3. Export the web server's self-signed certificate as a .pem file and point NODE_EXTRA_CA_CERTS at it, so Node trusts that one certificate", "  4. Do NOT set NODE_TLS_REJECT_UNAUTHORIZED=0 — it turns off certificate checks altogether", "  5. Replace port 8176 if you are not using the default Indigo Web Server port", ""])
         config_lines.extend(["", ""])
 
         config_lines.extend([
@@ -1005,8 +1109,9 @@ class Plugin(indigo.PluginBase):
         iterate self.event_triggers (populated by triggerStartProcessing) and
         execute every trigger whose pluginTypeId matches the Events.xml event ID.
 
-        Inside the user's Trigger actions, the payload is accessible as:
-            %%eventData:name%%   %%eventData:data%%   %%eventData:source%%
+        Inside the user's Trigger actions, the payload is accessible as
+        (Indigo's event-data substitution, as Events.xml documents):
+            %%e:"name"%%   %%e:"data"%%   %%e:"source"%%
         Per-trigger filtering is done via Trigger Conditions checking those
         substitutions (Indigo's standard mechanism — no custom code needed).
 
@@ -1060,10 +1165,14 @@ class Plugin(indigo.PluginBase):
             # Store reference to device
             self.mcp_server_device = device
 
-            # Update device states only if changed — avoids Event Log spam and DB churn
+            # Update device states only if changed — avoids Event Log spam and DB churn.
+            # "Running" only when the MCP handler actually started: a device
+            # that said Running over a plugin answering every request with 503
+            # sent people looking everywhere but the startup error.
+            status = "Running" if self.mcp_handler is not None else "Unavailable"
             updates = []
-            if device.states.get("serverStatus") != "Running":
-                updates.append({"key": "serverStatus", "value": "Running"})
+            if device.states.get("serverStatus") != status:
+                updates.append({"key": "serverStatus", "value": status})
             if device.states.get("accessMode") != "IWS":
                 updates.append({"key": "accessMode", "value": "IWS"})
             new_activity = str(indigo.server.getTime())
@@ -1166,13 +1275,16 @@ class Plugin(indigo.PluginBase):
         to the outbound webhooks.
         """
         super().variableUpdated(origVar, newVar)
-        if index_fields_changed("variable", origVar, newVar):
+        renamed_or_moved = index_fields_changed("variable", origVar, newVar)
+        if renamed_or_moved:
             self._mark_index_dirty()
-        if origVar.value != newVar.value:
+        if renamed_or_moved or origVar.value != newVar.value:
             # Tell the tool cache the world moved. Without this, list_variables /
             # get_variable_by_id kept serving the pre-change value for a full TTL
-            # even though we had the change in hand right here. O(1) — a counter
-            # bump, not a store walk — because this fires constantly.
+            # even though we had the change in hand right here — and until
+            # 3.0.2 a rename or a move to another folder was not noted at all.
+            # O(1) — a counter bump, not a store walk — because this fires
+            # constantly.
             self._note_cache_change("variable")
 
         # Outbound webhooks (own try/except inside; gated on the enabled flag)
@@ -1375,14 +1487,33 @@ class Plugin(indigo.PluginBase):
                            and getattr(self.mcp_handler, "_tools", None) is not None
                            else "?")
             extras.append(("Tools:", str(_tool_count)))
+            try:
+                extras.append(("scopes.json:", self._scopes_path()))
+            except Exception:
+                pass
             extras.append(("Timestamps in Log:", "ON" if self.timestamp_enabled else "OFF"))
             log_startup_banner(self.pluginId, self.pluginDisplayName, self.pluginVersion, extras=extras)
         else:
             indigo.server.log(f"{self.pluginDisplayName} v{self.pluginVersion}")
+            try:
+                indigo.server.log(f"scopes.json: {self._scopes_path()}")
+            except Exception:
+                pass
+
+    def _scopes_path(self) -> str:
+        """Where scopes.json lives (Configure and Show Plugin Info name it)."""
+        return os.path.join(indigo.server.getInstallFolderPath(),
+                            "Preferences/Plugins/com.clives.indigoplugin.claudebridge/scopes.json")
 
     def menuToggleTimestamps(self):
         self.timestamp_enabled = not self.timestamp_enabled
         self.pluginPrefs["timestampEnabled"] = self.timestamp_enabled
+        # Saved now: pluginPrefs reach disk only on a clean shutdown, so a crash
+        # or a forced quit used to undo the toggle.
+        try:
+            self.savePluginPrefs()
+        except Exception as exc:
+            self.logger.warning(f"\t⚠️  Could not save the timestamp setting: {exc}")
         if self._ts_filter:
             self._ts_filter.enabled = self.timestamp_enabled
         state = "ON" if self.timestamp_enabled else "OFF"
