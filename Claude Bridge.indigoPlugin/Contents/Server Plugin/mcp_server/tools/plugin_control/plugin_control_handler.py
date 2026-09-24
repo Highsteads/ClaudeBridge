@@ -85,12 +85,24 @@ class PluginControlHandler(BaseToolHandler):
             self.logger.error(error_msg, exc_info=True)
             return {"success": False, "error": error_msg, "plugins": []}
 
-    def restart_plugin(self, plugin_id: str) -> Dict[str, Any]:
+    # Longest restart_plugin will wait for the plugin to come back. The wait
+    # holds the web server's request thread (every dashboard waits with it),
+    # so it is short, and it ends the moment Indigo logs "Started plugin".
+    RESTART_WAIT_MAX = 20
+    RESTART_WAIT_DEFAULT = 5
+    # After "Started plugin", how long to keep reading for the errors a
+    # startup() that fails straight away logs just behind it.
+    RESTART_SETTLE = 0.75
+
+    def restart_plugin(self, plugin_id: str, wait_seconds: Any = None) -> Dict[str, Any]:
         """
-        Restart an Indigo plugin.
+        Restart an Indigo plugin and, unless wait_seconds is 0, wait for it to
+        come back and report what it logged on the way.
 
         Args:
             plugin_id: Plugin bundle identifier
+            wait_seconds: How long to wait for "Started plugin" (default 5,
+                most 20, 0 = do not wait)
 
         Returns:
             Dictionary with restart status
@@ -121,6 +133,19 @@ class PluginControlHandler(BaseToolHandler):
                     "suggestion": "Use list_plugins to see the installed bundle ids.",
                 }
 
+            if wait_seconds is None:
+                wait = float(self.RESTART_WAIT_DEFAULT)
+            else:
+                try:
+                    wait = float(wait_seconds)
+                except (TypeError, ValueError):
+                    return {"success": False,
+                            "error": f"wait_seconds must be a number, got {wait_seconds!r}"}
+                if wait != wait or wait < 0:
+                    return {"success": False,
+                            "error": "wait_seconds must be 0 or more"}
+                wait = min(wait, float(self.RESTART_WAIT_MAX))
+
             # Get plugin from Indigo API
             plugin = indigo.server.getPlugin(plugin_id)
 
@@ -135,17 +160,27 @@ class PluginControlHandler(BaseToolHandler):
             # Restart the plugin (fire-and-forget — plugin.restart() defaults to
             # waitUntilDone=True, which would BLOCK this IWS request thread for the
             # whole stop+start cycle, contradicting the intent. Pass False.)
+            from ...common import restart_watch
+            from ..log_query.log_query_handler import _log_root
+            log_root = _log_root()
+            position = restart_watch.log_position(log_root)
             self.logger.info(f"Restarting plugin: {plugin_id}")
             plugin.restart(waitUntilDone=False)
 
             # Invalidate plugin cache
             self._invalidate_cache()
 
-            return {
+            reply: Dict[str, Any] = {
                 "success": True,
                 "message": f"Plugin '{plugin_id}' restart requested",
                 "plugin_id": plugin_id,
             }
+            if wait <= 0:
+                return reply
+            reply.update(self._watch_restart(
+                log_root, position, getattr(plugin, "pluginDisplayName", "") or plugin_id,
+                wait))
+            return reply
 
         except AttributeError as e:
             error_msg = f"Plugin '{plugin_id}' not found: {e}"
@@ -159,6 +194,44 @@ class PluginControlHandler(BaseToolHandler):
             error_msg = f"Failed to restart plugin '{plugin_id}': {e}"
             self.logger.error(error_msg, exc_info=True)
             return {"success": False, "error": error_msg}
+
+    def _watch_restart(self, log_root: str, position, display_name: str,
+                       wait: float) -> Dict[str, Any]:
+        """Poll the log until the plugin has started (plus a short settle for
+        startup errors) or the wait runs out, and summarise its lines."""
+        from ...common import restart_watch
+        began = time.monotonic()
+        deadline = began + wait
+        settle_until = None
+        while True:
+            summary = restart_watch.summarise(
+                restart_watch.read_since(log_root, position), display_name)
+            now = time.monotonic()
+            if summary["started"] and settle_until is None:
+                settle_until = min(deadline, now + self.RESTART_SETTLE)
+            if (settle_until is not None and now >= settle_until) or now >= deadline:
+                break
+            time.sleep(0.25)
+        elapsed = round(time.monotonic() - began, 1)
+        out: Dict[str, Any] = {
+            "started":         summary["started"],
+            "running_version": summary["version"],
+            "errors":          summary["errors"],
+            "warnings":        summary["warnings"],
+            "waited_seconds":  elapsed,
+            "log":             summary["log"][-40:],
+        }
+        if summary["started"]:
+            out["message"] = (f"{display_name} restarted"
+                              + (f" as {summary['version']}" if summary["version"] else "")
+                              + (f", logging {summary['errors']} error(s)"
+                                 if summary["errors"] else ""))
+        else:
+            out["message"] = (f"{display_name} had not logged 'Started plugin' after "
+                              f"{elapsed}s. It may still be starting — check "
+                              f"get_plugin_status, or query_event_log with "
+                              f"source='{display_name}'.")
+        return out
 
     def execute_device_action(
         self,
@@ -365,12 +438,14 @@ class PluginControlHandler(BaseToolHandler):
             pass
         return str(value)
 
-    def get_plugin_status(self, plugin_id: str) -> Dict[str, Any]:
+    def get_plugin_status(self, plugin_id: str, include_prefs: bool = False) -> Dict[str, Any]:
         """
         Get detailed plugin status.
 
         Args:
             plugin_id: Plugin bundle identifier
+            include_prefs: Also return the plugin's saved settings, with
+                credential values hidden (common/plugin_prefs.py)
 
         Returns:
             Dictionary with plugin status information
@@ -421,7 +496,20 @@ class PluginControlHandler(BaseToolHandler):
             }
             status["name"] = installed.get("name", status["displayName"])
 
-            return {"success": True, "status": status}
+            reply: Dict[str, Any] = {"success": True, "status": status}
+            if include_prefs:
+                from ...common import plugin_prefs
+                saved = plugin_prefs.read(plugin_id)
+                if "error" in saved:
+                    reply["prefs_error"] = saved["error"]
+                else:
+                    reply["prefs"] = saved["prefs"]
+                    if saved["hidden"]:
+                        reply["prefs_hidden"] = saved["hidden"]
+                    reply["prefs_note"] = ("As last saved to disk. Values named like a "
+                                           "credential, or marked secure in PluginConfig.xml, "
+                                           "are hidden.")
+            return reply
 
         except AttributeError as e:
             error_msg = f"Plugin '{plugin_id}' not found: {e}"

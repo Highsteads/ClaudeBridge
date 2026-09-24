@@ -58,6 +58,12 @@ _NODE_CHECK_BUDGET_SECONDS  = 20   # the web server waits too; was 60 until 3.0.
 # into a full table scan while holding a read lock the logger's writes queue on.
 _HISTORY_MAX_HOURS = 24 * 31
 
+# Most rows a device_history summary reads, newest first. A summary reads
+# every row in its window on the plugin's one dispatch thread, and a chatty
+# device writes over a million rows a month; past the cap it reports the
+# newest rows only and says so.
+_SUMMARY_ROW_CAP = 250_000
+
 
 # ── Path helpers ────────────────────────────────────────────────────────────
 
@@ -908,9 +914,66 @@ class PluginDevToolsHandler(BaseToolHandler):
         except sqlite3.OperationalError:
             return 0
 
+    def _history_summary(self, cur, table: str, did: int, floor_id: int,
+                         cols: List[str], hours: int, hours_capped: bool) -> Dict[str, Any]:
+        """Counts instead of rows, read over the PK range only.
+
+        One pass for the per-column aggregates and one for the per-day counts,
+        both over the same newest-first window capped at _SUMMARY_ROW_CAP.
+        """
+        window = (f"(SELECT * FROM {table} WHERE id >= ? "
+                  f"ORDER BY id DESC LIMIT {_SUMMARY_ROW_CAP})")
+        states = [c for c in cols if c != "ts"]
+        parts = ["COUNT(*)", "MIN(datetime(ts, 'localtime'))",
+                 "MAX(datetime(ts, 'localtime'))"]
+        for c in states:
+            q = _quote_ident(c)
+            parts += [f"COUNT({q})", f"MIN({q})", f"MAX({q})"]
+        cur.execute(f"SELECT {', '.join(parts)} FROM {window}", (floor_id,))
+        agg = cur.fetchone() or ()
+        total = agg[0] if agg else 0
+        per_column = {}
+        for i, c in enumerate(states):
+            written, low, high = agg[3 + 3 * i: 6 + 3 * i]
+            if written:
+                per_column[c] = {"rows_with_value": written, "min": low, "max": high}
+        cur.execute(f"SELECT date(ts, 'localtime') AS day, COUNT(*) FROM {window} "
+                    f"GROUP BY day ORDER BY day", (floor_id,))
+        per_day = {day: n for day, n in cur.fetchall() if day}
+        busiest = sorted(per_column.items(), key=lambda kv: -kv[1]["rows_with_value"])
+        result = {
+            "success":       True,
+            "summary":       True,
+            "table":         table,
+            "device_id":     did,
+            "hours":         hours,
+            "hours_capped":  hours_capped,
+            "row_count":     total,
+            "truncated":     total >= _SUMMARY_ROW_CAP,
+            "ts_timezone":   "local",
+            "ts_oldest":     agg[1] if agg else None,
+            "ts_newest":     agg[2] if agg else None,
+            "rows_per_day":  per_day,
+            "columns":       dict(busiest),
+            "never_written": [c for c in states if c not in per_column],
+            "note":          ("Each SQL Logger row is one state update, so rows_with_value "
+                              "counts how often a state was written in the window. "
+                              "Columns are ordered busiest first."),
+        }
+        if result["truncated"]:
+            result["truncated_note"] = (
+                f"Summarised the newest {_SUMMARY_ROW_CAP} rows only, covering "
+                f"{result['ts_oldest']} to {result['ts_newest']}. Narrow hours for an "
+                f"exact count of the whole window.")
+        if hours_capped:
+            result["hours_note"] = (f"hours was capped to {_HISTORY_MAX_HOURS} "
+                                    f"({_HISTORY_MAX_HOURS // 24} days).")
+        return result
+
     def device_history(self, device_id, hours: int = 24,
                        limit: int = 500,
-                       columns: Optional[List[str]] = None) -> Dict[str, Any]:
+                       columns: Optional[List[str]] = None,
+                       summary: bool = False) -> Dict[str, Any]:
         """
         Read recent history rows for a single device from the SQL Logger
         sqlite database. Returns timestamp + non-null state columns.
@@ -926,6 +989,9 @@ class PluginDevToolsHandler(BaseToolHandler):
             limit:     max rows to return (default 500, capped at 5000)
             columns:   optional list of column names — when omitted, returns
                        all non-null columns from the most recent rows.
+            summary:   instead of rows, count them: rows per day, and per
+                       column how many rows carry a value plus its min and
+                       max. limit does not apply; _SUMMARY_ROW_CAP does.
         """
         self.log_incoming_request("device_history",
                                   {"device_id": device_id, "hours": hours, "limit": limit})
@@ -1006,6 +1072,12 @@ class PluginDevToolsHandler(BaseToolHandler):
                 # boundary rowid for the cutoff (~30 instant point-probes),
                 # then range on `id`, which uses the PK index.
                 floor_id = self._rowid_floor_for_ts(cur, table, cutoff)
+
+                if summary:
+                    return self._history_summary(
+                        cur, table, did, floor_id,
+                        cols if columns else [c for c in all_cols if c != "id"],
+                        hours, hours_capped)
 
                 # SQL Logger stores ts in UTC. Convert it to LOCAL time on the
                 # way out so returned timestamps match device.lastChanged /

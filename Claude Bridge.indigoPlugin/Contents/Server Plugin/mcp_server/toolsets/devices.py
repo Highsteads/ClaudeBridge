@@ -13,8 +13,8 @@ from ..common import device_capabilities
 from ..common.indigo_device_types import DeviceTypeResolver, IndigoDeviceType, IndigoEntityType
 from ..registry import tool
 from ..tools.device_control.color_names import parse_color
-from ._schema import (DELAY, DEVICE, DURATION, bad_choice, boolean, enum, id_or_name, number,
-                      refuse, string, unused_args)
+from ._schema import (DELAY, DEVICE, DURATION, bad_choice, boolean, coerce_bool, enum,
+                      id_or_name, number, refuse, string, unused_args)
 
 _DEVICE_TYPES_HELP = ("Valid types: dimmer, relay, sensor, multiio, speedcontrol, sprinkler, "
                       "thermostat, device. Aliases supported: light→dimmer, switch→relay, "
@@ -38,6 +38,74 @@ def enrich_device_capabilities(device):
     if caps:
         device["capabilities"] = caps
     return device
+
+
+def device_group(device_id) -> Optional[List[Dict[str, Any]]]:
+    """Every device in this one's Indigo group, itself included (a
+    multi-endpoint Z-Wave node, a camera's detection sensors), oldest — the
+    group's root — first. None when the device stands alone or the group
+    cannot be read."""
+    try:
+        import indigo
+        ids = list(indigo.device.getGroupList(int(device_id)))
+    except Exception:
+        return None
+    if len(ids) < 2:
+        return None
+    members = []
+    for member in ids:
+        try:
+            name = indigo.devices[member].name
+        except Exception:
+            name = None
+        members.append({"id": member, "name": name})
+    return members
+
+
+def compact_device(device: Any) -> Any:
+    """One device without the repeats, in place.
+
+    dict(dev) carries the owning plugin's props three times over (pluginProps,
+    ownerProps and that plugin's entry in globalProps), the supports* flags
+    both at the top level and in `capabilities`, and a dozen properties that
+    are simply null on most devices. What goes:
+      - ownerProps, when it matches pluginProps (kept when it differs — it can
+        be stale, and the difference is then worth seeing);
+      - globalProps; other plugins' props, if any, stay as otherPluginProps;
+      - empty sharedProps, and top-level flags repeated in capabilities;
+      - properties whose value is null.
+    detail="full" on the tools returns the device untouched.
+    """
+    if not isinstance(device, dict):
+        return device
+    owner = device.get("pluginId") or ""
+    props = device.get("pluginProps")
+    if device.get("ownerProps") == props:
+        device.pop("ownerProps", None)
+    global_props = device.pop("globalProps", None)
+    if isinstance(global_props, dict):
+        others = {pid: scoped for pid, scoped in global_props.items()
+                  if pid != owner and scoped}
+        if others:
+            device["otherPluginProps"] = others
+    if not device.get("sharedProps"):
+        device.pop("sharedProps", None)
+    for flag, value in (device.get("capabilities") or {}).items():
+        if device.get(flag) == value:
+            device.pop(flag, None)
+    for key in [k for k, v in device.items() if v is None]:
+        device.pop(key)
+    return device
+
+
+def present_device(device: Any, detail: Optional[str]) -> Any:
+    """What get_device_by_id / get_device_by_name return for one device."""
+    device = enrich_device_capabilities(device)
+    if isinstance(device, dict) and "id" in device:
+        group = device_group(device["id"])
+        if group:
+            device["group"] = group
+    return device if detail == "full" else compact_device(device)
 
 
 # The lowest score that means every word of the name was found in the device's
@@ -203,12 +271,23 @@ def search_entities(ctx, query, device_types=None, entity_types=None,
 
 
 @tool("list_devices", scope="read", cacheable=True, reads={"device"},
-      description=("List devices. With no arguments, every device. device_type narrows to one "
-                   "type (aliases accepted) and state_filter to devices whose states match, "
-                   "e.g. {\"onState\": true} or {\"heatIsOn\": true}; either filter returns "
-                   "count, total_matched and truncated, and limit caps the list (default 200)."),
+      description=("List devices. With no arguments, every device, which is large on a big "
+                   "estate — prefer a filter or `fields`. device_type narrows to one type "
+                   "(aliases accepted), plugin_id to one plugin's devices, folder to one device "
+                   "folder (id or name), and state_filter to devices whose states match, e.g. "
+                   "{\"onState\": true} or {\"heatIsOn\": true}. fields returns just id, name "
+                   "and the properties or states named, e.g. [\"address\", \"batteryLevel\"]. "
+                   "Any filter returns count, total_matched and truncated, and limit caps the "
+                   "list (default 200)."),
       properties={
           "device_type": string("Optional device type. " + _DEVICE_TYPES_HELP),
+          "plugin_id": string("Optional: only devices owned by this plugin bundle id"),
+          "folder": id_or_name("Optional: only devices in this device folder (id or name; "
+                               "0 is the top level)"),
+          "fields": {"type": "array", "items": {"type": "string"},
+                     "description": ("Optional: return id, name and only these. Each is a "
+                                     "device property (address, pluginId, folderId, enabled, "
+                                     "lastChanged...) or a state name (case-sensitive).")},
           "state_filter": {"type": "object",
                            "description": ("Optional state conditions using Indigo state names, "
                                            "e.g. {\"onState\": true}, "
@@ -219,7 +298,11 @@ def search_entities(ctx, query, device_types=None, entity_types=None,
                          "device_type only: 'slim' (default) short rows, 'full' every "
                          "property"),
       })
-def list_devices(ctx, device_type=None, state_filter=None, limit=None, detail=None):
+def list_devices(ctx, device_type=None, state_filter=None, limit=None, detail=None,
+                 plugin_id=None, folder=None, fields=None):
+    if plugin_id is not None or folder is not None or fields is not None:
+        return _list_devices_filtered(ctx, device_type, state_filter, limit, detail,
+                                      plugin_id, folder, fields)
     if detail is not None and not (device_type and not state_filter):
         return refuse("list_devices: detail applies only with device_type alone")
     if not device_type and not state_filter:
@@ -253,32 +336,90 @@ def list_devices(ctx, device_type=None, state_filter=None, limit=None, detail=No
     return result
 
 
+def _list_devices_filtered(ctx, device_type, state_filter, limit, detail,
+                           plugin_id, folder, fields):
+    if detail is not None:
+        return refuse("list_devices: detail does not combine with plugin_id, folder or "
+                      "fields — fields chooses what each row carries")
+    if isinstance(fields, str):
+        fields = [fields]
+    if fields is not None and (not isinstance(fields, list)
+                               or not all(isinstance(f, str) and f.strip() for f in fields)):
+        return refuse("fields must be a list of property or state names")
+    if fields is not None and not fields:
+        return refuse("fields is empty — leave it out for the standard rows")
+    if plugin_id is not None and not str(plugin_id).strip():
+        return refuse("plugin_id is empty")
+    types = None
+    if device_type:
+        types, refusal = _resolve_types([device_type])
+        if refusal:
+            return refusal
+    folder_id = None
+    if folder is not None:
+        folder_id, problem = ctx.list_handlers.resolve_device_folder(folder)
+        if problem:
+            return refuse(problem)
+    try:
+        cap = max(1, int(200 if limit is None else limit))
+    except (TypeError, ValueError):
+        return refuse(f"limit must be a whole number, got {limit!r}")
+    return ctx.list_handlers.list_devices_filtered(
+        device_types=types, state_filter=state_filter,
+        plugin_id=None if plugin_id is None else str(plugin_id).strip(),
+        folder_id=folder_id, fields=[f.strip() for f in fields] if fields else None,
+        limit=cap)
+
+
+_ONE_DEVICE_DETAIL = enum(
+    ["compact", "full"],
+    "'compact' (default) gives the owning plugin's props once as pluginProps, other "
+    "plugins' props as otherPluginProps, and leaves out null properties and repeated "
+    "flags. 'full' is the raw device with every props block.")
+
+
+def _check_one_device_detail(detail):
+    if detail is not None and detail not in ("compact", "full"):
+        return bad_choice("detail", detail, ("compact", "full"))
+    return None
+
+
 @tool("get_device_by_id", scope="read", cacheable=True, reads={"device"},
-      description="Get a specific device by ID",
-      properties={"device_id": id_or_name("The device ID")},
+      description=("Get a specific device by ID: its properties, states, props and "
+                   "capabilities, plus `group` (the devices Indigo groups it with, root "
+                   "first) when it is part of one."),
+      properties={"device_id": id_or_name("The device ID"),
+                  "detail": _ONE_DEVICE_DETAIL},
       required=["device_id"])
-def get_device_by_id(ctx, device_id):
+def get_device_by_id(ctx, device_id, detail=None):
+    refusal = _check_one_device_detail(detail)
+    if refusal:
+        return refusal
     device_id = int(device_id)
     device = ctx.data_provider.get_device(device_id)
     if device is None:
         return {"error": f"Device {device_id} not found"}
-    return enrich_device_capabilities(device)
+    return present_device(device, detail)
 
 
 @tool("get_device_by_name", scope="read",
       description=("Find a device by name and return its full state in one round trip. Tries "
                    "exact match, then case-insensitive, then partial match. Returns all device "
-                   "states, properties, and current values."),
-      properties={"name": string("Device name (exact, partial, or case-insensitive)")},
+                   "states, properties, and current values, like get_device_by_id."),
+      properties={"name": string("Device name (exact, partial, or case-insensitive)"),
+                  "detail": _ONE_DEVICE_DETAIL},
       required=["name"])
-def get_device_by_name(ctx, name):
+def get_device_by_name(ctx, name, detail=None):
+    refusal = _check_one_device_detail(detail)
+    if refusal:
+        return refusal
     result = ctx.data_provider.get_device_by_name(name)
     if result is None:
         return refuse(f"No device found matching '{name}'")
     if isinstance(result, dict) and "error" in result:
         # An ambiguous name is a refusal with candidates, not a device.
         return {"success": False, **result}
-    return {"success": True, "device": enrich_device_capabilities(result)}
+    return {"success": True, "device": present_device(result, detail)}
 
 
 @tool("device_history", scope="read",
@@ -296,11 +437,16 @@ def get_device_by_name(ctx, name):
           "limit": number("Max rows (default 500, max 5000)"),
           "columns": {"type": "array", "items": {"type": "string"},
                       "description": "Optional list of column names to return"},
+          "summary": boolean("Instead of rows: rows per day, and per column how many rows "
+                             "carry a value (how often that state was written) with its "
+                             "min and max, busiest first. limit does not apply; the newest "
+                             "250,000 rows at most are counted (default false)"),
       },
       required=["device_id"])
-def device_history(ctx, device_id, hours=24, limit=500, columns=None):
+def device_history(ctx, device_id, hours=24, limit=500, columns=None, summary=False):
     return ctx.plugin_dev_tools_handler.device_history(
-        device_id, hours=hours, limit=limit, columns=columns)
+        device_id, hours=hours, limit=limit, columns=columns,
+        summary=coerce_bool(summary))
 
 
 # ── Control ──────────────────────────────────────────────────────────────────

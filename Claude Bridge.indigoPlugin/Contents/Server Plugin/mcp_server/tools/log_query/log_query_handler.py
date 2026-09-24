@@ -99,6 +99,45 @@ def _parse_time_param(value: str, today: date) -> Optional[datetime]:
     return None
 
 
+# How far back a filtered query looks when it is given no after/before.
+_FILTER_DEFAULT_HOURS = 24
+
+_LEVEL_WORDS = {
+    "errors":   re.compile(r"\berror\b", re.I),
+    "warnings": re.compile(r"\b(error|warning)\b", re.I),
+}
+
+
+def _entry_filter(source, contains, level):
+    """Build the whole-entry predicate for the source/contains/level filters.
+
+    Returns (predicate or None, problem or None). None for every filter means
+    no predicate at all, so an unfiltered query keeps its old path.
+    """
+    for label, value in (("source", source), ("contains", contains), ("level", level)):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            return None, f"{label} must be non-empty text"
+    if level is not None and level.strip().lower() not in _LEVEL_WORDS:
+        return None, f"level must be one of {sorted(_LEVEL_WORDS)}, got {level!r}"
+    if source is None and contains is None and level is None:
+        return None, None
+    want_source = source.strip().lower() if source else None
+    want_text   = contains.strip().lower() if contains else None
+    level_re    = _LEVEL_WORDS[level.strip().lower()] if level else None
+
+    def _match(entry: Dict[str, Any]) -> bool:
+        kind = str(entry.get("TypeStr", ""))
+        if want_source and want_source not in kind.lower():
+            return False
+        if level_re and not level_re.search(kind):
+            return False
+        if want_text and want_text not in str(entry.get("Message", "")).lower():
+            return False
+        return True
+
+    return _match, None
+
+
 class LogQueryHandler(BaseToolHandler):
     """Handler for querying Indigo event log entries."""
 
@@ -119,6 +158,7 @@ class LogQueryHandler(BaseToolHandler):
         line_count: Optional[int],
         limit:      Any = "default",
         keep:       Optional[Callable[[Dict[str, Any]], bool]] = None,
+        match:      Optional[Callable[[Dict[str, Any]], bool]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Read log file(s) from disk and return entries in the time range.
 
@@ -136,6 +176,11 @@ class LogQueryHandler(BaseToolHandler):
         keep, when given, decides per entry (on its first line) whether it is
         kept at all, so a caller that needs only some lines does not hold a
         fortnight of log in memory to find them.
+
+        match, when given, decides on the WHOLE entry, continuation lines
+        included, and runs before line_count trims — so a traceback whose
+        interesting line is the last one is still found, and the newest N are
+        the newest N that match rather than N lines that then get filtered.
 
         Returns (entries, meta). ``meta`` reports the day window actually
         scanned and whether it was clamped, so a caller can tell a genuine
@@ -227,6 +272,8 @@ class LogQueryHandler(BaseToolHandler):
                     self.logger.warning(f"Could not read log file {log_file}: {exc}")
             current += timedelta(days=1)
 
+        if match is not None:
+            results = [e for e in results if match(e)]
         meta["matched_before_limit"] = len(results)
         if limit == "default":
             limit = _MAX_ENTRIES
@@ -251,6 +298,9 @@ class LogQueryHandler(BaseToolHandler):
         show_timestamp: bool           = True,
         after:          Optional[str]  = None,
         before:         Optional[str]  = None,
+        source:         Optional[str]  = None,
+        contains:       Optional[str]  = None,
+        level:          Optional[str]  = None,
     ) -> Dict[str, Any]:
         """Query Indigo event log entries.
 
@@ -266,6 +316,16 @@ class LogQueryHandler(BaseToolHandler):
           - "YYYY-MM-DD HH:MM:SS"
 
         Example: after="07:45:00", before="07:52:00"
+
+        Filters (any mix, all must hold; each ignores case):
+          - source   — part of the entry's source, e.g. "Sigenergy" matches both
+                       "Sigenergy Manager" and "Sigenergy Manager Error"
+          - contains — text anywhere in the message, continuation lines included
+          - level    — "errors" (sources naming Error) or "warnings" (Error or
+                       Warning)
+        A filter reads the log files, so with no after/before it searches the
+        last 24 hours rather than the in-memory tail, which would filter only
+        the newest line_count lines and find almost nothing.
         """
         params = {
             "line_count":     line_count,
@@ -273,6 +333,9 @@ class LogQueryHandler(BaseToolHandler):
             "after":          after,
             "before":         before,
         }
+        for key, value in (("source", source), ("contains", contains), ("level", level)):
+            if value is not None:
+                params[key] = value
         self.log_incoming_request("query", params)
 
         try:
@@ -293,6 +356,17 @@ class LogQueryHandler(BaseToolHandler):
             ):
                 self.log_tool_outcome("query", False, "Invalid line_count parameter")
                 return {"error": "line_count must be a positive integer", "success": False}
+
+            match, problem = _entry_filter(source, contains, level)
+            if problem:
+                self.log_tool_outcome("query", False, problem)
+                return {"error": problem, "success": False}
+            default_window = None
+            if match is not None and after is None and before is None:
+                after = (datetime.now() - timedelta(hours=_FILTER_DEFAULT_HOURS)
+                         ).strftime("%Y-%m-%dT%H:%M:%S")
+                default_window = (f"last {_FILTER_DEFAULT_HOURS} hours (a filter with no "
+                                  f"after/before searches the log files from {after})")
 
             # ── Time-range path: read from disk ───────────────────────────────
             if after is not None or before is not None:
@@ -335,7 +409,13 @@ class LogQueryHandler(BaseToolHandler):
                         "success": False,
                     }
 
-                entries, range_meta = self._read_log_range(after_dt, before_dt, line_count)
+                entries, range_meta = self._read_log_range(after_dt, before_dt, line_count,
+                                                           match=match)
+                if default_window:
+                    range_meta["window"] = default_window
+                if not show_timestamp:
+                    entries = [{k: v for k, v in e.items() if k != "TimeStamp"}
+                               for e in entries]
                 result = {
                     "success":    True,
                     "count":      len(entries),

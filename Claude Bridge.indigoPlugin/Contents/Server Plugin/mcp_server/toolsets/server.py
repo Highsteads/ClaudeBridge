@@ -129,7 +129,9 @@ def system_health(ctx):
           "searches the 14 days leading up to it. The 'range' block in the reply reports the "
           "window actually scanned and sets span_clamped when the request was wider — so an "
           "empty result is never ambiguous. An inverted range (after >= before) is rejected, "
-          "not answered with an empty list."),
+          "not answered with an empty list. source, contains and level filter the entries "
+          "(ignoring case, all must hold) before line_count trims, so you get the newest N "
+          "that match; with no after/before a filter searches the last 24 hours."),
       properties={
           "line_count": number("Max entries to return (default: 20)"),
           "show_timestamp": boolean("Include timestamps in entries (default: true)"),
@@ -137,10 +139,19 @@ def system_health(ctx):
                           "or 'YYYY-MM-DDTHH:MM:SS' for a specific date. Example: '07:45:00'"),
           "before": string("Return only entries before this time. Format: 'HH:MM:SS' for today, "
                            "or 'YYYY-MM-DDTHH:MM:SS'. Example: '07:52:00'"),
+          "source": string("Optional: part of the entry's source, e.g. 'Sigenergy' matches "
+                           "'Sigenergy Manager' and 'Sigenergy Manager Error'"),
+          "contains": string("Optional: text that must appear in the message (continuation "
+                             "lines such as tracebacks included)"),
+          "level": enum(["errors", "warnings"],
+                        "Optional: 'errors' keeps sources naming Error; 'warnings' keeps "
+                        "Error and Warning"),
       })
-def query_event_log(ctx, line_count=20, show_timestamp=True, after=None, before=None):
+def query_event_log(ctx, line_count=20, show_timestamp=True, after=None, before=None,
+                    source=None, contains=None, level=None):
     return ctx.log_query_handler.query(line_count=line_count, show_timestamp=show_timestamp,
-                                       after=after, before=before)
+                                       after=after, before=before, source=source,
+                                       contains=contains, level=level)
 
 
 @tool("control_pages", scope="read",

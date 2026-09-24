@@ -52,7 +52,7 @@ def plugins_dir(tmp_path, monkeypatch):
         '</ConfigUI></Device></Devices>')
     monkeypatch.setattr(dp, "PLUGINS_DIR_OVERRIDE", str(tmp_path))
     monkeypatch.setattr(dp, "_PLUGIN_SCAN_AT", None)
-    dp._DEVICES_XML_BY_PLUGIN.clear()
+    dp._CONTENTS_BY_PLUGIN.clear()
     dp._SECURE_BY_PATH.clear()
     return tmp_path
 

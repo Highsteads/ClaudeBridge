@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 3.1.0
+**Version:** 3.2.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,18 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 3.2.0 (2026-09-24)
+Six tools learn the jobs Claude kept writing raw Python for. In past sessions about 60% of all calls went to `execute_indigo_python`, mostly for questions a tool should answer.
+
+- **One plugin's devices, or one folder's, with only the fields you want.** `list_devices` takes `plugin_id` and `folder` (by id or name), and `fields` returns just the properties or states you name, for example `["address", "batteryLevel"]`. A field no device has is reported, so a misspelt state name is plain to see.
+- **Search the event log.** `query_event_log` takes `source`, `contains` and `level` ("errors" or "warnings"). A filter reads the log files and returns the newest entries that match, not the newest lines. With no time range it searches the last 24 hours, and `contains` looks inside tracebacks too. `show_timestamp=false` now works there as well.
+- **Restarts report back.** `restart_plugin` waits for the plugin to come back (5 seconds by default, `wait_seconds` up to 20, or 0 not to wait) and says whether it started, which version is now running, and what it logged on the way, errors counted. It stops waiting the moment the plugin is up, because the wait holds up Indigo's web server.
+- **A shorter device reply.** `get_device_by_id` and `get_device_by_name` gave the owning plugin's settings three times over, plus a dozen empty properties. They now give them once, list any other plugin's settings separately, and name the device's group when it has one. `detail="full"` returns everything as before.
+- **Read a plugin's settings.** `get_plugin_status` with `include_prefs=true` returns the plugin's saved Configure settings, with passwords, keys and tokens hidden, and any field the plugin marks secure.
+- **History at a glance.** `device_history` with `summary=true` counts rows per day and, for each state, how often it was written and its lowest and highest value, busiest first. That shows straight away which state is filling the SQL Logger.
+
+45 new tests, 1,433 in all. Every new check was broken on purpose to prove a test catches it.
+
 ### 3.1.0 (2026-09-24)
 A second full review of the plugin, this time of the new 3.0 code, and every problem it found is fixed.
 
@@ -93,18 +105,6 @@ About 230 new tests, 1,388 in all. Every fix was broken on purpose to prove a te
 Sunrise and sunset now come from the same day.
 
 `server_info` asked Indigo for sunrise without saying which day, and Indigo then answers with the next one, so any time after dawn "today" showed tomorrow's sunrise beside today's sunset. It now always names the day, today unless you give another.
-
-### 3.0.0 (2026-09-24)
-A spring clean: 69 tools where there were 169, nothing to install, and a long piece of Python no longer freezes the web server.
-
-- **Far fewer tools, nothing you could do has gone.** Most of the old list was families of near-identical tools, one per verb: seven for sprinklers, eight for thermostats, four for enabling and disabling. Each family is now one tool that takes an `action` or `kind`. The *Upgrading to 3.0* page of the documentation lists every old name against its new one, for anything you have written down that names a tool.
-- **Long Python runs go into the background.** A 10-second `execute_indigo_python` was measured holding up a dashboard request for 9.9 seconds, because Indigo's web server waits on it. A run that takes longer than `wait_seconds` (5 by default) now carries on by itself and hands back a `job_id` at once; ask again with the `job_id` to collect the answer.
-- **No API key, no extra packages.** The AI summaries in `analyze_historical_data` needed InfluxDB, an Anthropic key and four Python packages that made up 35 MB of a 39 MB plugin. That tool is gone and so are they; `device_history` reads the SQL Logger instead. Settings those features left behind, a stored API key included, are cleared the first time 3.0 starts.
-- **Search shows how things are now.** It still finds matches in its own index, but the state of each device and the value of each variable in the answer come straight from Indigo, and the index is brought up to date the moment you add, delete or rename something.
-- **Also gone:** the four `remember`/`recall` tools (Claude Code keeps its own memory) and the event queue, which no MCP client could read between messages. Outbound webhooks are unchanged.
-- **Behind the scenes:** each tool is now written in one place, where it used to take changes in up to nine, and the plugin sets Claude Code up itself, so `install.py` is gone.
-
-1,150 tests. Every new piece of logic was broken on purpose and a test caught it every time.
 
 ## Vibe coding for Indigo
 

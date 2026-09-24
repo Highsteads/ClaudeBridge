@@ -169,7 +169,8 @@ _PROP_BLOCKS = ("pluginProps", "ownerProps", "sharedProps")
 
 _SECURE_LOCK = threading.Lock()
 _SECURE_BY_PATH: Dict[str, Tuple[float, FrozenSet[str]]] = {}
-_DEVICES_XML_BY_PLUGIN: Dict[str, str] = {}
+# Bundle id -> the bundle's Contents folder, for every installed plugin.
+_CONTENTS_BY_PLUGIN: Dict[str, str] = {}
 # None = never scanned. Not 0.0: time.monotonic() counts from boot, so on a
 # Mac up for less than _PLUGIN_RESCAN_SECONDS a 0.0 made the first scan look
 # recent and skipped it, leaving secure="true" fields unmasked for the first
@@ -196,11 +197,11 @@ def _plugins_dir() -> Optional[str]:
     return os.path.join(base, "Plugins") if isinstance(base, str) and base else None
 
 
-def _devices_xml_for(plugin_id: str) -> Optional[str]:
-    """Path of the owning plugin's Devices.xml, found by bundle id. The map is
+def _contents_for(plugin_id: str) -> Optional[str]:
+    """The Contents folder of the plugin with this bundle id. The map is
     rebuilt at most every _PLUGIN_RESCAN_SECONDS, when an id is missing."""
     global _PLUGIN_SCAN_AT
-    path = _DEVICES_XML_BY_PLUGIN.get(plugin_id)
+    path = _CONTENTS_BY_PLUGIN.get(plugin_id)
     if path is not None or (_PLUGIN_SCAN_AT is not None
                              and time.monotonic() - _PLUGIN_SCAN_AT < _PLUGIN_RESCAN_SECONDS):
         return path
@@ -218,24 +219,26 @@ def _devices_xml_for(plugin_id: str) -> Optional[str]:
                 bundle_id = plistlib.load(fh).get("CFBundleIdentifier")
         except Exception:
             continue
-        xml_path = os.path.join(contents, "Server Plugin", "Devices.xml")
-        if bundle_id and os.path.isfile(xml_path):
-            found[str(bundle_id)] = xml_path
-    _DEVICES_XML_BY_PLUGIN.clear()
-    _DEVICES_XML_BY_PLUGIN.update(found)
+        if bundle_id:
+            found[str(bundle_id)] = contents
+    _CONTENTS_BY_PLUGIN.clear()
+    _CONTENTS_BY_PLUGIN.update(found)
     return found.get(plugin_id)
 
 
-def _secure_fields(plugin_id: str) -> FrozenSet[str]:
-    """Field ids the plugin's Devices.xml marks secure="true", cached by the
-    file's path and mtime. Any failure gives an empty set: name-based masking
-    still applies, so a broken lookup never un-masks anything."""
+def _secure_fields(plugin_id: str, xml_name: str = "Devices.xml") -> FrozenSet[str]:
+    """Field ids the plugin's Devices.xml (or PluginConfig.xml, for its
+    settings) marks secure="true", cached by the file's path and mtime. Any
+    failure gives an empty set: name-based masking still applies, so a broken
+    lookup never un-masks anything."""
     if not plugin_id:
         return frozenset()
     try:
         with _SECURE_LOCK:
-            path = _devices_xml_for(plugin_id)
-            if not path:
+            contents = _contents_for(plugin_id)
+            path = (os.path.join(contents, "Server Plugin", xml_name)
+                    if contents else None)
+            if not path or not os.path.isfile(path):
                 return frozenset()
             mtime = os.stat(path).st_mtime
             cached = _SECURE_BY_PATH.get(path)
@@ -259,14 +262,15 @@ def _masked(value: Any) -> bool:
     return isinstance(value, (int, float))
 
 
-def redact_props(props: Any, plugin_id: str = "") -> Any:
+def redact_props(props: Any, plugin_id: str = "", xml_name: str = "Devices.xml") -> Any:
     """A copy of one plugin's props with credential values replaced by MASK.
 
     A value is masked when its key reads as a credential name, or when the
-    owning plugin's Devices.xml declares that field secure."""
+    owning plugin's Devices.xml (PluginConfig.xml for plugin settings)
+    declares that field secure."""
     if not isinstance(props, dict):
         return props
-    secure = _secure_fields(plugin_id)
+    secure = _secure_fields(plugin_id, xml_name)
     return {k: (MASK if _masked(v) and (_is_credential_key(k) or str(k) in secure) else v)
             for k, v in props.items()}
 

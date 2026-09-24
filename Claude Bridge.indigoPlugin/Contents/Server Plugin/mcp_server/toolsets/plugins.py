@@ -10,7 +10,7 @@
 from typing import Any, Dict
 
 from ..registry import tool
-from ._schema import boolean, id_or_name, refuse, string
+from ._schema import boolean, coerce_bool, id_or_name, number, refuse, string
 
 _PLUGIN_NAME = string("Plugin display name or .indigoPlugin folder name")
 
@@ -27,12 +27,18 @@ def list_plugins(ctx, include_disabled=False):
       description=("One installed plugin by bundle id: enabled, running (enabled only says it "
                    "SHOULD run — a plugin that died in startup() is still enabled; running "
                    "answers 'did the restart work'), display name, version and bundle path. An "
-                   "id that is not installed is an error, not a disabled plugin. Never cached."),
+                   "id that is not installed is an error, not a disabled plugin. "
+                   "include_prefs=true adds the plugin's saved settings (its Configure "
+                   "dialog values, as last saved to disk) with passwords, keys and tokens "
+                   "hidden. Never cached."),
       properties={"plugin_id": string("Plugin bundle identifier (e.g. "
-                                      "'com.clives.indigoplugin.claudebridge')")},
+                                      "'com.clives.indigoplugin.claudebridge')"),
+                  "include_prefs": boolean("Also return the plugin's saved settings, "
+                                           "credentials hidden (default false)")},
       required=["plugin_id"])
-def get_plugin_status(ctx, plugin_id):
-    return ctx.plugin_control_handler.get_plugin_status(plugin_id)
+def get_plugin_status(ctx, plugin_id, include_prefs=False):
+    return ctx.plugin_control_handler.get_plugin_status(
+        plugin_id, include_prefs=coerce_bool(include_prefs))
 
 
 @tool("check_plugin_updates", scope="read",
@@ -107,12 +113,20 @@ def plugin_refresh_deps(ctx, plugin_name, restart=False):
 
 
 @tool("restart_plugin", scope="admin", invalidates={"plugin"},
-      description=("Restart an Indigo plugin. Refuses Claude Bridge itself — that kills the "
-                   "session asking; restart it from the Indigo Plugins menu."),
-      properties={"plugin_id": string("Plugin bundle identifier")},
+      description=("Restart an Indigo plugin, then wait (default 5 s, at most 20) for it to "
+                   "log 'Started plugin' and report started, running_version, error and "
+                   "warning counts and the lines it logged while restarting — no separate "
+                   "status check or log search needed. The wait holds Indigo's web server, so "
+                   "it stops as soon as the plugin is up; wait_seconds=0 returns at once. "
+                   "Errors a plugin logs later than a second after starting are not "
+                   "included. Refuses Claude Bridge itself — that kills the session asking; "
+                   "restart it from the Indigo Plugins menu."),
+      properties={"plugin_id": string("Plugin bundle identifier"),
+                  "wait_seconds": number("Seconds to wait for the plugin to start "
+                                         "(default 5, max 20, 0 = do not wait)")},
       required=["plugin_id"])
-def restart_plugin(ctx, plugin_id):
-    return ctx.plugin_control_handler.restart_plugin(plugin_id)
+def restart_plugin(ctx, plugin_id, wait_seconds=None):
+    return ctx.plugin_control_handler.restart_plugin(plugin_id, wait_seconds=wait_seconds)
 
 
 @tool("execute_device_action", scope="admin", invalidates={"device"},

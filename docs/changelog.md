@@ -8,6 +8,18 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 3.2.0 (2026-09-24)
+Six tools learn the jobs Claude kept writing raw Python for. In past sessions about 60% of all calls went to `execute_indigo_python`, mostly for questions a tool should answer.
+
+- **One plugin's devices, or one folder's, with only the fields you want.** `list_devices` takes `plugin_id` and `folder` (by id or name), and `fields` returns just the properties or states you name, for example `["address", "batteryLevel"]`. A field no device has is reported, so a misspelt state name is plain to see.
+- **Search the event log.** `query_event_log` takes `source`, `contains` and `level` ("errors" or "warnings"). A filter reads the log files and returns the newest entries that match, not the newest lines. With no time range it searches the last 24 hours, and `contains` looks inside tracebacks too. `show_timestamp=false` now works there as well.
+- **Restarts report back.** `restart_plugin` waits for the plugin to come back (5 seconds by default, `wait_seconds` up to 20, or 0 not to wait) and says whether it started, which version is now running, and what it logged on the way, errors counted. It stops waiting the moment the plugin is up, because the wait holds up Indigo's web server.
+- **A shorter device reply.** `get_device_by_id` and `get_device_by_name` gave the owning plugin's settings three times over, plus a dozen empty properties. They now give them once, list any other plugin's settings separately, and name the device's group when it has one. `detail="full"` returns everything as before.
+- **Read a plugin's settings.** `get_plugin_status` with `include_prefs=true` returns the plugin's saved Configure settings, with passwords, keys and tokens hidden, and any field the plugin marks secure.
+- **History at a glance.** `device_history` with `summary=true` counts rows per day and, for each state, how often it was written and its lowest and highest value, busiest first. That shows straight away which state is filling the SQL Logger.
+
+45 new tests, 1,433 in all. Every new check was broken on purpose to prove a test catches it.
+
 ### 3.1.0 (2026-09-24)
 A second full review of the plugin, this time of the new 3.0 code, and every problem it found is fixed.
 

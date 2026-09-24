@@ -682,6 +682,16 @@ class IndigoDataProvider:
 
         return folders
 
+    def get_device_folders(self) -> List[Dict[str, Any]]:
+        """Every device folder as {id, name}."""
+        folders = []
+        try:
+            for folder in indigo.devices.folders:
+                folders.append({"id": folder.id, "name": folder.name})
+        except Exception as e:
+            self.logger.error(f"Error getting device folders: {e}")
+        return folders
+
     # ── Extended device control ────────────────────────────────────────────
 
     # ── Thermostat setpoints ──────────────────────────────────────────────
