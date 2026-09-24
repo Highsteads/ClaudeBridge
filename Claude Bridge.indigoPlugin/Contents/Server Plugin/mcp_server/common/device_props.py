@@ -170,7 +170,11 @@ _PROP_BLOCKS = ("pluginProps", "ownerProps", "sharedProps")
 _SECURE_LOCK = threading.Lock()
 _SECURE_BY_PATH: Dict[str, Tuple[float, FrozenSet[str]]] = {}
 _DEVICES_XML_BY_PLUGIN: Dict[str, str] = {}
-_PLUGIN_SCAN_AT = 0.0
+# None = never scanned. Not 0.0: time.monotonic() counts from boot, so on a
+# Mac up for less than _PLUGIN_RESCAN_SECONDS a 0.0 made the first scan look
+# recent and skipped it, leaving secure="true" fields unmasked for the first
+# minutes after every reboot (found by CI, whose runners are freshly booted).
+_PLUGIN_SCAN_AT: Optional[float] = None
 _PLUGIN_RESCAN_SECONDS = 300.0
 
 # Test hook: a folder of .indigoPlugin bundles to use instead of Indigo's own.
@@ -197,7 +201,8 @@ def _devices_xml_for(plugin_id: str) -> Optional[str]:
     rebuilt at most every _PLUGIN_RESCAN_SECONDS, when an id is missing."""
     global _PLUGIN_SCAN_AT
     path = _DEVICES_XML_BY_PLUGIN.get(plugin_id)
-    if path is not None or time.monotonic() - _PLUGIN_SCAN_AT < _PLUGIN_RESCAN_SECONDS:
+    if path is not None or (_PLUGIN_SCAN_AT is not None
+                             and time.monotonic() - _PLUGIN_SCAN_AT < _PLUGIN_RESCAN_SECONDS):
         return path
     _PLUGIN_SCAN_AT = time.monotonic()
     folder = _plugins_dir()

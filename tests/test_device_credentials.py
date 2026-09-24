@@ -51,7 +51,7 @@ def plugins_dir(tmp_path, monkeypatch):
         '<Field id="relayWord" type="textfield" secure="true"/>'
         '</ConfigUI></Device></Devices>')
     monkeypatch.setattr(dp, "PLUGINS_DIR_OVERRIDE", str(tmp_path))
-    monkeypatch.setattr(dp, "_PLUGIN_SCAN_AT", 0.0)
+    monkeypatch.setattr(dp, "_PLUGIN_SCAN_AT", None)
     dp._DEVICES_XML_BY_PLUGIN.clear()
     dp._SECURE_BY_PATH.clear()
     return tmp_path
@@ -101,3 +101,10 @@ def test_get_devices_by_type_is_slim_unless_full_is_asked_for():
     assert slim["detail"] == "slim" and "ownerProps" not in slim["devices"][0]
     full = h.get_devices("dimmer", detail="full")
     assert "ownerProps" in full["devices"][0]
+
+
+def test_first_lookup_scans_even_just_after_boot(plugins_dir, monkeypatch):
+    """monotonic() counts from boot; a Mac (or CI runner) up for under five
+    minutes must still scan on the first lookup."""
+    monkeypatch.setattr(dp.time, "monotonic", lambda: 12.0)
+    assert "relayWord" in dp._secure_fields(MAILER)
