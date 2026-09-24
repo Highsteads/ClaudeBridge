@@ -101,8 +101,9 @@ def server_info(ctx, date_iso=None):
                           "status": _part("reflector_status", st.get_reflector_status(),
                                           "status")}
     reply["location"] = _part("location", ext.get_latitude_longitude(), "latitude", "longitude")
-    reply["sun"] = {"date": date_iso or "today",
-                    "sunrise": _part("sunrise", ext.calculate_sunrise(date_iso), "sunrise"),
+    rise = ext.calculate_sunrise(date_iso)
+    reply["sun"] = {"date": rise.get("date", date_iso) if isinstance(rise, dict) else date_iso,
+                    "sunrise": _part("sunrise", rise, "sunrise"),
                     "sunset": _part("sunset", ext.calculate_sunset(date_iso), "sunset")}
     if errors:
         reply["errors"] = errors

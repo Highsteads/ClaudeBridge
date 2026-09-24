@@ -8,6 +8,11 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 3.0.1 (2026-09-24)
+Sunrise and sunset now come from the same day.
+
+`server_info` asked Indigo for sunrise without saying which day, and Indigo then answers with the next one, so any time after dawn "today" showed tomorrow's sunrise beside today's sunset. It now always names the day, today unless you give another.
+
 ### 3.0.0 (2026-09-24)
 A spring clean: 69 tools where there were 169, nothing to install, and a long piece of Python no longer freezes the web server.
 

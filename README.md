@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 3.0.0
+**Version:** 3.0.1
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,11 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 3.0.1 (2026-09-24)
+Sunrise and sunset now come from the same day.
+
+`server_info` asked Indigo for sunrise without saying which day, and Indigo then answers with the next one, so any time after dawn "today" showed tomorrow's sunrise beside today's sunset. It now always names the day, today unless you give another.
+
 ### 3.0.0 (2026-09-24)
 A spring clean: 69 tools where there were 169, nothing to install, and a long piece of Python no longer freezes the web server.
 
@@ -100,15 +105,6 @@ A round of fixes from a full review of the plugin, most of them in the tools Cla
 - **Shortened output says so**, and a failing script run with `run_script` reports the kind of error and its traceback, not just the message.
 
 54 new tests. I broke each fix on purpose and watched a test fail every time.
-
-### 2.27.2 (2026-09-23)
-When Claude's own code fails inside Indigo, it now gets told why.
-
-A failed `execute_indigo_python` or `run_script` used to hand back nothing but "see the Claude Bridge event log for details", and the event log held only the error's name, never the traceback or whatever the code had printed first. Claude then had to go and read the log, and over ten weeks that happened 85 times. The reply now keeps the traceback, the output and the error text, and any password, key or token that turns up in them is replaced with a marker such as `[redacted MQTT_PASSWORD]`. Claude Bridge knows which values to hide from the settings in `IndigoSecrets.py` whose names mark them as credentials, from Indigo's own API keys and from its own settings, and it reads the file afresh whenever it changes, so a new key is covered without a restart. If it cannot read those values it goes back to the old bare message rather than risk sending one. A very long traceback also used to be cut from the end, which threw away the one line that says what went wrong. It now keeps the end.
-
-`search_entities` accepts `devices`, `variables` and `action_groups` as well as the singular names it always wanted, and its description now lists the valid values. One search in seven had been failing on exactly that.
-
-34 new tests. I broke each of the six changes on purpose, and a test went red every time.
 
 ## Vibe coding for Indigo
 

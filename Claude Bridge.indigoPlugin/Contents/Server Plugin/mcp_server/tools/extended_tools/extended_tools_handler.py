@@ -758,18 +758,24 @@ class ExtendedToolsHandler(BaseToolHandler):
     # Server-level tools
     # ════════════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _sun_date(date_iso: Optional[str]):
+        """The date to ask Indigo about: date_iso, or TODAY when none is given.
+
+        Called with no argument, indigo.server.calculateSunrise() returns the
+        NEXT sunrise, so after dawn "today" came back as tomorrow's sunrise
+        beside today's sunset (measured 24-09-2026). Always pass a date."""
+        from datetime import date as _date, datetime as _dt
+        return _dt.fromisoformat(date_iso).date() if date_iso else _date.today()
+
     def calculate_sunrise(self, date_iso: Optional[str] = None) -> Dict[str, Any]:
         """Sunrise for today or a given YYYY-MM-DD date."""
         self.log_incoming_request("calculate_sunrise", {"date_iso": date_iso})
         try:
-            if date_iso:
-                from datetime import datetime as _dt
-                d = _dt.fromisoformat(date_iso)
-                t = indigo.server.calculateSunrise(d)
-            else:
-                t = indigo.server.calculateSunrise()
+            d = self._sun_date(date_iso)
+            t = indigo.server.calculateSunrise(d)
             return {"success": True, "sunrise": t.isoformat() if t else None,
-                    "date": date_iso or "today"}
+                    "date": d.isoformat()}
         except Exception as exc:
             return self.handle_exception(exc, "calculate_sunrise")
 
@@ -777,14 +783,10 @@ class ExtendedToolsHandler(BaseToolHandler):
         """Sunset for today or a given YYYY-MM-DD date."""
         self.log_incoming_request("calculate_sunset", {"date_iso": date_iso})
         try:
-            if date_iso:
-                from datetime import datetime as _dt
-                d = _dt.fromisoformat(date_iso)
-                t = indigo.server.calculateSunset(d)
-            else:
-                t = indigo.server.calculateSunset()
+            d = self._sun_date(date_iso)
+            t = indigo.server.calculateSunset(d)
             return {"success": True, "sunset": t.isoformat() if t else None,
-                    "date": date_iso or "today"}
+                    "date": d.isoformat()}
         except Exception as exc:
             return self.handle_exception(exc, "calculate_sunset")
 
