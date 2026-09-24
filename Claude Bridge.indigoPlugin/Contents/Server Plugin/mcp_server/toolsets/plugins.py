@@ -113,7 +113,7 @@ def plugin_refresh_deps(ctx, plugin_name, restart=False):
 
 
 @tool("restart_plugin", scope="admin", invalidates={"plugin"},
-      description=("Restart an Indigo plugin, then wait (default 5 s, at most 20) for it to "
+      description=("Restart an Indigo plugin, then wait (default 10 s, at most 20) for it to "
                    "log 'Started plugin' and report started, running_version, error and "
                    "warning counts and the lines it logged while restarting — no separate "
                    "status check or log search needed. The wait holds Indigo's web server, so "
@@ -123,7 +123,7 @@ def plugin_refresh_deps(ctx, plugin_name, restart=False):
                    "restart it from the Indigo Plugins menu."),
       properties={"plugin_id": string("Plugin bundle identifier"),
                   "wait_seconds": number("Seconds to wait for the plugin to start "
-                                         "(default 5, max 20, 0 = do not wait)")},
+                                         "(default 10, max 20, 0 = do not wait)")},
       required=["plugin_id"])
 def restart_plugin(ctx, plugin_id, wait_seconds=None):
     return ctx.plugin_control_handler.restart_plugin(plugin_id, wait_seconds=wait_seconds)

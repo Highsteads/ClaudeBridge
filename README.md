@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 3.2.0
+**Version:** 3.2.1
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,11 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 3.2.1 (2026-09-24)
+`restart_plugin` now waits up to 10 seconds by default, not 5.
+
+A plugin that finishes its web requests before stopping, as Dashboards does, takes about six and a half seconds to come back, so every restart of it was reported as "not started yet" when it was fine. The wait still ends the moment the plugin starts, so a quick plugin answers as fast as before.
+
 ### 3.2.0 (2026-09-24)
 Six tools learn the jobs Claude kept writing raw Python for. In past sessions about 60% of all calls went to `execute_indigo_python`, mostly for questions a tool should answer.
 
@@ -101,11 +106,6 @@ A second full review of the plugin, this time of the new 3.0 code, and every pro
 - **Sturdier underneath.** A failure while setting up Claude Code no longer takes the whole server down with it. Error replies always reach the request that caused them. Webhooks keep working after being switched off and on, and a new menu item brings back a webhook that was paused after repeated failures. A plugin-provided tool can no longer hold up the web server for more than 20 seconds.
 
 About 230 new tests, 1,388 in all. Every fix was broken on purpose to prove a test catches it.
-
-### 3.0.1 (2026-09-24)
-Sunrise and sunset now come from the same day.
-
-`server_info` asked Indigo for sunrise without saying which day, and Indigo then answers with the next one, so any time after dawn "today" showed tomorrow's sunrise beside today's sunset. It now always names the day, today unless you give another.
 
 ## Vibe coding for Indigo
 

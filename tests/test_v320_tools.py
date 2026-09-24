@@ -433,3 +433,13 @@ def test_summary_that_overruns_its_budget_is_stopped_and_says_so(history, monkey
     out = history.PluginDevToolsHandler(data_provider=None).device_history(7, hours=2,
                                                                           summary=True)
     assert out["success"] is False and "Ask for fewer hours" in out["error"]
+
+
+def test_default_wait_covers_a_plugin_that_quiesces_before_stopping():
+    """Dashboards waits 4 s for in-flight web requests before it stops and
+    takes about 6.5 s to come back; a 5 s default reported every one of its
+    restarts as not started. The wait ends as soon as the plugin starts, so a
+    longer default costs a quick plugin nothing."""
+    from mcp_server.tools.plugin_control import plugin_control_handler as pch
+    assert pch.PluginControlHandler.RESTART_WAIT_DEFAULT >= 8
+    assert pch.PluginControlHandler.RESTART_WAIT_DEFAULT <= pch.PluginControlHandler.RESTART_WAIT_MAX

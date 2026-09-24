@@ -89,7 +89,11 @@ class PluginControlHandler(BaseToolHandler):
     # holds the web server's request thread (every dashboard waits with it),
     # so it is short, and it ends the moment Indigo logs "Started plugin".
     RESTART_WAIT_MAX = 20
-    RESTART_WAIT_DEFAULT = 5
+    # 10, not 5 (3.2.1): Dashboards takes about 6.5 s to come back, because it
+    # waits 4 s for in-flight web requests before it stops, so a 5 s wait
+    # reported every one of its restarts as "not started yet". The wait still
+    # ends the moment the plugin has started, so a quick plugin costs no more.
+    RESTART_WAIT_DEFAULT = 10
     # After "Started plugin", how long to keep reading for the errors a
     # startup() that fails straight away logs just behind it.
     RESTART_SETTLE = 0.75
@@ -101,7 +105,7 @@ class PluginControlHandler(BaseToolHandler):
 
         Args:
             plugin_id: Plugin bundle identifier
-            wait_seconds: How long to wait for "Started plugin" (default 5,
+            wait_seconds: How long to wait for "Started plugin" (default 10,
                 most 20, 0 = do not wait)
 
         Returns:

@@ -8,6 +8,11 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 3.2.1 (2026-09-24)
+`restart_plugin` now waits up to 10 seconds by default, not 5.
+
+A plugin that finishes its web requests before stopping, as Dashboards does, takes about six and a half seconds to come back, so every restart of it was reported as "not started yet" when it was fine. The wait still ends the moment the plugin starts, so a quick plugin answers as fast as before.
+
 ### 3.2.0 (2026-09-24)
 Six tools learn the jobs Claude kept writing raw Python for. In past sessions about 60% of all calls went to `execute_indigo_python`, mostly for questions a tool should answer.
 
