@@ -231,7 +231,7 @@ def test_health_is_ok_with_nothing_running(tmp_path):
 # ── The pieces ───────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("given,expected", [
-    (None, 8.0), (3, 3.0), ("2.5", 2.5), (-4, 0.0), (999, 55.0), ("soon", 8.0), (True, 8.0),
+    (None, 5.0), (3, 3.0), ("2.5", 2.5), (-4, 0.0), (999, 20.0), ("soon", 5.0), (True, 5.0),
 ])
 def test_wait_seconds_is_clamped(given, expected):
     assert exec_lock.clamp_wait(given) == expected

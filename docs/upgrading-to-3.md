@@ -80,7 +80,7 @@ Tools not listed here kept their names and arguments.
 ## Changed behaviour
 
 - **`execute_indigo_python` and `run_script` run as background jobs.** A run that finishes
-  within `wait_seconds` (default 8) replies exactly as before. A longer one replies
+  within `wait_seconds` (default 5) replies exactly as before. A longer one replies
   `{"status": "running", "job_id": ...}` straight away; call the same tool again with that
   `job_id` to collect the result. This stops a long run freezing Indigo's web server, and every
   dashboard with it, for as long as it takes.

@@ -25,7 +25,7 @@ a long exec froze every dashboard. 85 of 1,576 calls in ten weeks ran longer
 than 10 s.
 
 So the code runs in a worker thread and the caller waits at most wait_seconds
-(default 8, clamped to 0-55). A run that finishes in time is returned exactly
+(default 5, clamped to 0-20). A run that finishes in time is returned exactly
 as before. One that does not is left running in the background and the caller
 gets {"status": "running", "job_id": ...} at once, which frees the request
 thread. Calling the tool again with that job_id waits a little longer and then
@@ -54,8 +54,11 @@ import threading
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
-DEFAULT_WAIT_SECONDS = 8
-MAX_WAIT_SECONDS = 55
+# The request thread is Indigo's web server thread too, so every second spent
+# waiting here is a second every dashboard stands still (measured live 24-09-2026:
+# a collect that waited 4 s held a /public request 3.7 s). Keep both short.
+DEFAULT_WAIT_SECONDS = 5
+MAX_WAIT_SECONDS = 20
 RESULT_TTL_SECONDS = 600
 HARD_CEILING_SECONDS = 1800
 
