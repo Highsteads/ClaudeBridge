@@ -4,8 +4,7 @@ Energy intelligence handler for ClaudeBridge MCP server.
 Reads SigenEnergyManager's own files to provide historical energy analysis
 without requiring InfluxDB.
 
-Tools:
-  - energy_log_days(days=7)       : raw log lines from its daily rotating logs
+Both are reached through the energy_history tool:
   - energy_daily_summary(days=14) : per-day kWh totals from daily_history.json
   - energy_compare(days_a, days_b): compare two N-day windows (e.g. this week vs last)
 """
@@ -165,7 +164,7 @@ class EnergyToolsHandler(BaseToolHandler):
         self,
         period_a_days: int = 7,
         period_b_days: int = 7,
-        period_b_offset: int = 7,
+        period_b_offset: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Compare two periods of COMPLETE days.
@@ -173,6 +172,11 @@ class EnergyToolsHandler(BaseToolHandler):
         period_b = period_b_days days, ending period_b_offset days before period_a ends
 
         Example: this week against last week — energy_compare(7, 7, 7)
+
+        period_b_offset defaults to the CLAMPED length of period a, so the two
+        periods sit side by side. It used to default from the unclamped value,
+        and an offset shorter than period a makes the windows share days; the
+        reply now says when either happens.
         """
         self.log_incoming_request("energy_compare",
                                   {"period_a_days": period_a_days,
@@ -183,9 +187,31 @@ class EnergyToolsHandler(BaseToolHandler):
             if history is None:
                 return {"success": False,
                         "error": "SigenEnergyManager daily_history.json not found"}
+            asked = {"period_a_days": period_a_days, "period_b_days": period_b_days,
+                     "period_b_offset": period_b_offset}
             period_a_days   = _clamp(period_a_days, 7, 1, 90)
             period_b_days   = _clamp(period_b_days, 7, 1, 90)
-            period_b_offset = _clamp(period_b_offset, 7, 0, 365)
+            period_b_offset = (period_a_days if period_b_offset is None
+                               else _clamp(period_b_offset, period_a_days, 0, 365))
+            used = {"period_a_days": period_a_days, "period_b_days": period_b_days,
+                    "period_b_offset": period_b_offset}
+            notes: List[str] = []
+            for key, value in asked.items():
+                if value is None:
+                    continue
+                try:
+                    same = float(value) == used[key]
+                except (TypeError, ValueError):
+                    same = False
+                if not same:
+                    notes.append(f"{key} {value!r} was out of range or not a whole number; "
+                                 f"used {used[key]}")
+            if period_b_offset < period_a_days:
+                shared = period_a_days - period_b_offset
+                notes.append(f"The periods overlap: the earlier one ends only "
+                             f"{period_b_offset} day(s) before the recent one, so they share "
+                             f"{min(shared, period_b_days)} day(s). Use an offset of "
+                             f"{period_a_days} or more for separate periods.")
             yesterday = datetime.now().date() - timedelta(days=1)
 
             def _window(end_offset: int, n_days: int) -> Dict[str, Any]:
@@ -216,6 +242,8 @@ class EnergyToolsHandler(BaseToolHandler):
                                ("pv_kwh", "import_kwh", "export_kwh", "home_kwh",
                                 "self_sufficiency_pct")},
             }
+            if notes:
+                result["notes"] = notes
             self.log_tool_outcome("energy_compare", True, "Energy period comparison complete")
             return result
         except Exception as exc:

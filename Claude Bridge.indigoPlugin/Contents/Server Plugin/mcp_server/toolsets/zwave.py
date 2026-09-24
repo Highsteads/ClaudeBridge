@@ -8,7 +8,7 @@
 # Version:     1.0
 
 from ..registry import tool
-from ._schema import bad_choice, boolean, enum, id_or_name, integer, refuse, unused_args
+from ._schema import bad_choice, boolean, coerce_bool, enum, id_or_name, integer, refuse, unused_args
 
 _ACTIONS = {
     "set_config_parameter":     ("device_id", "param_index", "param_size", "param_value",
@@ -24,8 +24,9 @@ _ACTIONS = {
 @tool("zwave", scope="admin", invalidates={"device"},
       description=(
           "Manage the Z-Wave network. ADMIN. set_config_parameter: program a device "
-          "(device_id, param_index, param_size = byte width 1, 2 or 4, param_value; "
-          "wait_for_ack default true) — tune motion sensitivity, report intervals and so on "
+          "(device_id, param_index, param_size = byte width 1, 2 or 4, param_value "
+          "that fits that width; wait_for_ack default false, since waiting holds the web "
+          "server until the device answers) — tune motion sensitivity, report intervals and so on "
           "from the device manual's parameter numbers. start_optimize: heal the mesh, the whole "
           "network or around device_id; stop_optimize ends it. enter_inclusion: put the "
           "controller into inclusion mode to ADD hardware (use_encryption for S0), then the "
@@ -33,12 +34,14 @@ _ACTIONS = {
           "exit_inclusion_exclusion: cancel either mode."),
       properties={
           "action": enum(list(_ACTIONS), "What to do"),
-          "device_id": id_or_name("Device id (set_config_parameter; optional for "
-                                  "start_optimize)"),
+          "device_id": id_or_name("Device ID, a number (set_config_parameter; optional for "
+                                  "start_optimize). Names are not accepted here"),
           "param_index": integer("Config parameter number"),
           "param_size": integer("Byte width: 1, 2 or 4"),
-          "param_value": integer("Value to set"),
-          "wait_for_ack": boolean("Wait for the device to acknowledge (default true)"),
+          "param_value": integer("Value to set: 1 byte -128..255, 2 bytes -32768..65535, "
+                                 "4 bytes -2147483648..4294967295"),
+          "wait_for_ack": boolean("Wait for the device to acknowledge (default false). The "
+                                  "reply then reports whether it did"),
           "use_encryption": boolean("Use S0 encryption during inclusion (default false)"),
       },
       required=["action"])
@@ -60,11 +63,12 @@ def zwave(ctx, action, device_id=None, param_index=None, param_size=None, param_
             return refuse(f"zwave: set_config_parameter needs {', '.join(missing)}")
         return ext.zwave_send_config_parameter(
             device_id, param_index=param_index, param_size=param_size,
-            param_value=param_value, wait_for_ack=True if wait_for_ack is None else wait_for_ack)
+            param_value=param_value, wait_for_ack=coerce_bool(wait_for_ack, default=False))
     if action == "start_optimize":
         return ext.zwave_start_network_optimize(device_id)
     if action == "enter_inclusion":
-        return ext.zwave_enter_inclusion_mode(use_encryption=bool(use_encryption))
+        return ext.zwave_enter_inclusion_mode(
+            use_encryption=coerce_bool(use_encryption, default=False))
     method = {"stop_optimize": "zwave_stop_network_optimize",
               "enter_exclusion": "zwave_enter_exclusion_mode",
               "exit_inclusion_exclusion": "zwave_exit_inclusion_exclusion_mode"}[action]

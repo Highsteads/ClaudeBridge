@@ -49,6 +49,20 @@ def _days_since(ts) -> Optional[float]:
     return None
 
 
+def _one_device_group(dev_ids: List[int]) -> bool:
+    """True when every id belongs to one Indigo device group — the sub-devices
+    of one piece of hardware (a Z-Wave node's motion, lux and temperature
+    devices), which share an address by design. Measured 24-09-2026: 15 of the
+    17 "shared address" conflicts reported here were exactly that. Devices that
+    share an address WITHOUT being grouped (two plugs given one IP) are still
+    reported."""
+    try:
+        group = set(indigo.device.getGroupList(dev_ids[0]))
+    except Exception:
+        return False
+    return len(group) > 1 and set(dev_ids) <= group
+
+
 class AuditHandler(BaseToolHandler):
     """Handler for Indigo configuration audit and housekeeping tools."""
 
@@ -223,7 +237,7 @@ class AuditHandler(BaseToolHandler):
     def find_stale_devices(self, days: int = 7) -> Dict[str, Any]:
         """
         Return devices whose lastChanged timestamp is more than `days` days ago,
-        and which are expected to be active (enabled, not virtual/plugin-less).
+        among ENABLED devices (disabled ones are skipped; virtual devices are not).
         """
         self.log_incoming_request("find_stale_devices", {"days": days})
         try:
@@ -416,7 +430,9 @@ class AuditHandler(BaseToolHandler):
                 # them and reported "no duplicates" over a real IP clash.
                 addr = device_address(dev)
                 if addr:
-                    addr_map.setdefault(addr, []).append(
+                    # Keyed by plugin as well: Z-Wave node "41" and another
+                    # plugin's "41" are different things (3.0.2).
+                    addr_map.setdefault((dev.pluginId, addr), []).append(
                         {"id": dev.id, "name": dev.name, "address": addr,
                          "addressSource": ("native"
                                            if (getattr(dev, "address", "") or "").strip()
@@ -428,8 +444,9 @@ class AuditHandler(BaseToolHandler):
                 for devs in name_map.values() if len(devs) > 1
             ]
             shared_addresses = [
-                {"address": addr, "devices": devs}
-                for addr, devs in addr_map.items() if len(devs) > 1
+                {"address": key[1], "plugin_id": key[0], "devices": devs}
+                for key, devs in addr_map.items()
+                if len(devs) > 1 and not _one_device_group([d["id"] for d in devs])
             ]
 
             # ── Automation: duplicate trigger names ────────────────────────

@@ -26,6 +26,14 @@ from .plugin_scanner import PluginScanner
 _OWN_PLUGIN_ID = "com.clives.indigoplugin.claudebridge"
 
 
+def _is_secret_prop(key: Any) -> bool:
+    """A prop whose value must not be written to the event log. Uses the
+    redactor's credential-name rule, plus the PIN and code names locks use."""
+    from ...security.secret_redactor import is_credential_name
+    k = str(key)
+    return is_credential_name(k) or any(w in k.lower() for w in ("pin", "code", "pwd", "psk"))
+
+
 class PluginControlHandler(BaseToolHandler):
     """Handler for plugin control operations"""
 
@@ -265,7 +273,12 @@ class PluginControlHandler(BaseToolHandler):
             # Audit trail in the Indigo event log: an action fired by an AI
             # caller must be as visible afterwards as one fired from the UI.
             target = f" on '{device.name}' ({dev_id})" if device is not None else ""
-            prop_desc = ", ".join(f"{k}={v!r}" for k, v in sorted((props or {}).items()))
+            # Values of credential-shaped props are masked: Lock Manager's
+            # Actions.xml has a userPin field, and this line lands in the event
+            # log file on disk, where query_event_log and Log_Error_Watch read it.
+            prop_desc = ", ".join(
+                f"{k}={'***' if _is_secret_prop(k) else repr(v)}"
+                for k, v in sorted((props or {}).items()))
             indigo.server.log(
                 f"execute_device_action: '{action_type_id}'{target} via {plugin_id}"
                 + (f" [{prop_desc}]" if prop_desc else " [no props]")

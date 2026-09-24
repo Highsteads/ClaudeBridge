@@ -17,6 +17,7 @@
 # and log_tool_outcome on success — so logs match the rest of the plugin.
 
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -30,6 +31,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
     from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.control_page import PAGE_FLAGS_WITH_ACTIONS, describe_element
+# One boolean coercion for the whole plugin. The name is kept because the
+# handlers here (and a test) use it.
+from ...toolsets._schema import coerce_bool as _coerce_bool
 
 
 # ── ID coercion helper ──────────────────────────────────────────────────────
@@ -49,13 +53,6 @@ def _coerce_id(value) -> int:
     raise ValueError(f"Expected numeric ID, got {value!r}")
 
 
-def _coerce_bool(value) -> bool:
-    """Coerce an MCP arg to bool. A JSON true is True; everything else goes via
-    a string test so the STRING "false"/"0"/"no"/"off"/"" (how a lax client or a
-    re-serialised value arrives) is correctly False — bool("false") would be True."""
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in ("true", "1", "yes", "on")
 
 
 def _readback(collection, elem_id, attr: str, expected):
@@ -110,6 +107,18 @@ class ExtendedToolsHandler(BaseToolHandler):
     ):
         super().__init__(tool_name="extended_tools", logger=logger)
         self.data_provider = data_provider
+
+    def _settled(self, attr: str, device_id: int, previous: Any) -> Dict[str, Any]:
+        """Wait briefly for a device attribute to move after a command and say
+        what it reads now, rather than reporting the command as the result."""
+        poll = getattr(self.data_provider, "_poll_for_change", None)
+        current = previous
+        if callable(poll):
+            try:
+                current = poll(device_id, attr, previous)
+            except Exception:
+                current = previous
+        return {"previous": previous, "current": current, "changed": current != previous}
 
     # ════════════════════════════════════════════════════════════════════════
     # Device CRUD + folder operations
@@ -224,6 +233,7 @@ class ExtendedToolsHandler(BaseToolHandler):
         try:
             did = _coerce_id(device_id)
             dev = indigo.devices[did]
+            previous = getattr(dev, "onState", None)
             if isinstance(dev, indigo.DimmerDevice):
                 indigo.dimmer.toggle(did)
                 kind = "dimmer"
@@ -237,9 +247,12 @@ class ExtendedToolsHandler(BaseToolHandler):
                 return {"success": False,
                         "error": f"Device '{dev.name}' is not toggleable "
                                  f"({type(dev).__name__})"}
-            msg = f"Toggled {kind} '{dev.name}'"
+            reply = self._settled("onState", did, previous)
+            msg = (f"Toggled {kind} '{dev.name}': "
+                   + (f"now {'on' if reply['current'] else 'off'}" if reply["changed"]
+                      else "no change reported yet"))
             self.log_tool_outcome("device_toggle", True, msg)
-            return {"success": True, "device_id": did, "kind": kind, "message": msg}
+            return {"success": True, "device_id": did, "kind": kind, **reply, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "device_toggle")
 
@@ -253,13 +266,20 @@ class ExtendedToolsHandler(BaseToolHandler):
                 amount = int(amount)
             except (TypeError, ValueError):
                 return {"success": False, "error": "amount must be an integer"}
+            if amount <= 0:
+                return {"success": False,
+                        "error": f"amount must be a positive number of percentage points, "
+                                 f"got {amount}; use dim to go the other way"}
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.DimmerDevice):
                 return {"success": False, "error": f"'{dev.name}' is not a dimmer"}
+            previous = getattr(dev, "brightness", None)
             indigo.dimmer.brighten(did, by=amount)
-            msg = f"Brightened '{dev.name}' by {amount}%"
+            reply = self._settled("brightness", did, previous)
+            msg = f"Brightened '{dev.name}' by {amount}%: {previous} -> {reply['current']}"
             self.log_tool_outcome("dimmer_brighten_by", True, msg)
-            return {"success": True, "device_id": did, "amount": amount, "message": msg}
+            return {"success": True, "device_id": did, "amount": amount, **reply,
+                    "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "dimmer_brighten_by")
 
@@ -273,13 +293,20 @@ class ExtendedToolsHandler(BaseToolHandler):
                 amount = int(amount)
             except (TypeError, ValueError):
                 return {"success": False, "error": "amount must be an integer"}
+            if amount <= 0:
+                return {"success": False,
+                        "error": f"amount must be a positive number of percentage points, "
+                                 f"got {amount}; use brighten to go the other way"}
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.DimmerDevice):
                 return {"success": False, "error": f"'{dev.name}' is not a dimmer"}
+            previous = getattr(dev, "brightness", None)
             indigo.dimmer.dim(did, by=amount)
-            msg = f"Dimmed '{dev.name}' by {amount}%"
+            reply = self._settled("brightness", did, previous)
+            msg = f"Dimmed '{dev.name}' by {amount}%: {previous} -> {reply['current']}"
             self.log_tool_outcome("dimmer_dim_by", True, msg)
-            return {"success": True, "device_id": did, "amount": amount, "message": msg}
+            return {"success": True, "device_id": did, "amount": amount, **reply,
+                    "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "dimmer_dim_by")
 
@@ -379,6 +406,20 @@ class ExtendedToolsHandler(BaseToolHandler):
             return {"success": True, "schedule_id": sid, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "schedule_remove_delayed_actions")
+
+    def trigger_remove_delayed_actions(self, trigger_id) -> Dict[str, Any]:
+        """Remove any pending delayed actions a trigger queued
+        (indigo.trigger.removeDelayedActions), leaving every other one alone."""
+        self.log_incoming_request("trigger_remove_delayed_actions", {"trigger_id": trigger_id})
+        try:
+            tid = _coerce_id(trigger_id)
+            trig = indigo.triggers[tid]
+            indigo.trigger.removeDelayedActions(tid)
+            msg = f"Removed delayed actions for trigger '{trig.name}'"
+            self.log_tool_outcome("trigger_remove_delayed_actions", True, msg)
+            return {"success": True, "trigger_id": tid, "message": msg}
+        except Exception as exc:
+            return self.handle_exception(exc, "trigger_remove_delayed_actions")
 
     # ════════════════════════════════════════════════════════════════════════
     # Trigger CRUD
@@ -493,11 +534,21 @@ class ExtendedToolsHandler(BaseToolHandler):
     # Z-Wave management (config parameters, network heal, inclusion/exclusion)
     # ════════════════════════════════════════════════════════════════════════
 
+    # The values a parameter of each byte width can carry. Z-Wave parameters
+    # are signed, but many manuals quote the unsigned form (255 for "-1"), so
+    # both readings are accepted; anything wider cannot be sent in that size.
+    _PARAM_RANGES = {1: (-128, 255), 2: (-32768, 65535), 4: (-2 ** 31, 2 ** 32 - 1)}
+
     def zwave_send_config_parameter(self, device_id, param_index: int,
                                     param_size: int, param_value: int,
-                                    wait_for_ack: bool = True) -> Dict[str, Any]:
+                                    wait_for_ack: bool = False) -> Dict[str, Any]:
         """Set a Z-Wave configuration parameter on a device (indigo.zwave.sendConfigParm).
-        param_size is the byte width Indigo should send (1, 2 or 4)."""
+        param_size is the byte width Indigo should send (1, 2 or 4).
+
+        wait_for_ack defaults to False: waiting holds the web server's request
+        thread until the radio answers, which on a sleeping or dead node is a
+        long time. With it on, the reply reports the acknowledgement Indigo
+        returned rather than assuming one."""
         self.log_incoming_request("zwave_send_config_parameter",
                                   {"device_id": device_id, "param_index": param_index,
                                    "param_size": param_size, "param_value": param_value})
@@ -510,13 +561,40 @@ class ExtendedToolsHandler(BaseToolHandler):
                         "error": "param_index, param_size and param_value must be integers"}
             if psize not in (1, 2, 4):
                 return {"success": False, "error": "param_size must be 1, 2 or 4 (bytes)"}
+            if any(isinstance(v, bool) for v in (param_index, param_size, param_value)):
+                return {"success": False,
+                        "error": "param_index, param_size and param_value must be integers"}
+            low, high = self._PARAM_RANGES[psize]
+            if not (low <= pval <= high):
+                return {"success": False,
+                        "error": f"param_value {pval} does not fit in {psize} byte(s) "
+                                 f"(allowed {low} to {high})"}
+            wait = _coerce_bool(wait_for_ack, default=False)
             dev = indigo.devices[did]
-            indigo.zwave.sendConfigParm(device=dev, paramIndex=pidx, paramSize=psize,
-                                        paramValue=pval, waitUntilAck=_coerce_bool(wait_for_ack))
-            msg = (f"Sent Z-Wave config param {pidx}={pval} ({psize}-byte) to '{dev.name}'")
-            self.log_tool_outcome("zwave_send_config_parameter", True, msg)
-            return {"success": True, "device_id": did, "param_index": pidx,
-                    "param_size": psize, "param_value": pval, "message": msg}
+            reply = indigo.zwave.sendConfigParm(device=dev, paramIndex=pidx, paramSize=psize,
+                                                paramValue=pval, waitUntilAck=wait)
+            acked = None
+            if wait:
+                detail = self._ping_payload(reply) if reply is not None else {}
+                flag = detail.get("Success", detail.get("success"))
+                acked = bool(flag) if flag is not None else None
+            if not wait:
+                msg = (f"Sent Z-Wave config param {pidx}={pval} ({psize}-byte) to "
+                       f"'{dev.name}' without waiting for an acknowledgement")
+            elif acked:
+                msg = (f"Z-Wave config param {pidx}={pval} ({psize}-byte) acknowledged "
+                       f"by '{dev.name}'")
+            elif acked is False:
+                msg = (f"Z-Wave config param {pidx}={pval} was NOT acknowledged by "
+                       f"'{dev.name}' — the device may be asleep or out of range")
+            else:
+                msg = (f"Sent Z-Wave config param {pidx}={pval} to '{dev.name}'; Indigo "
+                       f"returned no acknowledgement flag")
+            ok = acked is not False
+            self.log_tool_outcome("zwave_send_config_parameter", ok, msg)
+            return {"success": ok, "device_id": did, "param_index": pidx,
+                    "param_size": psize, "param_value": pval, "waited_for_ack": wait,
+                    "acknowledged": acked, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "zwave_send_config_parameter")
 
@@ -628,6 +706,12 @@ class ExtendedToolsHandler(BaseToolHandler):
             dev = indigo.devices[did]
             if not isinstance(dev, indigo.SprinklerDevice):
                 return {"success": False, "error": f"'{dev.name}' is not a sprinkler"}
+            zones = getattr(dev, "zoneCount", None)
+            known = isinstance(zones, int) and not isinstance(zones, bool) and zones > 0
+            if zone_index < 1 or (known and zone_index > zones):
+                return {"success": False,
+                        "error": f"zone must be 1-{zones if known else 'n'} for "
+                                 f"'{dev.name}' (zones count from 1), got {zone_index}"}
             indigo.sprinkler.setActiveZone(did, index=zone_index)
             msg = f"Set sprinkler '{dev.name}' to zone {zone_index}"
             self.log_tool_outcome("sprinkler_set_zone", True, msg)
@@ -715,10 +799,20 @@ class ExtendedToolsHandler(BaseToolHandler):
             if not isinstance(dev, indigo.SpeedControlDevice):
                 return {"success": False,
                         "error": f"'{dev.name}' is not a speed control device"}
+            count = getattr(dev, "speedIndexCount", None)
+            top = (count - 1) if isinstance(count, int) and not isinstance(count, bool) \
+                and count > 0 else None
+            if index < 0 or (top is not None and index > top):
+                return {"success": False,
+                        "error": f"index must be 0-{top if top is not None else 'n'} for "
+                                 f"'{dev.name}', got {index}"}
+            previous = getattr(dev, "speedIndex", None)
             indigo.speedcontrol.setSpeedIndex(did, value=index)
-            msg = f"Set '{dev.name}' speed index to {index}"
+            reply = self._settled("speedIndex", did, previous)
+            msg = f"Set '{dev.name}' speed index to {index} (reads {reply['current']})"
             self.log_tool_outcome("speedcontrol_set_index", True, msg)
-            return {"success": True, "device_id": did, "index": index, "message": msg}
+            return {"success": True, "device_id": did, "index": index, **reply,
+                    "confirmed": reply["current"] == index, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "speedcontrol_set_index")
 
@@ -731,10 +825,12 @@ class ExtendedToolsHandler(BaseToolHandler):
             if not isinstance(dev, indigo.SpeedControlDevice):
                 return {"success": False,
                         "error": f"'{dev.name}' is not a speed control device"}
+            previous = getattr(dev, "speedIndex", None)
             indigo.speedcontrol.increaseSpeedIndex(did)
-            msg = f"Increased speed index on '{dev.name}'"
+            reply = self._settled("speedIndex", did, previous)
+            msg = f"Increased speed index on '{dev.name}': {previous} -> {reply['current']}"
             self.log_tool_outcome("speedcontrol_increase", True, msg)
-            return {"success": True, "device_id": did, "message": msg}
+            return {"success": True, "device_id": did, **reply, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "speedcontrol_increase")
 
@@ -747,10 +843,12 @@ class ExtendedToolsHandler(BaseToolHandler):
             if not isinstance(dev, indigo.SpeedControlDevice):
                 return {"success": False,
                         "error": f"'{dev.name}' is not a speed control device"}
+            previous = getattr(dev, "speedIndex", None)
             indigo.speedcontrol.decreaseSpeedIndex(did)
-            msg = f"Decreased speed index on '{dev.name}'"
+            reply = self._settled("speedIndex", did, previous)
+            msg = f"Decreased speed index on '{dev.name}': {previous} -> {reply['current']}"
             self.log_tool_outcome("speedcontrol_decrease", True, msg)
-            return {"success": True, "device_id": did, "message": msg}
+            return {"success": True, "device_id": did, **reply, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "speedcontrol_decrease")
 
@@ -1017,27 +1115,83 @@ class ExtendedToolsHandler(BaseToolHandler):
         except Exception as exc:
             return self.handle_exception(exc, "beep_device")
 
+    # How long ping_device waits for the radio before answering "pending". The
+    # ping blocks until the device answers or the interface gives up, which on
+    # a dead Z-Wave node is many seconds — and the tool call runs on the web
+    # server's request thread, so it must not wait that long.
+    PING_WAIT_S = 5.0
+
+    @staticmethod
+    def _ping_payload(result) -> Dict[str, Any]:
+        # ping returns an indigo.Dict-like kwargs object; normalise it.
+        try:
+            return {k: result[k] for k in result}
+        except Exception:
+            return {"raw": str(result)}
+
+    @staticmethod
+    def _ping_message(name: str, payload: Dict[str, Any]) -> Tuple[bool, str]:
+        ok = bool(payload.get("Success", payload.get("success", False)))
+        msg = (f"Ping '{name}': {'reachable' if ok else 'NO RESPONSE'}"
+               + (f" ({payload.get('TimeDelta')} ms)"
+                  if payload.get("TimeDelta") is not None else ""))
+        return ok, msg
+
     def ping_device(self, device_id) -> Dict[str, Any]:
-        """Ping a device (Z-Wave reachability check). Returns the round-trip result."""
+        """Ping a device (Z-Wave reachability check). Returns the round-trip result.
+
+        The ping runs in a worker thread. If it has not answered within
+        PING_WAIT_S the reply says it is still waiting, and the worker writes
+        the result to the event log when it arrives.
+        """
         self.log_incoming_request("ping_device", {"device_id": device_id})
         try:
             did = _coerce_id(device_id)
             dev = indigo.devices[did]
-            result = indigo.device.ping(did, suppressLogging=True)
-            # ping returns an indigo.Dict-like kwargs object; normalise it.
-            payload = {}
-            try:
-                payload = {k: result[k] for k in result}
-            except Exception:
-                payload = {"raw": str(result)}
-            ok = bool(payload.get("Success", payload.get("success", False)))
-            msg = (f"Ping '{dev.name}': {'reachable' if ok else 'NO RESPONSE'}"
-                   + (f" ({payload.get('TimeDelta')} ms)" if payload.get("TimeDelta") is not None else ""))
+            name = dev.name
+            box: Dict[str, Any] = {"late": False}
+            done = threading.Event()
+            lock = threading.Lock()
+
+            def _run():
+                try:
+                    box["result"] = indigo.device.ping(did, suppressLogging=True)
+                except Exception as exc:   # reported by whoever reads the box
+                    box["error"] = exc
+                finally:
+                    with lock:
+                        done.set()
+                        late = box["late"]
+                    if late:
+                        if "error" in box:
+                            self.logger.warning(f"Ping '{name}' failed: {box['error']}")
+                        else:
+                            _, late_msg = self._ping_message(
+                                name, self._ping_payload(box.get("result")))
+                            self.logger.info(f"{late_msg} (answered after the tool replied)")
+
+            threading.Thread(target=_run, name=f"cb-ping-{did}", daemon=True).start()
+            done.wait(self.PING_WAIT_S)
+            with lock:
+                if not done.is_set():
+                    box["late"] = True
+            if box["late"]:
+                msg = (f"Ping sent to '{name}'; no answer within {self.PING_WAIT_S:g} s. "
+                       f"Still waiting — the result will be written to the Indigo event log.")
+                self.log_tool_outcome("ping_device", True, msg)
+                return {"success": True, "status": "pending", "device_id": did,
+                        "message": msg}
+            if "error" in box:
+                raise box["error"]
+            payload = self._ping_payload(box.get("result"))
+            ok, msg = self._ping_message(name, payload)
             self.log_tool_outcome("ping_device", True, msg)
-            return {"success": True, "device_id": did, "reachable": ok,
-                    "detail": payload, "message": msg}
+            return {"success": True, "status": "answered", "device_id": did,
+                    "reachable": ok, "detail": payload, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "ping_device")
+
+    RESET_WAIT_S = 1.5
 
     def reset_energy_accumulator(self, device_id) -> Dict[str, Any]:
         """Reset a device's accumulated energy total (kWh) to zero."""
@@ -1054,18 +1208,30 @@ class ExtendedToolsHandler(BaseToolHandler):
                 }
             indigo.device.resetEnergyAccumTotal(did)
             # Re-read rather than assume: the reset is a request to the owning
-            # plugin, which may not honour it.
-            actual, confirmed = _readback(indigo.devices, did, "energyAccumTotal", 0.0)
-            if not confirmed and actual == 0:
-                confirmed = True          # int 0 vs float 0.0 is still a reset
-            msg = f"Energy total reset on '{dev.name}' (was {previous} kWh)"
-            if not confirmed:
-                msg = (f"Energy reset on '{dev.name}' did NOT take effect — still "
-                       f"reports {actual} kWh (was {previous})")
-                self.logger.warning(msg)
-            self.log_tool_outcome("reset_energy_accumulator", confirmed, msg)
-            return {"success": confirmed, "device_id": did,
-                    "previous_kwh": previous, "current_kwh": actual,
+            # plugin, which may not honour it — and which answers in its own
+            # time, so wait briefly for the zero before judging. A total that
+            # has not reached zero yet is UNCONFIRMED, not failed.
+            actual = previous
+            poll = getattr(self.data_provider, "_poll_for_change", None)
+            if callable(poll):
+                try:
+                    actual = poll(did, "energyAccumTotal", previous, timeout=self.RESET_WAIT_S,
+                                  target=0)
+                except Exception:
+                    actual = previous
+            if actual == previous:
+                actual, _ = _readback(indigo.devices, did, "energyAccumTotal", 0.0)
+            confirmed = (isinstance(actual, (int, float)) and not isinstance(actual, bool)
+                         and abs(actual) < 1e-9)
+            if confirmed:
+                msg = f"Energy total reset on '{dev.name}' (was {previous} kWh)"
+            else:
+                msg = (f"Energy reset sent to '{dev.name}' but not yet confirmed — it "
+                       f"still reports {actual} kWh (was {previous}). The owning plugin "
+                       f"may apply it shortly; read the device again to check.")
+            self.log_tool_outcome("reset_energy_accumulator", True, msg)
+            return {"success": True, "status": "confirmed" if confirmed else "unconfirmed",
+                    "device_id": did, "previous_kwh": previous, "current_kwh": actual,
                     "confirmed": confirmed, "message": msg}
         except Exception as exc:
             return self.handle_exception(exc, "reset_energy_accumulator")

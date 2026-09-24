@@ -37,7 +37,7 @@ try:
 except ImportError:
     pass
 
-from ..base_handler import BaseToolHandler
+from ..base_handler import BaseToolHandler, CallerError
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
@@ -51,7 +51,7 @@ if TYPE_CHECKING:   # type hint only — importing it here would be circular
 # for minutes. Cap the sweep and label a partial result rather than implying a
 # clean bill of health.
 _NODE_CHECK_MAX_BLOCKS      = 40
-_NODE_CHECK_BUDGET_SECONDS  = 60
+_NODE_CHECK_BUDGET_SECONDS  = 20   # the web server waits too; was 60 until 3.0.2
 
 # device_history: the biggest window a single call will scan. The SQL Logger DB
 # has no index on ts, so an over-wide window turns the per-column non-null probe
@@ -99,6 +99,26 @@ def _resolve_node() -> Optional[str]:
     return None
 
 
+_TYPE_RE = re.compile(r'type\s*=\s*["\']([^"\']*)["\']', re.IGNORECASE)
+
+
+def _script_type(attrs: str) -> str:
+    """The lower-cased type= of a <script> tag, "" when absent."""
+    m = _TYPE_RE.search(attrs or "")
+    return m.group(1).strip().lower() if m else ""
+
+
+def _single_match(plugin_name: str, names, parent: str) -> Optional[str]:
+    """The one partial match, None for none, CallerError for several."""
+    if not names:
+        return None
+    if len(names) > 1:
+        raise CallerError(
+            f"'{plugin_name}' matches {len(names)}: {', '.join(names)}. "
+            f"Use the full name.")
+    return os.path.join(parent, names[0])
+
+
 def _resolve_installed_bundle(plugin_name: str) -> Optional[str]:
     """
     Find the installed .indigoPlugin directory matching a name. Accepts:
@@ -124,16 +144,23 @@ def _resolve_installed_bundle(plugin_name: str) -> Optional[str]:
     direct = os.path.join(pd, pn if pn.endswith(".indigoPlugin") else pn + ".indigoPlugin")
     if os.path.isdir(direct) and _contained(direct):
         return direct
-    # Case-insensitive scan
+    # Case-insensitive scan. An exact name wins; a partial one must be the
+    # ONLY partial match. Taking the first listdir hit let "Bridge" resolve to
+    # whichever of three *Bridge bundles came first, so plugin_refresh_deps
+    # could reset and restart the wrong plugin (3.0.2).
     pn_low = pn.lower().replace(".indigoplugin", "")
-    for entry in os.listdir(pd):
+    partial = []
+    for entry in sorted(os.listdir(pd)):
         if entry.endswith(".indigoPlugin"):
             stem = entry[:-len(".indigoPlugin")].lower()
-            if stem == pn_low or pn_low in stem:
-                cand = os.path.join(pd, entry)
-                if _contained(cand):
-                    return cand
-    return None
+            cand = os.path.join(pd, entry)
+            if not _contained(cand):
+                continue
+            if stem == pn_low or stem.lstrip(".") == pn_low:
+                return cand
+            if pn_low in stem:
+                partial.append(entry)
+    return _single_match(plugin_name, partial, pd)
 
 
 def _resolve_source_repo(plugin_name: str) -> Optional[str]:
@@ -169,12 +196,11 @@ def _resolve_source_repo(plugin_name: str) -> Optional[str]:
             return _contained(os.path.join(root, cand))
         if cand.lower() in low_map:
             return _contained(os.path.join(root, low_map[cand.lower()]))
-    # Partial fallback
+    # Partial fallback — only when exactly one repo matches (see above).
     stem = pn.replace(" ", "").replace(".indigoPlugin", "").lower()
-    for e in entries:
-        if stem and stem in e.lower():
-            return _contained(os.path.join(root, e))
-    return None
+    partial = sorted(e for e in entries if stem and stem in e.lower())
+    hit = _single_match(plugin_name, partial, root)
+    return _contained(hit) if hit else None
 
 
 def _file_hash(path: str) -> str:
@@ -232,10 +258,15 @@ class PluginDevToolsHandler(BaseToolHandler):
             src_bundle = os.path.join(repo, bundle_name)
             if not os.path.isdir(src_bundle):
                 # Try first .indigoPlugin under repo
-                hits = [d for d in os.listdir(repo) if d.endswith(".indigoPlugin")]
+                hits = sorted(d for d in os.listdir(repo) if d.endswith(".indigoPlugin"))
                 if not hits:
                     return {"success": False,
                             "error": f"No .indigoPlugin found at repo root {repo}"}
+                if len(hits) > 1:
+                    return {"success": False,
+                            "error": (f"{repo} holds {len(hits)} bundles "
+                                      f"({', '.join(hits)}); none is named "
+                                      f"{bundle_name}")}
                 src_bundle = os.path.join(repo, hits[0])
 
             # Walk both bundles. Skip caches/packages — Indigo manages those.
@@ -597,7 +628,9 @@ class PluginDevToolsHandler(BaseToolHandler):
                     break
                 rel = os.path.relpath(path, installed)
                 try:
-                    with open(path, encoding="utf-8") as f:
+                    # errors="replace": one stray byte must not abort the sweep
+                    # and throw away every finding already collected.
+                    with open(path, encoding="utf-8", errors="replace") as f:
                         content = f.read()
                 except OSError as e:
                     findings.append({"file": rel, "error": f"read failed: {e}"})
@@ -607,8 +640,14 @@ class PluginDevToolsHandler(BaseToolHandler):
                     if total_blocks >= _NODE_CHECK_MAX_BLOCKS or time.time() > deadline:
                         check_capped = True
                         break
-                    if src_re.search(m.group("attrs") or ""):
+                    attrs = m.group("attrs") or ""
+                    if src_re.search(attrs):
                         continue  # external script ref — nothing to lint inline
+                    # Only JavaScript is JavaScript. A JSON, importmap or
+                    # template block used to be node-checked and "failed".
+                    stype = _script_type(attrs)
+                    if stype not in ("", "text/javascript", "application/javascript", "module"):
+                        continue
                     body = (m.group("body") or "").strip()
                     if not body:
                         continue
@@ -618,8 +657,11 @@ class PluginDevToolsHandler(BaseToolHandler):
                     # node rejects --check and -e together ("either --check or
                     # --eval can be used, not both"), so write the block to a
                     # temp .js file and --check that.
+                    # A module block uses import/export, which node only accepts
+                    # in an .mjs file.
                     with tempfile.NamedTemporaryFile(
-                        "w", suffix=".js", delete=False, encoding="utf-8"
+                        "w", suffix=".mjs" if stype == "module" else ".js",
+                        delete=False, encoding="utf-8"
                     ) as _tf:
                         _tf.write(body)
                         _tmp = _tf.name
@@ -631,6 +673,13 @@ class PluginDevToolsHandler(BaseToolHandler):
                             # the plugin host would decode it as ASCII (2.27.1).
                             encoding="utf-8", errors="replace",
                         )
+                    except subprocess.TimeoutExpired:
+                        # Record it and carry on; an uncaught timeout used to
+                        # discard every finding already collected.
+                        findings.append({"file": rel, "block_num": idx + 1,
+                                         "html_line": line_no,
+                                         "error": "node --check timed out after 10 s"})
+                        continue
                     finally:
                         try:
                             os.unlink(_tmp)
@@ -934,6 +983,8 @@ class PluginDevToolsHandler(BaseToolHandler):
                 # naming the valid set — silently dropping them used to
                 # return walls of bare `ts` rows when a caller passed the
                 # state's camelCase name against the lowercase columns.
+                if isinstance(columns, str):
+                    columns = [columns]   # one name, not a list of letters
                 if columns:
                     unknown = [c for c in columns if c not in all_cols]
                     if unknown:
@@ -946,9 +997,10 @@ class PluginDevToolsHandler(BaseToolHandler):
                     if "ts" not in cols:
                         cols = ["ts"] + cols
 
-                # The ts column has NO index and the DB is journal_mode=delete,
-                # so any ts-filtered query full-scans while holding the read
-                # lock and can stall the SQL Logger's writes (live-confirmed
+                # The ts column has NO index, so any ts-filtered query
+                # full-scans the table (the DB is WAL since 09-Sep-2026; before
+                # that it held the read lock throughout and could stall the SQL
+                # Logger's writes (live-confirmed
                 # 15-Jul-2026). The logger appends chronologically, so ts is
                 # monotone in the INTEGER PRIMARY KEY — binary-search the
                 # boundary rowid for the cutoff (~30 instant point-probes),

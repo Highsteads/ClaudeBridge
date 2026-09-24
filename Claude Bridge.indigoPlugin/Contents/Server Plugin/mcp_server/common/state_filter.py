@@ -161,7 +161,9 @@ class StateFilter:
                 if not StateFilter._loose_eq(value, expected):
                     return False
             elif operator == "contains":
-                if expected not in str(value):
+                # str() both sides: {"contains": 5} raised TypeError ('in
+                # <string>' requires string as left operand, not int).
+                if str(expected) not in str(value):
                     return False
             elif operator == "regex":
                 # Client-supplied pattern — a malformed pattern raises re.error.

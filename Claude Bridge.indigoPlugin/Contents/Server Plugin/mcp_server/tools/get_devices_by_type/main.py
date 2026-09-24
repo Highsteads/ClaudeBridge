@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
     from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.indigo_device_types import IndigoDeviceType, DeviceClassifier, DeviceTypeResolver
+from ...common.json_encoder import KEYS_TO_KEEP_MINIMAL_DEVICES, filter_json
 from ..base_handler import BaseToolHandler
 
 
@@ -31,7 +32,8 @@ class GetDevicesByTypeHandler(BaseToolHandler):
         super().__init__(tool_name="get_devices_by_type", logger=logger)
         self.data_provider = data_provider
     
-    def get_devices(self, device_type: str, limit: int = 200) -> Dict[str, Any]:
+    def get_devices(self, device_type: str, limit: int = 200,
+                    detail: str = "slim") -> Dict[str, Any]:
         """
         Get all devices of a specific type.
 
@@ -39,6 +41,9 @@ class GetDevicesByTypeHandler(BaseToolHandler):
             device_type: The device type to filter by (dimmer, relay, sensor, etc.)
             limit: Max devices to return (default 200) — bounds the response size
                    on a large estate. Excess is reported via 'truncated'.
+            detail: "slim" (default) returns the same short rows as the other
+                   listings; "full" returns every property, as it always did
+                   before 3.0.1 — a whole-estate dump of every plugin's props.
 
         Returns:
             Dictionary with list of devices and metadata
@@ -82,6 +87,8 @@ class GetDevicesByTypeHandler(BaseToolHandler):
             truncated = total_matched > limit
             if truncated:
                 filtered_devices = filtered_devices[:limit]
+            if detail != "full":
+                filtered_devices = filter_json(filtered_devices, KEYS_TO_KEEP_MINIMAL_DEVICES)
 
             self.info_log(f"💡 Found {total_matched} '{device_type}' devices"
                           + (f" (returning first {limit})" if truncated else ""))
@@ -92,6 +99,7 @@ class GetDevicesByTypeHandler(BaseToolHandler):
                 "total_matched": total_matched,
                 "truncated": truncated,
                 "limit": limit,
+                "detail": "full" if detail == "full" else "slim",
                 "devices": filtered_devices,
                 "success": True
             }

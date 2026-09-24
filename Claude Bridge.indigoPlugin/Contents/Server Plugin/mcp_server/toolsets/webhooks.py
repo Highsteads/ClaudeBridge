@@ -32,8 +32,8 @@ def _webhooks(ctx, method: str, **kwargs):
                                          "{\"onState\": true}, {\"battery\": {\"lt\": 20}}, or "
                                          "{\"any_change\": true}. Fires on transition INTO "
                                          "match.")},
-          "entity_id": id_or_name("Optional specific device/variable id; omit to watch all of "
-                                  "the type"),
+          "entity_id": id_or_name("Optional device/variable ID (a number; names are not "
+                                  "accepted); omit to watch all of the type"),
           "auth_token": string("Optional extra bearer token sent to the receiver"),
           "verify_ssl": boolean("Verify the receiver's TLS cert (default true)"),
           "duration_seconds": number("Optional dwell: condition must hold this long before "

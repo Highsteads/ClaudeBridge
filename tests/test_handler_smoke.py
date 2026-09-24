@@ -148,11 +148,22 @@ class _FakeEnabled:
 
 def test_home_status_shape(monkeypatch):
     ind = sys.modules["indigo"]
+    # Grouped by device CLASS since 3.0.2, so the fakes carry Indigo's class
+    # names. Plugin-id words put every Shelly plug under "energy".
+    class DimmerDevice(_FakeDevice):
+        pass
+
+    class RelayDevice(_FakeDevice):
+        pass
+
+    class SensorDevice(_FakeDevice):
+        pass
+
     devices = {
-        1: _FakeDevice(1, "Hall Lamp", "com.x.zigbee", on=True, brightness=70),
-        2: _FakeDevice(2, "Door Sensor", "com.x.sensor",
-                       states={"batteryLevel": 15}),
-        3: _FakeDevice(3, "Broken Plug", "com.x.shelly", error="offline"),
+        1: DimmerDevice(1, "Hall Lamp", "com.x.zigbee", on=True, brightness=70),
+        2: SensorDevice(2, "Door Sensor", "com.x.sensor",
+                        states={"batteryLevel": 15}),
+        3: RelayDevice(3, "Broken Plug", "com.x.shelly", error="offline"),
     }
     variables = {10: _FakeVariable(10, "battery_soc", "94.1"),
                  11: _FakeVariable(11, "unrelated_note", "hi")}
@@ -171,9 +182,10 @@ def test_home_status_shape(monkeypatch):
     assert "Broken Plug" in error_names
     batt = result["alerts"]["low_battery"]
     assert batt and batt[0]["name"] == "Door Sensor" and batt[0]["battery_pct"] == 15
-    # Grouping: zigbee dimmer → lights; shelly → energy.
+    # Grouping by class: a dimmer is a light, a relay plug is a switch.
     assert any(d["name"] == "Hall Lamp" for d in result["devices"]["lights"])
-    assert any(d["name"] == "Broken Plug" for d in result["devices"]["energy"])
+    assert any(d["name"] == "Broken Plug" for d in result["devices"]["switches"])
+    assert any(d["name"] == "Door Sensor" for d in result["devices"]["sensors"])
     # Key variables filtered by pattern: battery_soc in, unrelated_note out.
     key_names = [v["name"] for v in result["key_variables"]]
     assert "battery_soc" in key_names and "unrelated_note" not in key_names

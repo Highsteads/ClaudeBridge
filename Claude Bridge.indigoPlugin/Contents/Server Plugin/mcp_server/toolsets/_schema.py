@@ -78,8 +78,18 @@ def unused_args(tool: str, choice: str, given: Dict[str, Any],
     )
 
 
-def coerce_bool(value: Any) -> bool:
-    """A JSON true is True; the STRING "false" is False (bool("false") is True)."""
+def coerce_bool(value: Any, default: bool = False) -> bool:
+    """A JSON true is True; the STRING "false" is False (bool("false") is True).
+
+    None means "not given" and returns `default`. Some clients send every
+    property with a null for the ones left out, so set_enabled(enabled=null)
+    must not read as "disable", and a null include_server_check must not turn
+    a check off that defaults on. Every caller passes its documented default.
+
+    The single copy: extended_tools_handler used to carry its own.
+    """
+    if value is None:
+        return default
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ("true", "1", "yes", "on")

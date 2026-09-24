@@ -231,16 +231,16 @@ def test_all_devices_refuses_an_unknown_broadcast():
     _nothing_called(ctx)
 
 
-def test_lock_control_routes_and_keeps_the_code_to_unlock():
+def test_lock_control_routes_and_takes_no_pin():
+    """indigo.device.unlock has no code parameter (official docs), so the tool
+    no longer offers one: the schema lists device and action only."""
+    from mcp_server import registry
     ctx = _ctx()
     call_tool(ctx, "lock_control", device=8, action="lock")
-    call_tool(ctx, "lock_control", device=8, action="unlock", code="1234")
+    call_tool(ctx, "lock_control", device=8, action="unlock")
     assert ctx.device_control_handler.calls == [("lock_device", (8,), {}),
-                                                ("unlock_device", (8,), {"code": "1234"})]
-    ctx = _ctx()
-    out = call_tool(ctx, "lock_control", device=8, action="lock", code="1234")
-    assert out["success"] is False and "unlock" in out["error"]
-    _nothing_called(ctx)
+                                                ("unlock_device", (8,), {})]
+    assert "code" not in registry.spec_for("lock_control").properties
 
 
 # ── list_devices ─────────────────────────────────────────────────────────────
@@ -324,14 +324,23 @@ def test_update_and_delete_automation_route(kind):
     assert _only_call(ctx.extended_tools_handler) == (f"delete_{kind}", (6,), {})
 
 
-def test_remove_delayed_actions_routes_and_refuses():
+def test_remove_delayed_actions_routes_and_refuses(monkeypatch):
+    from mcp_server.toolsets import automations
+    monkeypatch.setattr(automations, "_resolve_schedule",
+                        lambda i: SimpleNamespace(id=int(i)) if str(i) == "6" else None)
+    monkeypatch.setattr(automations, "_resolve_trigger",
+                        lambda i: SimpleNamespace(id=71) if i == "Porch motion" else None)
     ctx = _ctx()
     call_tool(ctx, "remove_delayed_actions", kind="device", id=5)
     call_tool(ctx, "remove_delayed_actions", kind="schedule", id=6)
+    call_tool(ctx, "remove_delayed_actions", kind="trigger", id="Porch motion")
     call_tool(ctx, "remove_delayed_actions", kind="all")
-    assert [c[0] for c in ctx.extended_tools_handler.calls] == [
-        "device_remove_delayed_actions", "schedule_remove_delayed_actions",
-        "remove_all_delayed_actions"]
+    assert [c[:2] for c in ctx.extended_tools_handler.calls] == [
+        ("device_remove_delayed_actions", (5,)), ("schedule_remove_delayed_actions", (6,)),
+        ("trigger_remove_delayed_actions", (71,)), ("remove_all_delayed_actions", ())]
+    ctx = _ctx()
+    assert "No trigger matches" in call_tool(ctx, "remove_delayed_actions", kind="trigger",
+                                             id="nope")["error"]
     ctx = _ctx()
     assert "does not apply" in call_tool(ctx, "remove_delayed_actions", kind="all", id=5)["error"]
     assert "needs id" in call_tool(ctx, "remove_delayed_actions", kind="device")["error"]
@@ -407,7 +416,7 @@ def test_energy_history_routes_and_refuses():
     call_tool(ctx, "energy_history", days=7, compare=True)
     call_tool(ctx, "energy_history", days=7, compare=True, compare_offset_days=364)
     assert ctx.energy_tools_handler.calls == [("energy_daily_summary", (14,), {}),
-                                              ("energy_compare", (7, 7, 7), {}),
+                                              ("energy_compare", (7, 7, None), {}),
                                               ("energy_compare", (7, 7, 364), {})]
     ctx = _ctx()
     assert "compare=true" in call_tool(ctx, "energy_history", compare_offset_days=3)["error"]
@@ -572,7 +581,7 @@ def test_the_menu_tools_keep_their_self_guards():
 @pytest.mark.parametrize("action,args,method,call", [
     ("set_config_parameter", {"device_id": 7, "param_index": 3, "param_size": 1, "param_value": 5},
      "zwave_send_config_parameter",
-     ((7,), {"param_index": 3, "param_size": 1, "param_value": 5, "wait_for_ack": True})),
+     ((7,), {"param_index": 3, "param_size": 1, "param_value": 5, "wait_for_ack": False})),
     ("start_optimize", {"device_id": 7}, "zwave_start_network_optimize", ((7,), {})),
     ("start_optimize", {}, "zwave_start_network_optimize", ((None,), {})),
     ("stop_optimize", {}, "zwave_stop_network_optimize", ((), {})),

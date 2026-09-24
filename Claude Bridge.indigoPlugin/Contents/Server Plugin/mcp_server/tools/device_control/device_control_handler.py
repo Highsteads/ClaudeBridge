@@ -217,7 +217,7 @@ class DeviceControlHandler(BaseToolHandler):
             if "error" in result:
                 self.info_log(f"❌ Heat setpoint error: {result['error']}")
             else:
-                self.info_log(f"🌡 {result.get('device_name', device_id)} heat setpoint → {setpoint} degC")
+                self.info_log(f"🌡 {result.get('device_name', device_id)} heat setpoint → {setpoint}")
             return result
         except Exception as e:
             return self.handle_exception(e, f"setting heat setpoint on device ID {device_id}")
@@ -236,7 +236,7 @@ class DeviceControlHandler(BaseToolHandler):
             if "error" in result:
                 self.info_log(f"❌ Cool setpoint error: {result['error']}")
             else:
-                self.info_log(f"❄ {result.get('device_name', device_id)} cool setpoint → {setpoint} degC")
+                self.info_log(f"❄ {result.get('device_name', device_id)} cool setpoint → {setpoint}")
             return result
         except Exception as e:
             return self.handle_exception(e, f"setting cool setpoint on device ID {device_id}")
@@ -266,22 +266,24 @@ class DeviceControlHandler(BaseToolHandler):
             if "error" in result:
                 self.info_log(f"❌ Lock error: {result['error']}")
             else:
-                self.info_log(f"🔒 {result.get('device_name', device_id)} → locked")
+                self.info_log(f"🔒 {result.get('device_name', device_id)} → "
+                              f"{'locked' if result.get('confirmed') else 'lock sent, not yet confirmed'}")
             return result
         except Exception as e:
             return self.handle_exception(e, f"locking device ID {device_id}")
 
-    def unlock_device(self, device_id: int, code: str = None) -> Dict[str, Any]:
-        """Unlock a lock device."""
+    def unlock_device(self, device_id: int) -> Dict[str, Any]:
+        """Unlock a lock device. Indigo's unlock takes no PIN."""
         try:
             device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
                 return {"error": "device_id must be an integer", "success": False}
-            result = self.data_provider.unlock_device(device_id, code=code)
+            result = self.data_provider.unlock_device(device_id)
             if "error" in result:
                 self.info_log(f"❌ Unlock error: {result['error']}")
             else:
-                self.info_log(f"🔓 {result.get('device_name', device_id)} → unlocked")
+                self.info_log(f"🔓 {result.get('device_name', device_id)} → "
+                              f"{'unlocked' if result.get('confirmed') else 'unlock sent, not yet confirmed'}")
             return result
         except Exception as e:
             return self.handle_exception(e, f"unlocking device ID {device_id}")
@@ -351,7 +353,7 @@ class DeviceControlHandler(BaseToolHandler):
             return self.handle_exception(e, f"requesting status for device ID {device_id}")
 
     def increase_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
-        """Increase the heat setpoint by delta degrees Celsius."""
+        """Increase the heat setpoint by delta degrees, in the device's own unit."""
         try:
             device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
@@ -362,14 +364,14 @@ class DeviceControlHandler(BaseToolHandler):
             else:
                 self.info_log(
                     f"🌡 {result.get('device_name', device_id)} "
-                    f"setpoint ↑ {result.get('previous')} → {result.get('current')} degC"
+                    f"setpoint ↑ {result.get('previous')} → {result.get('current')}"
                 )
             return result
         except Exception as e:
             return self.handle_exception(e, f"increasing heat setpoint on device ID {device_id}")
 
     def decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
-        """Decrease the heat setpoint by delta degrees Celsius."""
+        """Decrease the heat setpoint by delta degrees, in the device's own unit."""
         try:
             device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
@@ -380,14 +382,14 @@ class DeviceControlHandler(BaseToolHandler):
             else:
                 self.info_log(
                     f"🌡 {result.get('device_name', device_id)} "
-                    f"setpoint ↓ {result.get('previous')} → {result.get('current')} degC"
+                    f"setpoint ↓ {result.get('previous')} → {result.get('current')}"
                 )
             return result
         except Exception as e:
             return self.handle_exception(e, f"decreasing heat setpoint on device ID {device_id}")
 
     def increase_cool_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
-        """Increase the cool setpoint by delta degrees Celsius."""
+        """Increase the cool setpoint by delta degrees, in the device's own unit."""
         try:
             device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
@@ -398,14 +400,14 @@ class DeviceControlHandler(BaseToolHandler):
             else:
                 self.info_log(
                     f"❄️ {result.get('device_name', device_id)} "
-                    f"cool setpoint ↑ {result.get('previous')} → {result.get('current')} degC"
+                    f"cool setpoint ↑ {result.get('previous')} → {result.get('current')}"
                 )
             return result
         except Exception as e:
             return self.handle_exception(e, f"increasing cool setpoint on device ID {device_id}")
 
     def decrease_cool_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
-        """Decrease the cool setpoint by delta degrees Celsius."""
+        """Decrease the cool setpoint by delta degrees, in the device's own unit."""
         try:
             device_id = self._coerce_device_id(device_id)
             if not isinstance(device_id, int):
@@ -416,7 +418,7 @@ class DeviceControlHandler(BaseToolHandler):
             else:
                 self.info_log(
                     f"❄️ {result.get('device_name', device_id)} "
-                    f"cool setpoint ↓ {result.get('previous')} → {result.get('current')} degC"
+                    f"cool setpoint ↓ {result.get('previous')} → {result.get('current')}"
                 )
             return result
         except Exception as e:

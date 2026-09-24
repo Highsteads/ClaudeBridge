@@ -6,6 +6,12 @@ import logging
 from typing import Optional
 
 
+class CallerError(ValueError):
+    """A request that cannot be carried out as asked (an ambiguous name, an
+    argument out of range). handle_exception reports it to the caller and logs
+    a WARNING, not an ERROR: nothing is wrong with the plugin."""
+
+
 class BaseToolHandler:
     """Base class for all MCP tool handlers with standardized logging."""
     
@@ -85,8 +91,11 @@ class BaseToolHandler:
         if context:
             error_message += f" ({context})"
         error_message += f": {str(e)}"
-        
-        self.error_log(error_message)
+
+        if isinstance(e, CallerError):
+            self.warning_log(error_message)
+        else:
+            self.error_log(error_message)
         
         return {
             "error": str(e),
@@ -106,16 +115,29 @@ class BaseToolHandler:
         # Concise logging - parameters will be shown in outcome if needed
         pass
     
-    def log_tool_outcome(self, operation: str, success: bool, details: str = "", count: int = None, query_info: dict = None) -> None:
+    def log_tool_outcome(self, operation: str, success: bool, details: str = "", count: int = None,
+                         query_info: dict = None, level: Optional[int] = None) -> None:
         """
         Log the outcome of a tool operation with enhanced context and emojis.
-        
+
+        Levels (3.0.2), following the house rule that INFO says what changed
+        and an Error means something is wrong with the plugin:
+          * success -> DEBUG. A read changed nothing, and a command's effect is
+            logged by Indigo itself ("sent ... on").
+          * failure -> WARNING. Most failures are a caller asking for something
+            that cannot be done (unknown id, bad argument). They used to be red
+            Errors, and Log_Error_Watch triaged 32 of them as faults.
+          * `level` overrides both, e.g. DEBUG for a caller's own code raising
+            inside execute_indigo_python. Genuine faults still reach ERROR
+            through handle_exception().
+
         Args:
             operation: The operation that was performed
             success: Whether the operation succeeded
             details: Optional additional details about the outcome
             count: Optional count of items returned/affected
             query_info: Optional dictionary with query context (filters, types, etc.)
+            level: Optional logging level to use instead of the default
         """
         status = "completed successfully" if success else "failed"
         
@@ -139,10 +161,9 @@ class BaseToolHandler:
         if emoji:
             message = f"{emoji} {message}"
         
-        if success:
-            self.info_log(message)
-        else:
-            self.error_log(message)
+        if level is None:
+            level = logging.DEBUG if success else logging.WARNING
+        self.logger.log(level, f"[{self.tool_name}]: {message}")
     
     def _get_operation_emoji(self, operation: str) -> str:
         """

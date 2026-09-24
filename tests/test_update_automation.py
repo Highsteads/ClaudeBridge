@@ -211,3 +211,26 @@ def test_enable_trigger_without_timing_keeps_plain_call(handler, indigo_stub):
     assert "auto-revert" not in result["message"]
     _, kwargs = indigo_stub.trigger.enable.call_args
     assert kwargs == {"value": True}
+
+
+# ── not_applied compares what was SENT, not the caller's spelling (3.0.1) ────
+
+def test_an_enum_already_at_the_requested_value_is_not_reported_as_kept(handler):
+    """before == after == BecomesTrue, and the caller wrote 'becomes_true'. The
+    old test compared that text with 'BecomesTrue' and warned the server had
+    kept the old value."""
+    result = handler.update_trigger(TRIG_ID, {"state_change_type": "becomes_true"})
+    assert result["success"] is True
+    assert "warning" not in result
+
+
+def test_an_enum_the_server_ignores_is_still_reported(handler, indigo_stub):
+    trigger = indigo_stub.triggers[TRIG_ID]
+
+    def _server_keeps_the_old_value():
+        object.__setattr__(trigger, "stateChangeType", "BecomesTrue")
+        object.__setattr__(trigger, "replaced", True)
+
+    object.__setattr__(trigger, "replaceOnServer", _server_keeps_the_old_value)
+    result = handler.update_trigger(TRIG_ID, {"state_change_type": "becomes_false"})
+    assert "state_change_type" in result.get("warning", "")

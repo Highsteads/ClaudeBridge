@@ -36,7 +36,8 @@ def _to_variable_string(value) -> str:
 class IndigoDataProvider:
     """Data provider implementation for accessing Indigo entities."""
 
-    # Sane client-side bounds for thermostat setpoints (degrees Celsius).
+    # Sane client-side bounds for thermostat setpoints, in Celsius. A device
+    # that reads in Fahrenheit gets the same band converted (_setpoint_band).
     # Indigo / the device driver may clamp further, but this rejects absurd
     # values before they ever reach the hardware. Heat range covers a sensible
     # household band; cool allows a slightly higher ceiling.
@@ -248,14 +249,29 @@ class IndigoDataProvider:
             "actions": self.get_all_actions()
         }
     
+    _NO_TARGET = object()
+
+    @staticmethod
+    def _values_match(current: Any, wanted: Any) -> bool:
+        """Equal, allowing for float noise (a TRV reads 20.499999 for 20.5)."""
+        numeric = (int, float)
+        if (isinstance(current, numeric) and isinstance(wanted, numeric)
+                and not isinstance(current, bool) and not isinstance(wanted, bool)):
+            return abs(float(current) - float(wanted)) < 0.05
+        return current == wanted
+
     def _poll_for_change(self, device_id: int, attr: str, previous: Any,
-                         timeout: float = 0.5, interval: float = 0.05) -> Any:
+                         timeout: float = 0.5, interval: float = 0.05,
+                         target: Any = _NO_TARGET) -> Any:
         """
         Briefly poll a device attribute for a change after issuing a command,
         instead of an unconditional full-second sleep on the synchronous IWS
         request thread. Returns as soon as the attribute differs from
         ``previous`` (or after ``timeout`` seconds), so a settled command
         returns quickly and the worker thread is not held for a fixed second.
+
+        With ``target``, it waits for that value instead: a device that moves
+        through an intermediate value has not finished just because it moved.
         """
         deadline = time.monotonic() + timeout
         current = previous
@@ -265,7 +281,10 @@ class IndigoDataProvider:
                 current = getattr(indigo.devices[device_id], attr)
             except Exception:
                 break
-            if current != previous:
+            if target is not self._NO_TARGET:
+                if self._values_match(current, target):
+                    break
+            elif current != previous:
                 break
         return current
 
@@ -665,98 +684,171 @@ class IndigoDataProvider:
 
     # ── Extended device control ────────────────────────────────────────────
 
-    def set_heat_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
-        """Set heat setpoint on a thermostat device."""
+    # ── Thermostat setpoints ──────────────────────────────────────────────
+    #
+    # Indigo stores setpoints in whichever unit the thermostat reports, so a
+    # Fahrenheit device reads 68 where a Celsius one reads 20. The old guards
+    # assumed Celsius: a Fahrenheit 70 was refused, and a delta from 68 was
+    # CLAMPED to 35 without a word. The band is now chosen from the device's
+    # own readings, and a value outside it is refused, never clamped.
+
+    _SETPOINT_KINDS = {
+        "heat": ("heatSetpoint", "setHeatSetpoint", "increaseHeatSetpoint",
+                 "decreaseHeatSetpoint", "SETPOINT_HEAT_MIN_C", "SETPOINT_HEAT_MAX_C"),
+        "cool": ("coolSetpoint", "setCoolSetpoint", "increaseCoolSetpoint",
+                 "decreaseCoolSetpoint", "SETPOINT_COOL_MIN_C", "SETPOINT_COOL_MAX_C"),
+    }
+
+    # How long a setpoint, lock or speed reply waits for the device to report
+    # the new value. Short, because it holds the web server's request thread.
+    CONFIRM_TIMEOUT_S = 1.0
+
+    @staticmethod
+    def _numeric_readings(dev) -> List[float]:
+        values: List[Any] = [getattr(dev, "heatSetpoint", None),
+                             getattr(dev, "coolSetpoint", None)]
+        try:
+            values.extend(list(getattr(dev, "temperatures", None) or []))
+        except TypeError:
+            pass
+        return [float(v) for v in values
+                if isinstance(v, (int, float)) and not isinstance(v, bool)]
+
+    def _setpoint_band(self, dev, kind: str):
+        """(low, high, unit) for one setpoint on this device.
+
+        Any setpoint or temperature reading above 40 means Fahrenheit (no room
+        in Celsius reads that), and the Celsius band is converted. With no
+        readings at all the unit is unknown, so the band spans both: from the
+        Celsius floor to the Fahrenheit ceiling.
+        """
+        low_c = getattr(self, self._SETPOINT_KINDS[kind][4])
+        high_c = getattr(self, self._SETPOINT_KINDS[kind][5])
+        low_f, high_f = round(low_c * 9 / 5 + 32, 1), round(high_c * 9 / 5 + 32, 1)
+        readings = self._numeric_readings(dev)
+        if any(r > 40.0 for r in readings):
+            return low_f, high_f, "F"
+        if readings:
+            return low_c, high_c, "C"
+        return low_c, high_f, "unknown"
+
+    @staticmethod
+    def _band_text(low: float, high: float, unit: str) -> str:
+        suffix = {"C": " degrees C", "F": " degrees F"}.get(unit, "")
+        return f"{low:g}-{high:g}{suffix}"
+
+    def _confirmed_reply(self, device_id: int, attr: str, previous: Any,
+                         requested: Any, what: str) -> Dict[str, Any]:
+        """Wait briefly for `attr` to reach `requested`, then report honestly.
+
+        `confirmed` is True only when the device reads back the value asked
+        for. A device that has not caught up yet is not a failure (a TRV or a
+        lock can take seconds), but the reply must not present the old value as
+        the result, so it says the change is not yet confirmed.
+        """
+        current = self._poll_for_change(device_id, attr, previous, target=requested,
+                                        timeout=self.CONFIRM_TIMEOUT_S)
+        dev = indigo.devices[device_id]
+        confirmed = self._values_match(current, requested)
+        reply = {"success": True, "device_name": dev.name, "previous": previous,
+                 "requested": requested, "current": current, "confirmed": confirmed}
+        if not confirmed:
+            reply["note"] = (f"Command sent, but not yet confirmed: {what} still reads "
+                             f"{current!r} rather than {requested!r}. The device may take "
+                             f"a few seconds to report the change.")
+        return reply
+
+    def _set_setpoint(self, device_id: int, kind: str, setpoint: Any) -> Dict[str, Any]:
+        attr, setter = self._SETPOINT_KINDS[kind][0], self._SETPOINT_KINDS[kind][1]
         try:
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found", "success": False}
             dev = indigo.devices[device_id]
             try:
-                setpoint_c = float(setpoint)
+                value = float(setpoint)
             except (ValueError, TypeError):
-                return {"error": f"Invalid heat setpoint '{setpoint}' (not a number)",
+                return {"error": f"Invalid {kind} setpoint '{setpoint}' (not a number)",
                         "success": False}
-            if not (self.SETPOINT_HEAT_MIN_C <= setpoint_c <= self.SETPOINT_HEAT_MAX_C):
-                return {"error": f"Heat setpoint {setpoint_c} degC out of range "
-                                 f"({self.SETPOINT_HEAT_MIN_C}-{self.SETPOINT_HEAT_MAX_C} degC)",
+            if isinstance(setpoint, bool) or value != value:
+                return {"error": f"Invalid {kind} setpoint '{setpoint}' (not a number)",
                         "success": False}
-            previous = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else None
-            indigo.thermostat.setHeatSetpoint(device_id, value=setpoint_c)
-            dev = indigo.devices[device_id]
-            # Report None (not the echoed request) when the device cannot confirm,
-            # so a silent no-op is not reported as the requested value taking effect.
-            confirmed = hasattr(dev, 'heatSetpoint')
-            current = dev.heatSetpoint if confirmed else None
-            self.logger.info(f"Set heat setpoint '{dev.name}': {previous} -> {current} degC")
-            return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current, "confirmed": confirmed}
+            low, high, unit = self._setpoint_band(dev, kind)
+            if not (low <= value <= high):
+                return {"error": f"{kind.capitalize()} setpoint {value:g} is outside "
+                                 f"{self._band_text(low, high, unit)}; nothing was changed",
+                        "success": False}
+            previous = getattr(dev, attr, None)
+            getattr(indigo.thermostat, setter)(device_id, value=value)
+            reply = self._confirmed_reply(device_id, attr, previous, value,
+                                          f"the {kind} setpoint")
+            reply["unit"] = unit
+            self.logger.info(f"Set {kind} setpoint '{reply['device_name']}': "
+                             f"{previous} -> {reply['current']}")
+            return reply
         except Exception as e:
-            self.logger.error(f"Error setting heat setpoint on {device_id}: {e}")
+            self.logger.error(f"Error setting {kind} setpoint on {device_id}: {e}")
             return {"error": str(e), "success": False}
 
-    def set_cool_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
-        """Set cool setpoint on a thermostat device."""
+    def _nudge_setpoint(self, device_id: int, kind: str, delta: Any) -> Dict[str, Any]:
+        """Move a setpoint by `delta` (signed) with Indigo's own increase and
+        decrease commands. A result outside the band is refused, never clamped."""
+        attr = self._SETPOINT_KINDS[kind][0]
         try:
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found", "success": False}
             dev = indigo.devices[device_id]
+            previous = getattr(dev, attr, None)
+            if not isinstance(previous, (int, float)) or isinstance(previous, bool):
+                return {"error": f"Device '{dev.name}' has no {kind} setpoint", "success": False}
             try:
-                setpoint_c = float(setpoint)
-            except (ValueError, TypeError):
-                return {"error": f"Invalid cool setpoint '{setpoint}' (not a number)",
-                        "success": False}
-            if not (self.SETPOINT_COOL_MIN_C <= setpoint_c <= self.SETPOINT_COOL_MAX_C):
-                return {"error": f"Cool setpoint {setpoint_c} degC out of range "
-                                 f"({self.SETPOINT_COOL_MIN_C}-{self.SETPOINT_COOL_MAX_C} degC)",
-                        "success": False}
-            previous = dev.coolSetpoint if hasattr(dev, 'coolSetpoint') else None
-            indigo.thermostat.setCoolSetpoint(device_id, value=setpoint_c)
-            dev = indigo.devices[device_id]
-            # Report None (not the echoed request) when the device cannot confirm.
-            confirmed = hasattr(dev, 'coolSetpoint')
-            current = dev.coolSetpoint if confirmed else None
-            self.logger.info(f"Set cool setpoint '{dev.name}': {previous} -> {current} degC")
-            return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current, "confirmed": confirmed}
-        except Exception as e:
-            self.logger.error(f"Error setting cool setpoint on {device_id}: {e}")
-            return {"error": str(e), "success": False}
-
-    def _adjust_cool_setpoint(self, device_id: int, delta: float) -> Dict[str, Any]:
-        """Nudge the cool setpoint by delta degrees Celsius (mirrors the heat pair)."""
-        try:
-            if device_id not in indigo.devices:
-                return {"error": f"Device {device_id} not found", "success": False}
-            dev = indigo.devices[device_id]
-            previous = dev.coolSetpoint if hasattr(dev, 'coolSetpoint') else None
-            if previous is None:
-                return {"error": f"Device '{dev.name}' has no cool setpoint", "success": False}
-            try:
-                delta_c = float(delta)
+                step = float(delta)
             except (TypeError, ValueError):
                 return {"error": f"delta must be a number, got {delta!r}", "success": False}
-            new_setpoint = round(float(previous) + delta_c, 1)
-            new_setpoint = max(self.SETPOINT_COOL_MIN_C,
-                               min(self.SETPOINT_COOL_MAX_C, new_setpoint))
-            indigo.thermostat.setCoolSetpoint(device_id, value=new_setpoint)
-            dev = indigo.devices[device_id]
-            confirmed = hasattr(dev, 'coolSetpoint')
-            current = dev.coolSetpoint if confirmed else None
-            self.logger.info(f"Adjusted cool setpoint '{dev.name}': {previous} -> {current} degC")
-            return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current, "delta": delta,
-                    "confirmed": confirmed}
+            if isinstance(delta, bool) or step != step or step == 0:
+                return {"error": f"delta must be a non-zero number, got {delta!r}",
+                        "success": False}
+            target = round(float(previous) + step, 1)
+            low, high, unit = self._setpoint_band(dev, kind)
+            if not (low <= target <= high):
+                return {"error": f"Moving the {kind} setpoint by {step:+g} would take it from "
+                                 f"{previous:g} to {target:g}, outside "
+                                 f"{self._band_text(low, high, unit)}; nothing was changed",
+                        "success": False}
+            command = self._SETPOINT_KINDS[kind][2 if step > 0 else 3]
+            getattr(indigo.thermostat, command)(device_id, delta=abs(step))
+            reply = self._confirmed_reply(device_id, attr, previous, target,
+                                          f"the {kind} setpoint")
+            reply.update({"delta": step, "unit": unit})
+            self.logger.info(f"Adjusted {kind} setpoint '{reply['device_name']}': "
+                             f"{previous} -> {reply['current']}")
+            return reply
         except Exception as e:
-            self.logger.error(f"Error adjusting cool setpoint on {device_id}: {e}")
+            self.logger.error(f"Error adjusting {kind} setpoint on {device_id}: {e}")
             return {"error": str(e), "success": False}
 
+    def set_heat_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
+        """Set heat setpoint on a thermostat device, in the device's own unit."""
+        return self._set_setpoint(device_id, "heat", setpoint)
+
+    def set_cool_setpoint(self, device_id: int, setpoint: float) -> Dict[str, Any]:
+        """Set cool setpoint on a thermostat device, in the device's own unit."""
+        return self._set_setpoint(device_id, "cool", setpoint)
+
     def increase_cool_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
-        """Increase the cool setpoint by delta degrees Celsius."""
-        return self._adjust_cool_setpoint(device_id, abs(float(delta)))
+        """Raise the cool setpoint by delta degrees."""
+        return self._nudge_setpoint(device_id, "cool", abs(float(delta)))
 
     def decrease_cool_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
-        """Decrease the cool setpoint by delta degrees Celsius."""
-        return self._adjust_cool_setpoint(device_id, -abs(float(delta)))
+        """Lower the cool setpoint by delta degrees."""
+        return self._nudge_setpoint(device_id, "cool", -abs(float(delta)))
+
+    def increase_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Raise the heat setpoint by delta degrees."""
+        return self._nudge_setpoint(device_id, "heat", abs(float(delta)))
+
+    def decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
+        """Lower the heat setpoint by delta degrees."""
+        return self._nudge_setpoint(device_id, "heat", -abs(float(delta)))
 
     def set_hvac_mode(self, device_id: int, mode: str) -> Dict[str, Any]:
         """Set HVAC mode on a thermostat device."""
@@ -789,66 +881,93 @@ class IndigoDataProvider:
             return {"error": str(e), "success": False}
 
     def lock_device(self, device_id: int) -> Dict[str, Any]:
-        """Lock a lock device."""
+        """Lock a lock device. For a lock, onState True means locked."""
         try:
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found", "success": False}
-            dev = indigo.devices[device_id]
-            previous = dev.onState  # locked = onState True for lock devices
+            previous = indigo.devices[device_id].onState
             indigo.device.lock(device_id)
-            dev = indigo.devices[device_id]
-            self.logger.info(f"Locked '{dev.name}'")
-            return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": dev.onState}
+            reply = self._confirmed_reply(device_id, "onState", previous, True, "the lock")
+            self.logger.info(f"Lock command sent to '{reply['device_name']}'"
+                             + ("" if reply["confirmed"] else "; not yet confirmed locked"))
+            return reply
         except Exception as e:
             self.logger.error(f"Error locking device {device_id}: {e}")
             return {"error": str(e), "success": False}
 
-    def unlock_device(self, device_id: int, code: str = None) -> Dict[str, Any]:
-        """Unlock a lock device."""
+    def unlock_device(self, device_id: int) -> Dict[str, Any]:
+        """Unlock a lock device.
+
+        Takes no PIN: indigo.device.unlock accepts only delay and duration, so
+        the code parameter this used to pass raised a TypeError on every call
+        that supplied one.
+        """
         try:
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found", "success": False}
-            dev = indigo.devices[device_id]
-            previous = dev.onState
-            if code:
-                indigo.device.unlock(device_id, code=code)
-            else:
-                indigo.device.unlock(device_id)
-            dev = indigo.devices[device_id]
-            current = dev.onState  # locked = onState True for lock devices
-            # Log the observed transition rather than asserting success
-            # unconditionally — a rejected code leaves the lock locked.
-            # (The PIN code is deliberately never logged.)
-            if current != previous:
-                self.logger.info(f"Unlock command sent to '{dev.name}' (locked -> unlocked)")
-            else:
-                self.logger.info(f"Unlock command sent to '{dev.name}'; no state change observed")
-            return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current}
+            previous = indigo.devices[device_id].onState
+            indigo.device.unlock(device_id)
+            reply = self._confirmed_reply(device_id, "onState", previous, False, "the lock")
+            self.logger.info(f"Unlock command sent to '{reply['device_name']}'"
+                             + ("" if reply["confirmed"] else "; not yet confirmed unlocked"))
+            return reply
         except Exception as e:
             self.logger.error(f"Error unlocking device {device_id}: {e}")
             return {"error": str(e), "success": False}
 
+    # Indigo's colour levels run 0-100 like brightness, whiteTemperature is in
+    # Kelvin (official docs, dimmer setColorLevels). Callers speak RGB 0-255.
+    WHITE_TEMPERATURE_MIN_K = 1200
+    WHITE_TEMPERATURE_MAX_K = 15000
+
+    @staticmethod
+    def _number_in(value: Any, low: float, high: float, name: str):
+        """(float, None) when value is a number in [low, high], else (None, error)."""
+        if isinstance(value, bool):
+            return None, f"{name} must be a number, got {value!r}"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None, f"{name} must be a number, got {value!r}"
+        if number != number or not (low <= number <= high):
+            return None, f"{name} must be {low:g}-{high:g}, got {value!r}"
+        return number, None
+
     def set_color(self, device_id: int, red: int, green: int, blue: int,
                   white: int = None, white_temperature: int = None) -> Dict[str, Any]:
-        """Set colour levels on an RGB/RGBW dimmer (values 0-255)."""
+        """Set colour on an RGB/RGBW dimmer.
+
+        red/green/blue are 0-255 and are scaled to Indigo's 0-100 levels;
+        white is already 0-100; white_temperature is Kelvin, 1200-15000. Until
+        3.0.1 this passed rLevel/gLevel/bLevel at 0-255, names setColorLevels
+        does not take.
+        """
         try:
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found", "success": False}
             dev = indigo.devices[device_id]
-            kwargs = {
-                "rLevel": max(0, min(255, int(red))),
-                "gLevel": max(0, min(255, int(green))),
-                "bLevel": max(0, min(255, int(blue))),
-            }
+            kwargs: Dict[str, Any] = {}
+            for name, value, key in (("red", red, "redLevel"), ("green", green, "greenLevel"),
+                                     ("blue", blue, "blueLevel")):
+                number, err = self._number_in(value, 0, 255, name)
+                if err:
+                    return {"error": err, "success": False}
+                kwargs[key] = round(number / 255 * 100, 2)
             if white is not None:
-                kwargs["whiteLevel"] = max(0, min(255, int(white)))
+                number, err = self._number_in(white, 0, 100, "white")
+                if err:
+                    return {"error": err, "success": False}
+                kwargs["whiteLevel"] = round(number, 2)
             if white_temperature is not None:
-                kwargs["whiteTemperature"] = int(white_temperature)
+                number, err = self._number_in(white_temperature, self.WHITE_TEMPERATURE_MIN_K,
+                                              self.WHITE_TEMPERATURE_MAX_K, "white_temperature")
+                if err:
+                    return {"error": err, "success": False}
+                kwargs["whiteTemperature"] = int(round(number))
             indigo.dimmer.setColorLevels(device_id, **kwargs)
             self.logger.info(f"Set colour '{dev.name}' -> R{red} G{green} B{blue}")
-            return {"success": True, "device_name": dev.name, **kwargs}
+            return {"success": True, "device_name": dev.name,
+                    "requested_rgb": [red, green, blue], "levels_sent": kwargs}
         except Exception as e:
             self.logger.error(f"Error setting colour on {device_id}: {e}")
             return {"error": str(e), "success": False}
@@ -858,17 +977,20 @@ class IndigoDataProvider:
         try:
             if device_id not in indigo.devices:
                 return {"error": f"Device {device_id} not found", "success": False}
+            number, err = self._number_in(speed, 0, 100, "level")
+            if err:
+                return {"error": err, "success": False}
+            speed_val = int(round(number))
             dev = indigo.devices[device_id]
-            speed_val = max(0, min(100, int(speed)))
-            previous = dev.speedLevel if hasattr(dev, 'speedLevel') else None
+            if not hasattr(dev, "speedLevel"):
+                return {"error": f"Device '{dev.name}' has no speed level", "success": False}
+            previous = dev.speedLevel
             indigo.speedcontrol.setSpeedLevel(device_id, value=speed_val)
-            dev = indigo.devices[device_id]
-            # Report None (not the echoed request) when the device cannot confirm.
-            confirmed = hasattr(dev, 'speedLevel')
-            current = dev.speedLevel if confirmed else None
-            self.logger.info(f"Set fan speed '{dev.name}': {previous} -> {current}%")
-            return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current, "confirmed": confirmed}
+            reply = self._confirmed_reply(device_id, "speedLevel", previous, speed_val,
+                                          "the speed level")
+            self.logger.info(f"Set fan speed '{reply['device_name']}': "
+                             f"{previous} -> {reply['current']}%")
+            return reply
         except Exception as e:
             self.logger.error(f"Error setting fan speed on {device_id}: {e}")
             return {"error": str(e), "success": False}
@@ -884,58 +1006,6 @@ class IndigoDataProvider:
             return {"success": True, "device_name": dev.name}
         except Exception as e:
             self.logger.error(f"Error requesting status for {device_id}: {e}")
-            return {"error": str(e), "success": False}
-
-    def increase_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
-        """Increase the heat setpoint by delta degrees Celsius."""
-        try:
-            if device_id not in indigo.devices:
-                return {"error": f"Device {device_id} not found", "success": False}
-            dev = indigo.devices[device_id]
-            previous = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else None
-            if previous is None:
-                return {"error": f"Device '{dev.name}' has no heat setpoint", "success": False}
-            new_setpoint = round(float(previous) + float(delta), 1)
-            # Clamp the adjusted value to the sane heat band before sending.
-            new_setpoint = max(self.SETPOINT_HEAT_MIN_C,
-                               min(self.SETPOINT_HEAT_MAX_C, new_setpoint))
-            indigo.thermostat.setHeatSetpoint(device_id, value=new_setpoint)
-            dev = indigo.devices[device_id]
-            # Report None (not the echoed request) when the device cannot confirm.
-            confirmed = hasattr(dev, 'heatSetpoint')
-            current = dev.heatSetpoint if confirmed else None
-            self.logger.info(f"Increased heat setpoint '{dev.name}': {previous} -> {current} degC")
-            return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current, "delta": delta,
-                    "confirmed": confirmed}
-        except Exception as e:
-            self.logger.error(f"Error increasing heat setpoint on {device_id}: {e}")
-            return {"error": str(e), "success": False}
-
-    def decrease_heat_setpoint(self, device_id: int, delta: float = 0.5) -> Dict[str, Any]:
-        """Decrease the heat setpoint by delta degrees Celsius."""
-        try:
-            if device_id not in indigo.devices:
-                return {"error": f"Device {device_id} not found", "success": False}
-            dev = indigo.devices[device_id]
-            previous = dev.heatSetpoint if hasattr(dev, 'heatSetpoint') else None
-            if previous is None:
-                return {"error": f"Device '{dev.name}' has no heat setpoint", "success": False}
-            new_setpoint = round(float(previous) - float(delta), 1)
-            # Clamp the adjusted value to the sane heat band before sending.
-            new_setpoint = max(self.SETPOINT_HEAT_MIN_C,
-                               min(self.SETPOINT_HEAT_MAX_C, new_setpoint))
-            indigo.thermostat.setHeatSetpoint(device_id, value=new_setpoint)
-            dev = indigo.devices[device_id]
-            # Report None (not the echoed request) when the device cannot confirm.
-            confirmed = hasattr(dev, 'heatSetpoint')
-            current = dev.heatSetpoint if confirmed else None
-            self.logger.info(f"Decreased heat setpoint '{dev.name}': {previous} -> {current} degC")
-            return {"success": True, "device_name": dev.name,
-                    "previous": previous, "current": current, "delta": delta,
-                    "confirmed": confirmed}
-        except Exception as e:
-            self.logger.error(f"Error decreasing heat setpoint on {device_id}: {e}")
             return {"error": str(e), "success": False}
 
     def get_device_by_name(self, name: str) -> Optional[Dict[str, Any]]:

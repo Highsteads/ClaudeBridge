@@ -10,7 +10,11 @@
 from ..registry import tool
 from ._schema import (AUTOMATION_ID, AUTOMATION_KIND, AUTOMATION_KINDS, bad_choice, boolean,
                       coerce_bool, enum, id_or_name, number, refuse, string)
+from ..tools.schedule_control.schedule_control_handler import (_resolve_action_group,
+                                                                _resolve_schedule,
+                                                                _resolve_trigger)
 from .devices import resolve_device
+
 
 def _check_kind(kind, allowed=AUTOMATION_KINDS):
     return None if kind in allowed else bad_choice("kind", kind, allowed)
@@ -59,7 +63,7 @@ def get_automation(ctx, kind, id, include_scripts=True):
     if refusal:
         return refusal
     return ctx.automation_detail_handler.get_details(
-        kind, id, include_scripts=coerce_bool(include_scripts))
+        kind, id, include_scripts=coerce_bool(include_scripts, default=True))
 
 
 _DEPENDENCY_KINDS = ("device", "variable") + AUTOMATION_KINDS
@@ -115,8 +119,8 @@ def find_automation_references(ctx, entity_type, entity_id, include_server_check
                                include_scripts=True):
     return ctx.automation_detail_handler.find_automation_references(
         entity_type, entity_id,
-        include_server_check=coerce_bool(include_server_check),
-        include_scripts=coerce_bool(include_scripts))
+        include_server_check=coerce_bool(include_server_check, default=True),
+        include_scripts=coerce_bool(include_scripts, default=True))
 
 
 @tool("investigate_event", scope="read",
@@ -137,8 +141,14 @@ def find_automation_references(ctx, entity_type, entity_id, include_server_check
           "search_days": number("How many days of logs to search for the target event "
                                 "(default 2, max 14)"),
       })
-def investigate_event(ctx, device_id=None, search_text=None, around_time=None, occurrence=1,
-                      lookback_seconds=60, lookahead_seconds=5, search_days=2):
+def investigate_event(ctx, device_id=None, search_text=None, around_time=None, occurrence=None,
+                      lookback_seconds=None, lookahead_seconds=None, search_days=None):
+    # A null means "not given" and takes the documented default. Some clients
+    # send every property, and int(None) used to fail the whole call.
+    occurrence = 1 if occurrence is None else occurrence
+    lookback_seconds = 60 if lookback_seconds is None else lookback_seconds
+    lookahead_seconds = 5 if lookahead_seconds is None else lookahead_seconds
+    search_days = 2 if search_days is None else search_days
     return ctx.automation_detail_handler.investigate_event(
         device_id=device_id, search_text=search_text, around_time=around_time,
         occurrence=occurrence, lookback_seconds=lookback_seconds,
@@ -149,11 +159,20 @@ def investigate_event(ctx, device_id=None, search_text=None, around_time=None, o
 
 @tool("action_execute_group", scope="write",
       invalidates={"action_group", "device", "variable"},
-      description="Execute an action group",
-      properties={"action_group_id": id_or_name("The ID of the action group"),
+      description="Execute an action group, by ID or exact name",
+      properties={"action_group_id": id_or_name("The action group's ID, or its exact name "
+                                                "(case-insensitive)"),
                   "delay": number("Optional delay in seconds")},
       required=["action_group_id"])
 def action_execute_group(ctx, action_group_id, delay=None):
+    # The handler takes an integer id only, so a name used to come back as
+    # "action_group_id must be an integer". Resolve it here, by exact name.
+    if isinstance(action_group_id, str) and not action_group_id.strip().lstrip("-").isdigit():
+        group = _resolve_action_group(action_group_id)
+        if group is None:
+            return refuse(f"No action group is called '{action_group_id}'. Give its ID "
+                          f"(list_action_groups) or its exact name.")
+        action_group_id = group.id
     return ctx.action_control_handler.execute(action_group_id, delay)
 
 
@@ -164,9 +183,9 @@ def action_execute_group(ctx, action_group_id, delay=None):
                   "ignore_conditions": boolean("Bypass the schedule's conditions (default "
                                                "false)")},
       required=["schedule_id"])
-def execute_schedule_now(ctx, schedule_id, ignore_conditions=False):
+def execute_schedule_now(ctx, schedule_id, ignore_conditions=None):
     return ctx.extended_tools_handler.execute_schedule_now(
-        schedule_id, ignore_conditions=ignore_conditions)
+        schedule_id, ignore_conditions=coerce_bool(ignore_conditions, default=False))
 
 
 @tool("fire_trigger", scope="write", invalidates={"device", "variable"},
@@ -205,6 +224,24 @@ def fire_indigo_event(ctx, name, data=None, source="claude"):
 
 # ── Changing ─────────────────────────────────────────────────────────────────
 
+def _bad_seconds(name, value):
+    """A refusal when an optional seconds argument is not a whole number >= 0.
+    Indigo's enable() takes whole seconds, and int() of 2.7 or -5 quietly sent
+    something other than what was asked."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return refuse(f"set_enabled: {name} must be a number of seconds, got {value!r}")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return refuse(f"set_enabled: {name} must be a number of seconds, got {value!r}")
+    if number < 0 or not number.is_integer():
+        return refuse(f"set_enabled: {name} must be a whole number of seconds, 0 or more, "
+                      f"got {value!r}")
+    return None
+
+
 @tool("set_enabled", scope="write", invalidates={"trigger", "schedule"},
       description=("Enable or disable a trigger or schedule, by id or name. Optionally delay "
                    "the change (delay_seconds) and/or revert it automatically after "
@@ -222,6 +259,14 @@ def set_enabled(ctx, kind, id, enabled, delay_seconds=None, duration_seconds=Non
     refusal = _check_kind(kind, ("trigger", "schedule"))
     if refusal:
         return refusal
+    # enabled is required, and a null is not "false": coerce_bool(None) read
+    # as False, so a client sending every property disabled the automation.
+    if enabled is None:
+        return refuse("set_enabled: enabled is required — true to enable, false to disable")
+    for name, value in (("delay_seconds", delay_seconds), ("duration_seconds", duration_seconds)):
+        bad = _bad_seconds(name, value)
+        if bad:
+            return bad
     sc = ctx.schedule_control_handler
     verb = "enable" if coerce_bool(enabled) else "disable"
     return getattr(sc, f"{verb}_{kind}")(id, delay_seconds=delay_seconds,
@@ -265,15 +310,16 @@ def delete_automation(ctx, kind, id):
 @tool("remove_delayed_actions", scope="admin", invalidates={"device", "schedule"},
       description=("Cancel pending delayed actions. kind='device' cancels them for ONE device "
                    "(e.g. a queued auto-off from device_control duration), leaving others alone; "
-                   "kind='schedule' for one schedule; kind='all' removes every pending delayed "
-                   "action on the server — confirm with the user first."),
+                   "kind='schedule' for one schedule; kind='trigger' for one trigger; "
+                   "kind='all' removes every pending delayed action on the server — confirm "
+                   "with the user first."),
       properties={
-          "kind": enum(["device", "schedule", "all"], "What to clear"),
-          "id": id_or_name("Device id or name, or schedule id (not used for 'all')"),
+          "kind": enum(["device", "schedule", "trigger", "all"], "What to clear"),
+          "id": id_or_name("Device, schedule or trigger ID, or its name (not used for 'all')"),
       },
       required=["kind"])
 def remove_delayed_actions(ctx, kind, id=None):
-    refusal = _check_kind(kind, ("device", "schedule", "all"))
+    refusal = _check_kind(kind, ("device", "schedule", "trigger", "all"))
     if refusal:
         return refusal
     ext = ctx.extended_tools_handler
@@ -291,4 +337,10 @@ def remove_delayed_actions(ctx, kind, id=None):
         if isinstance(result, dict):
             result.update(match)
         return result
-    return ext.schedule_remove_delayed_actions(id)
+    resolver = _resolve_schedule if kind == "schedule" else _resolve_trigger
+    elem = resolver(id)
+    if elem is None:
+        return refuse(f"No {kind} matches '{id}' — give its ID or its exact name")
+    if kind == "schedule":
+        return ext.schedule_remove_delayed_actions(elem.id)
+    return ext.trigger_remove_delayed_actions(elem.id)

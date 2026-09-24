@@ -1,7 +1,8 @@
 """
 Frozen inventory of every public callable in the indigo.* command namespaces,
 captured live so audit_api_coverage can detect API drift after an Indigo
-upgrade. Regenerate via the snippet in audit_api_coverage's docstring.
+upgrade. To regenerate, see audit_api_coverage in system_tools_handler.py:
+its walk over the live namespaces IS the generator.
 """
 
 # Generated live against Indigo 2025.2.0 on 10-06-2026 — 362 namespace entries,

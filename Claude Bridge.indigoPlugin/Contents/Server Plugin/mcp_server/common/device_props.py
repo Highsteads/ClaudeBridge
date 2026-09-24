@@ -26,7 +26,20 @@
 #
 # RULE: never read a foreign device's props directly. Call device_props(dev).
 
-from typing import Any, Dict, Optional, Tuple
+import os
+import plistlib
+import re
+import threading
+import time
+import xml.etree.ElementTree as ET
+from typing import Any, Dict, FrozenSet, Optional, Tuple
+
+try:
+    import indigo
+except ImportError:
+    pass
+
+from ..security.secret_redactor import is_credential_name
 
 # Property keys that plugins commonly use to hold a network address. Checked in
 # order, after the native `dev.address` attribute. Many plugins leave the native
@@ -136,8 +149,142 @@ def device_address(dev) -> str:
     return ""
 
 
+# ── Credential masking ───────────────────────────────────────────────────────
+#
+# A device's props can hold its plugin's credentials: Email+ keeps the SMTP
+# password in serverPassword, UniFiHealth the controller password in password.
+# Both are marked secure="true" in their Devices.xml, which the Indigo client
+# honours and a raw dict(dev) does not — every read-scope device tool returned
+# them in clear. Masked here, where props leave the plugin.
+
+MASK = "********"
+
+# Names the shared credential test misses. It already catches pin, pass, key,
+# token and secret; these are the usual spellings it does not.
+_EXTRA_CREDENTIAL_NAME = re.compile(r"(pwd|psk|passcode|passphrase)", re.IGNORECASE)
+
+# The dict(dev) keys that carry props: the owner's view, the repaired read,
+# the shared set, and globalProps, which holds EVERY plugin's props by id.
+_PROP_BLOCKS = ("pluginProps", "ownerProps", "sharedProps")
+
+_SECURE_LOCK = threading.Lock()
+_SECURE_BY_PATH: Dict[str, Tuple[float, FrozenSet[str]]] = {}
+_DEVICES_XML_BY_PLUGIN: Dict[str, str] = {}
+_PLUGIN_SCAN_AT = 0.0
+_PLUGIN_RESCAN_SECONDS = 300.0
+
+# Test hook: a folder of .indigoPlugin bundles to use instead of Indigo's own.
+PLUGINS_DIR_OVERRIDE: Optional[str] = None
+
+
+def _is_credential_key(name: Any) -> bool:
+    text = str(name or "")
+    return is_credential_name(text) or bool(_EXTRA_CREDENTIAL_NAME.search(text))
+
+
+def _plugins_dir() -> Optional[str]:
+    if PLUGINS_DIR_OVERRIDE:
+        return PLUGINS_DIR_OVERRIDE
+    try:
+        base = indigo.server.getInstallFolderPath()
+    except Exception:
+        return None
+    return os.path.join(base, "Plugins") if isinstance(base, str) and base else None
+
+
+def _devices_xml_for(plugin_id: str) -> Optional[str]:
+    """Path of the owning plugin's Devices.xml, found by bundle id. The map is
+    rebuilt at most every _PLUGIN_RESCAN_SECONDS, when an id is missing."""
+    global _PLUGIN_SCAN_AT
+    path = _DEVICES_XML_BY_PLUGIN.get(plugin_id)
+    if path is not None or time.monotonic() - _PLUGIN_SCAN_AT < _PLUGIN_RESCAN_SECONDS:
+        return path
+    _PLUGIN_SCAN_AT = time.monotonic()
+    folder = _plugins_dir()
+    if not folder or not os.path.isdir(folder):
+        return None
+    found: Dict[str, str] = {}
+    for entry in os.listdir(folder):
+        if not entry.endswith(".indigoPlugin"):
+            continue
+        contents = os.path.join(folder, entry, "Contents")
+        try:
+            with open(os.path.join(contents, "Info.plist"), "rb") as fh:
+                bundle_id = plistlib.load(fh).get("CFBundleIdentifier")
+        except Exception:
+            continue
+        xml_path = os.path.join(contents, "Server Plugin", "Devices.xml")
+        if bundle_id and os.path.isfile(xml_path):
+            found[str(bundle_id)] = xml_path
+    _DEVICES_XML_BY_PLUGIN.clear()
+    _DEVICES_XML_BY_PLUGIN.update(found)
+    return found.get(plugin_id)
+
+
+def _secure_fields(plugin_id: str) -> FrozenSet[str]:
+    """Field ids the plugin's Devices.xml marks secure="true", cached by the
+    file's path and mtime. Any failure gives an empty set: name-based masking
+    still applies, so a broken lookup never un-masks anything."""
+    if not plugin_id:
+        return frozenset()
+    try:
+        with _SECURE_LOCK:
+            path = _devices_xml_for(plugin_id)
+            if not path:
+                return frozenset()
+            mtime = os.stat(path).st_mtime
+            cached = _SECURE_BY_PATH.get(path)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            ids = frozenset(
+                str(el.get("id")) for el in ET.parse(path).iter()
+                if el.get("id") and str(el.get("secure", "")).strip().lower() == "true")
+            _SECURE_BY_PATH[path] = (mtime, ids)
+            return ids
+    except Exception:
+        return frozenset()
+
+
+def _masked(value: Any) -> bool:
+    """Worth masking: a non-empty string or a number (a PIN can be an int)."""
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, str):
+        return value != ""
+    return isinstance(value, (int, float))
+
+
+def redact_props(props: Any, plugin_id: str = "") -> Any:
+    """A copy of one plugin's props with credential values replaced by MASK.
+
+    A value is masked when its key reads as a credential name, or when the
+    owning plugin's Devices.xml declares that field secure."""
+    if not isinstance(props, dict):
+        return props
+    secure = _secure_fields(plugin_id)
+    return {k: (MASK if _masked(v) and (_is_credential_key(k) or str(k) in secure) else v)
+            for k, v in props.items()}
+
+
+def redact_device_data(data: Dict[str, Any], plugin_id: str = "") -> Dict[str, Any]:
+    """Mask credentials in every props block of a serialised device, in place."""
+    for block in _PROP_BLOCKS:
+        if isinstance(data.get(block), dict):
+            data[block] = redact_props(data[block], plugin_id)
+    gp = data.get("globalProps")
+    if gp is not None:
+        try:
+            plain = {str(pid): _as_plain_dict(scoped) for pid, scoped in dict(gp).items()}
+            data["globalProps"] = {pid: redact_props(scoped, pid) if scoped is not None else None
+                                   for pid, scoped in plain.items()}
+        except Exception:
+            data["globalProps"] = {}
+    return data
+
+
 def device_dict(dev) -> Dict[str, Any]:
-    """dict(dev), with `pluginProps` repaired and its source recorded.
+    """dict(dev), with `pluginProps` repaired and its source recorded, and
+    credential values masked (see redact_device_data).
 
     Drop-in replacement for `dict(dev)` anywhere a device is serialised for a
     tool response or the entity index. Adds `pluginPropsSource` so an empty
@@ -151,6 +298,7 @@ def device_dict(dev) -> Dict[str, Any]:
     props, source = device_props_with_source(dev)
     data["pluginProps"] = props
     data["pluginPropsSource"] = source
+    redact_device_data(data, str(_safe_getattr(dev, "pluginId") or ""))
 
     # Keep the derived address alongside the native one. Callers auditing
     # addresses should use this rather than `address`.

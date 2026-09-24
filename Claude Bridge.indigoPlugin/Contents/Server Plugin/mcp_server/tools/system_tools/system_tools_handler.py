@@ -916,8 +916,9 @@ class SystemToolsHandler(BaseToolHandler):
         """Diff the LIVE indigo.* command namespaces against the frozen baseline
         captured at build time. After an Indigo upgrade this reports any new
         callables (candidate tools Claude Bridge hasn't surfaced yet) and any
-        removals (tools that may now be broken). Regenerate the baseline by
-        re-running the walker in api_baseline.py's header after an upgrade."""
+        removals (tools that may now be broken). To regenerate the baseline,
+        run this method's namespace walk in execute_indigo_python and paste
+        sorted(live) into api_baseline.API_BASELINE."""
         self.log_incoming_request("audit_api_coverage", {})
         try:
             from .api_baseline import API_BASELINE

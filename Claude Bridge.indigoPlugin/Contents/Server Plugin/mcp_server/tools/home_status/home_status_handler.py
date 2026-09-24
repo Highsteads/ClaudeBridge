@@ -12,8 +12,8 @@ Provides a single aggregated home status snapshot by pulling together:
 Tools:
   - home_status()         : full structured snapshot
   - energy_status()       : SigenEnergyManager states only
-  - heating_status()      : RAMSES + Evohome zone states
-  - security_status()     : all contact/motion sensors
+  - heating_status()      : every thermostat device, with whether it is heating
+  - security_status()     : open contacts, unlocked locks, motion and alarms
 """
 
 import logging
@@ -31,6 +31,40 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
     from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common.battery import battery_pct as _battery_pct
+from ...common import device_roles
+
+
+def _security_snapshot(devices) -> Dict[str, List[Dict[str, Any]]]:
+    """Open contacts, unlocked locks, active motion and active alarms, judged
+    by what each device IS (common/device_roles.py), not by its name."""
+    snap: Dict[str, List[Dict[str, Any]]] = {
+        "open_contacts": [], "unlocked_locks": [], "active_motion": [], "active_alerts": []}
+    for dev in devices:
+        if not getattr(dev, "enabled", True):
+            continue
+        on = device_roles.on_state(dev)
+        if on is None:
+            continue
+        entry = {"id": dev.id, "name": dev.name}
+        if device_roles.is_lock(dev):
+            if not on:                       # a lock's onState True means LOCKED
+                snap["unlocked_locks"].append(entry)
+            continue
+        role = device_roles.sensor_role(dev)
+        if role == "contact" and on:
+            snap["open_contacts"].append(entry)
+        elif role == "motion" and on:
+            snap["active_motion"].append(entry)
+        elif role == "alarm" and on:
+            snap["active_alerts"].append(entry)
+    return snap
+
+
+def _thermostats(devices) -> List[Any]:
+    """Every enabled thermostat, whichever plugin owns it. Selected by class:
+    picking by plugin-id words missed Z-Wave, ecobee and Nest thermostats."""
+    return [d for d in devices
+            if getattr(d, "enabled", True) and device_roles.is_thermostat(d)]
 
 
 def _first(states, *keys):
@@ -155,18 +189,20 @@ class HomeStatusHandler(BaseToolHandler):
                         pass
 
                 # Grouping
+                # By device class, not plugin-id words: "shelly" put every
+                # Shelly plug under energy, and a dimmer from any other plugin
+                # was never a light.
+                cls = type(dev).__name__
                 pid = dev.pluginId.lower()
-                if any(x in pid for x in ("hue", "zigbee", "z-wave", "zwave")) \
-                        and hasattr(dev, "brightness"):
+                if cls == "DimmerDevice":
                     groups["lights"].append(_dev_summary(dev))
-                elif any(x in pid for x in ("ramses", "evohome", "homeassistant")):
+                elif cls == "ThermostatDevice":
                     groups["heating"].append(_dev_summary(dev))
-                elif any(x in pid for x in ("sigenergy", "energy", "shelly", "octopus")):
+                elif any(x in pid for x in ("sigenergy", "octopus")):
                     groups["energy"].append(_dev_summary(dev))
-                elif any(x in pid for x in ("sensor", "motion", "contact", "leak",
-                                             "smoke", "zwave")):
+                elif cls == "SensorDevice":
                     groups["sensors"].append(_dev_summary(dev))
-                elif hasattr(dev, "onState") and not hasattr(dev, "brightness"):
+                elif cls == "RelayDevice":
                     groups["switches"].append(_dev_summary(dev))
                 else:
                     groups["other"].append(_dev_summary(dev))
@@ -360,14 +396,7 @@ class HomeStatusHandler(BaseToolHandler):
             # ── Heating section ────────────────────────────────────────────
             if "heating" in active:
                 zones: List[Dict] = []
-                for dev in all_devices:
-                    if not dev.enabled:
-                        continue
-                    if not any(
-                        x in dev.pluginId.lower()
-                        for x in ("homeassistant", "ramses", "evohome", "thermostat")
-                    ):
-                        continue
+                for dev in _thermostats(all_devices):
                     # See _first: a room genuinely at 0.0 C, or a setpoint of 0
                     # on an off zone, must not read as "no sensor".
                     temp  = _first(dev.states, "temperatureInput1",
@@ -375,17 +404,15 @@ class HomeStatusHandler(BaseToolHandler):
                     setpt = _first(dev.states, "heatSetpoint",
                                    "setpointHeat", "setpoint")
                     if temp is not None or setpt is not None:
-                        zones.append({"name": dev.name, "temp": temp, "setpoint": setpt})
+                        zones.append({"name": dev.name, "temp": temp, "setpoint": setpt,
+                                      "heating": device_roles.thermostat_is_heating(dev)})
 
                 lines.append("## Heating")
                 if zones:
-                    def _is_active(z):
-                        try:
-                            return float(z["setpoint"] or 0) > 5.5
-                        except (ValueError, TypeError):
-                            return False
-
-                    active_z = [z for z in zones if _is_active(z)]
+                    # Heating means heatIsOn, or a setpoint above the room. The
+                    # old "setpoint > 5.5" test counted every idle RAMSES zone
+                    # at its 8 degree frost setpoint as heating (12 of 12).
+                    active_z = [z for z in zones if z["heating"]]
                     lines.append(
                         f"There are **{len(zones)} zones** monitored, "
                         f"of which **{len(active_z)} are actively heating**."
@@ -402,30 +429,21 @@ class HomeStatusHandler(BaseToolHandler):
 
             # ── Security section ───────────────────────────────────────────
             if "security" in active:
-                open_contacts: List[str] = []
-                active_motion: List[str] = []
-                active_alarms: List[str] = []
-                for dev in all_devices:
-                    if not dev.enabled:
-                        continue
-                    name_l = dev.name.lower()
-                    try:
-                        on = dev.onState
-                    except AttributeError:
-                        continue
-                    if any(x in name_l for x in ("door", "window", "contact", "reed")) and on:
-                        open_contacts.append(dev.name)
-                    elif any(x in name_l for x in ("motion", "pir", "presence", "occupancy")) and on:
-                        active_motion.append(dev.name)
-                    elif any(x in name_l for x in ("leak", "water", "smoke", "co ")) and on:
-                        active_alarms.append(dev.name)
+                snap = _security_snapshot(all_devices)
+                open_contacts = [e["name"] for e in snap["open_contacts"]]
+                unlocked      = [e["name"] for e in snap["unlocked_locks"]]
+                active_motion = [e["name"] for e in snap["active_motion"]]
+                active_alarms = [e["name"] for e in snap["active_alerts"]]
 
                 lines.append("## Security")
-                if not open_contacts and not active_motion and not active_alarms:
+                if not open_contacts and not unlocked and not active_motion and not active_alarms:
                     lines.append(
-                        "All doors and windows are closed. No motion or alarms detected."
+                        "All doors and windows are closed and every lock is locked. "
+                        "No motion or alarms detected."
                     )
                 else:
+                    if unlocked:
+                        lines.append(f"**Unlocked**: {', '.join(unlocked)}.")
                     if open_contacts:
                         lines.append(
                             f"**{len(open_contacts)} open contact(s)**: "
@@ -495,7 +513,16 @@ class HomeStatusHandler(BaseToolHandler):
         """Return SigenEnergyManager device states as an energy snapshot."""
         self.log_incoming_request("energy_status", {})
         try:
-            result = {"success": True, **self._sigen_snapshot()}
+            snap = self._sigen_snapshot()
+            result = {"success": True, **snap}
+            # Section keys are the device types with "sigenergy" removed.
+            if not any(k in snap for k in ("Inverter", "Battery", "batteryManager")):
+                # This view reads SigenEnergyManager devices only; say so
+                # rather than hand another house an unexplained empty answer.
+                result["note"] = ("No SigenEnergyManager devices found. This section "
+                                  "reads that plugin's inverter, battery and manager "
+                                  "devices; for any other meter use get_device_by_id "
+                                  "or device_history.")
             self.log_tool_outcome("energy_status", True, "Energy snapshot complete")
             return result
         except Exception as exc:
@@ -538,14 +565,7 @@ class HomeStatusHandler(BaseToolHandler):
         self.log_incoming_request("heating_status", {})
         try:
             zones = []
-            for did in indigo.devices:
-                dev = indigo.devices[did]
-                if not dev.enabled:
-                    continue
-                pid = dev.pluginId.lower()
-                if not any(x in pid for x in ("homeassistant", "ramses", "evohome",
-                                               "thermostat")):
-                    continue
+            for dev in _thermostats(indigo.devices[did] for did in indigo.devices):
                 zone: Dict[str, Any] = {
                     "id":     dev.id,
                     "name":   dev.name,
@@ -557,6 +577,7 @@ class HomeStatusHandler(BaseToolHandler):
                     val = dev.states.get(state_key)
                     if val is not None:
                         zone[state_key] = val
+                zone["heating"] = device_roles.thermostat_is_heating(dev)
                 zones.append(zone)
 
             zones.sort(key=lambda x: x["name"].lower())
@@ -578,48 +599,15 @@ class HomeStatusHandler(BaseToolHandler):
         """Return all contact, motion, leak, and smoke sensor states."""
         self.log_incoming_request("security_status", {})
         try:
-            open_contacts = []
-            active_motion = []
-            alerts        = []
-
-            for did in indigo.devices:
-                dev = indigo.devices[did]
-                if not dev.enabled:
-                    continue
-                name_l = dev.name.lower()
-                is_contact = any(x in name_l for x in
-                                 ("door", "window", "contact", "reed"))
-                is_motion  = any(x in name_l for x in
-                                 ("motion", "pir", "presence", "occupancy"))
-                is_alert   = any(x in name_l for x in
-                                 ("leak", "water", "smoke", "co ", "carbon"))
-
-                try:
-                    on = dev.onState
-                except AttributeError:
-                    continue
-
-                if is_contact and on:
-                    open_contacts.append({"id": dev.id, "name": dev.name})
-                elif is_motion and on:
-                    active_motion.append({"id": dev.id, "name": dev.name})
-                elif is_alert and on:
-                    alerts.append({"id": dev.id, "name": dev.name})
-
+            snap = _security_snapshot(indigo.devices[did] for did in indigo.devices)
             result = {
-                "success":        True,
-                "open_contacts":  open_contacts,
-                "active_motion":  active_motion,
-                "active_alerts":  alerts,
-                "summary": {
-                    "open_contacts": len(open_contacts),
-                    "active_motion": len(active_motion),
-                    "active_alerts": len(alerts),
-                },
+                "success": True,
+                **snap,
+                "summary": {k: len(v) for k, v in snap.items()},
             }
             self.log_tool_outcome("security_status", True,
-                                  f"{len(open_contacts)} open contacts, "
-                                  f"{len(active_motion)} motion active")
+                                  f"{len(snap['open_contacts'])} open contacts, "
+                                  f"{len(snap['unlocked_locks'])} unlocked")
             return result
         except Exception as exc:
             return self.handle_exception(exc, "security_status")

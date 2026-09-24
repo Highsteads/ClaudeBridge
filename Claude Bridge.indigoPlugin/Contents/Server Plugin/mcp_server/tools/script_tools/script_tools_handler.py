@@ -25,6 +25,7 @@ import logging
 import os
 import re
 import shutil
+import stat as _stat
 import tempfile
 import traceback as _traceback
 from datetime import datetime
@@ -45,6 +46,33 @@ from ...common.log_levels import resolve as resolve_level
 
 BACKUP_DIR_NAME = "_backups"
 MAX_BACKUPS_PER_SCRIPT = 5
+NEW_SCRIPT_MODE = 0o644
+
+
+def _backup_name_re(stem: str) -> "re.Pattern":
+    """Matches ONLY "<stem>.<timestamp>.py", the names _make_backup writes.
+
+    One pattern for pruning and listing: a plain startswith("<stem>.") also
+    matches a SIBLING script whose name starts with this one plus a dot (e.g.
+    'foo' would sweep up 'foo.bar' backups)."""
+    return re.compile(r"^" + re.escape(stem) + r"\.\d{8}_\d{6}(?:_\d+)?\.py$")
+
+
+def _script_stem(name: str) -> str:
+    """'MyScript.py' -> 'MyScript'. Only a trailing .py goes: replace(".py", "")
+    also cut it out of the MIDDLE of a name ('a.py_old.py' -> 'a_old')."""
+    base = os.path.basename((name or "").strip())
+    return base[:-3] if base.endswith(".py") else base
+
+
+def _exit_failure(exc: SystemExit) -> Optional[str]:
+    """None when sys.exit() meant success (no code, None or 0), else the
+    failure text. sys.exit(1) and sys.exit("message") are failures, and used to
+    be reported as a clean run."""
+    code = exc.code
+    if code is None or code == 0:
+        return None
+    return f"SystemExit: {code}"
 
 
 
@@ -142,7 +170,7 @@ def _make_backup(script_path: str) -> Optional[str]:
     # or delete the backup just created). Requiring a timestamp after the dot
     # confines the prune to this script's own backups.
     try:
-        ts_re = re.compile(r"^" + re.escape(stem) + r"\.\d{8}_\d{6}(?:_\d+)?\.py$")
+        ts_re = _backup_name_re(stem)
         backups = sorted(
             [e.path for e in os.scandir(backup_dir) if ts_re.match(e.name)],
         )
@@ -236,6 +264,10 @@ class ScriptToolsHandler(BaseToolHandler):
                 fd, tmp_path = tempfile.mkstemp(
                     dir=os.path.dirname(path), prefix=".cb_write_", suffix=".tmp"
                 )
+                # mkstemp makes the file 0600, and os.replace keeps the temp
+                # file's mode — so every write left the script readable by its
+                # owner only. Carry the existing script's mode across.
+                os.fchmod(fd, _stat.S_IMODE(os.stat(path).st_mode))
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(content)
                 os.replace(tmp_path, path)
@@ -282,8 +314,16 @@ class ScriptToolsHandler(BaseToolHandler):
                                   f"call write_script without create (a backup is kept).")}
 
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(content)
+            # "x" fails if the file appeared since the check above, rather than
+            # overwriting a script someone else has just written.
+            try:
+                with open(path, "x", encoding="utf-8") as fh:
+                    os.fchmod(fh.fileno(), NEW_SCRIPT_MODE)
+                    fh.write(content)
+            except FileExistsError:
+                return {"success": False,
+                        "error": (f"Script '{name}' already exists. To update it, "
+                                  f"call write_script without create (a backup is kept).")}
 
             lines = content.count("\n") + 1
             result = {
@@ -391,8 +431,10 @@ class ScriptToolsHandler(BaseToolHandler):
                     ns = {"__file__": path, "__name__": "__main__", "indigo": indigo}
                     try:
                         exec(code, ns)  # noqa: S102
-                    except SystemExit:
-                        pass  # a clean exit via sys.exit() is normal
+                    except SystemExit as exc:
+                        # sys.exit() / sys.exit(0) is a clean finish; any other
+                        # code is the script saying it failed.
+                        error_msg = _exit_failure(exc)
                     except Exception as exc:
                         # Type included: a KeyError used to arrive as just 'foo'.
                         error_msg = f"{type(exc).__name__}: {exc}"
@@ -413,15 +455,20 @@ class ScriptToolsHandler(BaseToolHandler):
                 if error_msg:
                     result["error"] = error_msg
                     clip_into(result, "traceback", tb_text, 4000, keep="tail")
+                # A failure here is the SCRIPT's, reported to the caller in the
+                # reply — not a fault in Claude Bridge — so it logs at DEBUG and
+                # never reaches the event log as a red error.
                 self.log_tool_outcome(
                     "run_script", result["success"],
-                    f"Ran '{name}'" + (f" — ERROR: {error_msg}" if error_msg else ""))
+                    f"Ran '{name}'" + (f" — ERROR: {error_msg}" if error_msg else ""),
+                    level=logging.DEBUG)
                 return result
 
             job, busy = exec_lock.start("run_script", f"'{os.path.basename(path)}'", _work)
             if busy:
                 self.log_tool_outcome("run_script", False,
-                                      f"refused — job {busy['running_job_id']} holds the capture")
+                                      f"refused — job {busy['running_job_id']} holds the capture",
+                                      level=logging.DEBUG)
                 return busy
             return exec_lock.wait(job, wait_seconds)
         except Exception as exc:
@@ -465,13 +512,12 @@ class ScriptToolsHandler(BaseToolHandler):
         self.log_incoming_request("list_script_backups", {"name": name})
         try:
             backup_dir = _backup_dir()
-            stem       = name.replace(".py", "")
-            pattern    = f"{stem}."
+            ts_re      = _backup_name_re(_script_stem(name))
 
             backups = []
             if os.path.isdir(backup_dir):
                 for entry in sorted(os.scandir(backup_dir), key=lambda e: e.name):
-                    if entry.name.startswith(pattern) and entry.name.endswith(".py"):
+                    if ts_re.match(entry.name):
                         stat = entry.stat()
                         backups.append({
                             "filename": entry.name,

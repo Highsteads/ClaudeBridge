@@ -196,7 +196,16 @@ class WebhookHandler(BaseToolHandler):
         """Coerce an optional int; return None if absent, or an error dict if bad."""
         if value is None or value == "":
             return None
+        # bool is an int subclass: a JSON true became id 1 / one fire / one
+        # second. And int(2.7) is 2, silently. Both are refused.
+        if isinstance(value, bool):
+            return {"success": False, "error": f"{name} must be an integer, got {value!r}"}
+        if isinstance(value, float):
+            if value.is_integer():
+                return int(value)
+            return {"success": False, "error": f"{name} must be a whole number, got {value!r}"}
         try:
-            return int(value)
+            return int(str(value).strip())
         except (TypeError, ValueError):
-            return {"success": False, "error": f"{name} must be an integer"}
+            hint = (" — give the numeric ID, not a name" if name.endswith("_id") else "")
+            return {"success": False, "error": f"{name} must be an integer{hint}, got {value!r}"}

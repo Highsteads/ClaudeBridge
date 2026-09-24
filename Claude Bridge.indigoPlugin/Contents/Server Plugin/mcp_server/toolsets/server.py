@@ -67,8 +67,9 @@ def energy_history(ctx, days=14, compare=False, compare_offset_days=None):
         if compare_offset_days is not None:
             return refuse("energy_history: compare_offset_days applies only with compare=true")
         return et.energy_daily_summary(days)
-    offset = days if compare_offset_days is None else compare_offset_days
-    return et.energy_compare(days, days, offset)
+    # No offset given: let energy_compare default it to the CLAMPED period, so
+    # days=200 compares 90 against the 90 before it, not a period 200 back.
+    return et.energy_compare(days, days, compare_offset_days)
 
 
 @tool("server_info", scope="read",

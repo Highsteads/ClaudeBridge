@@ -6,7 +6,12 @@ import logging
 import os
 import re
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+try:
+    import indigo
+except ImportError:
+    pass
 
 from typing import TYPE_CHECKING
 
@@ -15,13 +20,31 @@ if TYPE_CHECKING:   # type hint only — importing it here would be circular
 from ..base_handler import BaseToolHandler
 
 # ── Log-file location ────────────────────────────────────────────────────────
-# Derive the Indigo Logs folder from this module's own path.
-# This file lives at:
-#   .../Indigo <version>/Plugins/Claude Bridge.indigoPlugin/
-#              Contents/Server Plugin/mcp_server/tools/log_query/log_query_handler.py
-# Going up 7 directories reaches the Indigo install root.
+# The Logs folder sits under the versioned install folder, which Indigo itself
+# reports. It is asked for at call time, not import time, so the answer is the
+# running server's. Counting directories up from this file is only the fallback
+# (it is right for an installed bundle and wrong for any other copy).
+#
+# _LOG_ROOT is a test hook: set it and it wins over both.
 _HERE     = os.path.dirname(os.path.abspath(__file__))
-_LOG_ROOT = os.path.normpath(os.path.join(_HERE, *([".."] * 7), "Logs"))
+_LOG_ROOT: Optional[str] = None
+
+
+def _log_root() -> str:
+    if _LOG_ROOT:
+        return _LOG_ROOT
+    try:
+        base = indigo.server.getInstallFolderPath()
+        if isinstance(base, str) and base:
+            logs = os.path.join(base, "Logs")
+            if os.path.isdir(logs):
+                return logs
+    except Exception:
+        pass
+    # This file lives at .../Indigo <version>/Plugins/Claude Bridge.indigoPlugin/
+    #   Contents/Server Plugin/mcp_server/tools/log_query/log_query_handler.py
+    # Going up 7 directories reaches the Indigo install root.
+    return os.path.normpath(os.path.join(_HERE, *([".."] * 7), "Logs"))
 
 # Log file line format: "YYYY-MM-DD HH:MM:SS.mmm<TAB>Source<TAB>Message"
 _LOG_LINE_RE = re.compile(
@@ -94,6 +117,8 @@ class LogQueryHandler(BaseToolHandler):
         after_dt:   Optional[datetime],
         before_dt:  Optional[datetime],
         line_count: Optional[int],
+        limit:      Any = "default",
+        keep:       Optional[Callable[[Dict[str, Any]], bool]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Read log file(s) from disk and return entries in the time range.
 
@@ -102,6 +127,15 @@ class LogQueryHandler(BaseToolHandler):
           {"TimeStamp": str, "TypeStr": str, "Message": str}
 
         line_count limits the LAST N matching entries (most recent first).
+
+        limit is the ceiling line_count cannot exceed: _MAX_ENTRIES (read at
+        call time) unless given, for the query_event_log tool, whose reply
+        carries every entry. None means no ceiling. investigate_event needs the whole window — with the 2000 cap
+        it saw only the newest day and a half whatever search_days said.
+
+        keep, when given, decides per entry (on its first line) whether it is
+        kept at all, so a caller that needs only some lines does not hold a
+        fortnight of log in memory to find them.
 
         Returns (entries, meta). ``meta`` reports the day window actually
         scanned and whether it was clamped, so a caller can tell a genuine
@@ -138,7 +172,7 @@ class LogQueryHandler(BaseToolHandler):
         current = start_date
         while current <= end_date:
             log_file = os.path.join(
-                _LOG_ROOT, f"{current.strftime('%Y-%m-%d')} Events.txt"
+                _log_root(), f"{current.strftime('%Y-%m-%d')} Events.txt"
             )
             if os.path.exists(log_file):
                 try:
@@ -184,6 +218,9 @@ class LogQueryHandler(BaseToolHandler):
                                 "TypeStr":   source,
                                 "Message":   message,
                             }
+                            if keep is not None and not keep(entry):
+                                last_kept = None
+                                continue
                             results.append(entry)
                             last_kept = entry
                 except OSError as exc:
@@ -191,10 +228,16 @@ class LogQueryHandler(BaseToolHandler):
             current += timedelta(days=1)
 
         meta["matched_before_limit"] = len(results)
-        cap = min(line_count or _MAX_ENTRIES, _MAX_ENTRIES)
-        if len(results) > cap:
+        if limit == "default":
+            limit = _MAX_ENTRIES
+        if limit is None:
+            cap = line_count
+        else:
+            cap = min(line_count or limit, limit)
+        if cap is not None and len(results) > cap:
             results = results[-cap:]
             meta["truncated"] = True
+            meta["oldest_entry"] = results[0]["TimeStamp"] if results else None
             meta["truncated_note"] = (
                 f"{len(results)} newest of {meta['matched_before_limit']} matching entries; "
                 f"narrow 'after'/'before' to see the earlier ones.")

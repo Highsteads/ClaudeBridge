@@ -86,8 +86,12 @@ class PluginScanner:
         plugins = []
 
         # Find all .indigoPlugin bundles
+        # include_hidden: Indigo's own plugins live in dot-folders
+        # (".Z-Wave.indigoPlugin", ".Web Server.indigoPlugin"), which a plain
+        # glob skips, so get_plugin_status and restart_plugin answered "not
+        # found" for the Z-Wave plugin (3.0.2).
         pattern = os.path.join(directory_path, "*.indigoPlugin")
-        plugin_bundles = glob.glob(pattern)
+        plugin_bundles = glob.glob(pattern, include_hidden=True)
 
         for bundle_path in plugin_bundles:
             try:

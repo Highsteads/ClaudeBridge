@@ -401,10 +401,16 @@ class ScheduleControlHandler(BaseToolHandler):
             fields = dict(fields, variable_id=var_id)
 
         before = self._snapshot(elem, field_map, fields.keys())
+        # What each field was actually set to. For an enum that is the Indigo
+        # value, not the caller's spelling: "becomes_true" is BecomesTrue, so
+        # comparing the caller's text with the snapshot reported a field the
+        # server had accepted as "kept the old value".
+        sent: Dict[str, Any] = {}
         for field, value in fields.items():
             attr, enum_name = field_map[field]
             if enum_name is not None:
                 value = self._to_indigo_enum(enum_name, value)
+            sent[field] = value
             try:
                 setattr(elem, attr, value)
             except (AttributeError, TypeError) as exc:
@@ -420,7 +426,7 @@ class ScheduleControlHandler(BaseToolHandler):
         not_applied = sorted(
             field for field in fields
             if before.get(field) == after.get(field)
-            and str(fields[field]) != str(before.get(field)))
+            and str(sent[field]) != str(before.get(field)))
 
         result: Dict[str, Any] = {
             "success": True,

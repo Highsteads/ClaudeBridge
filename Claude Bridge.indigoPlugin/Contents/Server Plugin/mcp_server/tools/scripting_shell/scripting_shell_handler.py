@@ -202,8 +202,11 @@ class ScriptingShellHandler(BaseToolHandler):
                             value_repr = f"<repr failed: {repr_exc}>"
                     else:
                         exec(compile(code, "<mcp_exec>", "exec"), ns)  # noqa: S102
-                except SystemExit:
-                    pass  # treat sys.exit() as normal completion
+                except SystemExit as exc:
+                    # sys.exit() / sys.exit(0) is a clean finish; sys.exit(1)
+                    # or sys.exit("message") is the code saying it failed.
+                    if exc.code is not None and exc.code != 0:
+                        error_msg = f"SystemExit: {exc.code}"
                 except Exception as exc:
                     error_msg = f"{type(exc).__name__}: {exc}"
                     tb_text = traceback.format_exc()
@@ -223,15 +226,20 @@ class ScriptingShellHandler(BaseToolHandler):
                 # Keep the TAIL: the exception itself is the last line, and a deep
                 # traceback cut from the front used to lose exactly that line.
                 clip_into(result, "traceback", tb_text, 4000, keep="tail")
+            # A failure here is the CALLER's code, returned in the reply — not a
+            # fault in Claude Bridge — so it logs at DEBUG. At WARNING/ERROR it
+            # filled the event log (and Log_Error_Watch) with red lines.
             self.log_tool_outcome(
                 "execute_indigo_python", result["success"],
-                f"mode={mode}" + (f" — ERROR: {error_msg}" if error_msg else ""))
+                f"mode={mode}" + (f" — ERROR: {error_msg}" if error_msg else ""),
+                level=logging.DEBUG)
             return result
 
         job, busy = exec_lock.start("execute_indigo_python", f"mode={mode}", _work)
         if busy:
             self.log_tool_outcome("execute_indigo_python", False,
-                                  f"refused — job {busy['running_job_id']} holds the capture")
+                                  f"refused — job {busy['running_job_id']} holds the capture",
+                                  level=logging.DEBUG)
             return busy
         return exec_lock.wait(job, wait_seconds)
 
@@ -445,12 +453,26 @@ class ScriptingShellHandler(BaseToolHandler):
                 target = (f'name of every menu item of menu "{esc(path[1])}" '
                           f'of menu item "{esc(path[1])}" of menu "{esc(path[0])}" '
                           f'of menu bar item "{esc(path[0])}" of menu bar 1')
+            # One title per line. The default list-to-text join uses ", ", which
+            # also appears INSIDE titles ("Save, As..."), so splitting on it cut
+            # one item into two. A menu title cannot contain a line feed.
             script = f'''
             tell application "System Events"
                 tell process "{esc(app)}"
-                    return {target}
+                    set theNames to {target}
                 end tell
             end tell
+            set out to {{}}
+            repeat with n in theNames
+                set v to contents of n
+                if v is missing value then
+                    set end of out to "missing value"
+                else
+                    set end of out to (v as text)
+                end if
+            end repeat
+            set AppleScript's text item delimiters to linefeed
+            return out as text
             '''
         else:
             script = f'''
@@ -490,9 +512,9 @@ class ScriptingShellHandler(BaseToolHandler):
             "stderr":    stderr[:2000],
         }
         if list_only and ok:
-            # AppleScript returns a comma-separated list, and separators render as
+            # One title per line (see the script above). A separator reads
             # "missing value", which is how a menu separator looks from here.
-            result["items"] = [seg.strip() for seg in stdout.split(",") if seg.strip()]
+            result["items"] = [seg.strip() for seg in stdout.split("\n") if seg.strip()]
         if not ok:
             result["error"] = stderr or f"osascript exited {proc.returncode}"
 

@@ -51,7 +51,8 @@ class SearchEntitiesHandler(BaseToolHandler):
         device_types: Optional[List[str]] = None,
         entity_types: Optional[List[str]] = None,
         state_filter: Optional[Dict[str, Any]] = None,
-        detail: str = "slim"
+        detail: str = "slim",
+        top_k: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Search for Indigo entities using natural language with optional filtering.
@@ -61,6 +62,11 @@ class SearchEntitiesHandler(BaseToolHandler):
             device_types: Optional list of device types to filter by
             entity_types: Optional list of entity types to search
             state_filter: Optional state conditions to apply after semantic search
+            top_k: Fixed result count, overriding the one QueryParser reads
+                from words in the query. Device resolution passes a NAME
+                here, and a name such as "Landing One" must not shrink the
+                result to one hit (the word "one") and hide the device that
+                is called exactly that.
             
         Returns:
             Dictionary with formatted search results
@@ -84,6 +90,8 @@ class SearchEntitiesHandler(BaseToolHandler):
 
             # Parse query to determine search parameters
             search_params = self.query_parser.parse(query, device_types, entity_types)
+            if top_k is not None:
+                search_params["top_k"] = max(1, int(top_k))
 
             # Text search works best with the original query — LLM expansion
             # turns "conservatory lamp" into long descriptions that break substring matching

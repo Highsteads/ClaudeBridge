@@ -24,6 +24,15 @@ _KIND_TO_ATTR = {
     "action_group": "action_groups",
 }
 
+# A file that failed to parse is retried after these many seconds, by how many
+# times this same file (path, mtime and size) has failed so far. A torn read
+# mid-rewrite deserves a quick second look; a file that fails the same way
+# three times is not torn, it is something the parser cannot read, and
+# re-parsing it every 2 s was wasted work with nothing said about it.
+_FAILED_RETRY_SECONDS = {1: 2.0, 2: 30.0}
+_FAILED_RETRY_SECONDS_AFTER_WARNING = 600.0
+FAILURES_BEFORE_WARNING = 3
+
 FRESHNESS_NOTE = (
     "Action steps and conditions are read from Indigo's database file, which "
     "the server rewrites within minutes of changes — very recent edits may "
@@ -54,6 +63,11 @@ class IndiDbStructureStore:
         self._lock = threading.Lock()
         self._snapshot: Optional[ParsedDb] = None
         self._last_stat_time = 0.0
+        # The file that last failed to parse, as (path, mtime, size); how many
+        # times in a row it has failed; and when it may be tried again.
+        self._failed_key: Optional[tuple] = None
+        self._failed_count = 0
+        self._failed_retry_at = 0.0
 
     # ── Public accessors — degrade to None/empty rather than raising ────────
 
@@ -148,6 +162,10 @@ class IndiDbStructureStore:
                     and stat.st_size == self._snapshot.size):
                 return self._snapshot
 
+            key = (path, stat.st_mtime, stat.st_size)
+            if key == self._failed_key and now < self._failed_retry_at:
+                return self._snapshot
+
             try:
                 started = time.monotonic()
                 parsed = parse_indidb(path)
@@ -156,6 +174,7 @@ class IndiDbStructureStore:
                 parsed.size = stat.st_size
                 parsed.reverse_index = build_reverse_index(parsed)
                 self._snapshot = parsed
+                self._failed_key, self._failed_count = None, 0
                 elapsed_ms = (time.monotonic() - started) * 1000
                 self.logger.debug(
                     f"[indidb] parsed in {elapsed_ms:.0f}ms: {parsed.counts()}")
@@ -166,6 +185,23 @@ class IndiDbStructureStore:
                         f"ID) — automation tools may under-report")
             except Exception as exc:
                 # A mid-rewrite read can hand us a torn file. Keep the last
-                # good snapshot; the next access retries.
-                self.logger.debug(f"[indidb] parse failed (mid-rewrite?): {exc}")
+                # good snapshot; retry after a back-off that grows while the
+                # SAME file keeps failing, and say so once it is plainly not
+                # a torn read.
+                if key == self._failed_key:
+                    self._failed_count += 1
+                else:
+                    self._failed_key, self._failed_count = key, 1
+                self._failed_retry_at = now + _FAILED_RETRY_SECONDS.get(
+                    self._failed_count, _FAILED_RETRY_SECONDS_AFTER_WARNING)
+                if self._failed_count == FAILURES_BEFORE_WARNING:
+                    self.logger.warning(
+                        f"[indidb] the Indigo database file has failed to parse "
+                        f"{FAILURES_BEFORE_WARNING} times without changing ({exc}); "
+                        f"automation details are "
+                        + ("from the last good read" if self._snapshot is not None
+                           else "unavailable")
+                        + " until it does")
+                else:
+                    self.logger.debug(f"[indidb] parse failed (mid-rewrite?): {exc}")
             return self._snapshot

@@ -48,6 +48,26 @@ HEURISTIC_SCORE = 1.0
 
 _QUOTED_NAME_RE = re.compile(r'"([^"]+)"')
 
+# Most entries investigate_event holds from one scan. It keeps only the lines
+# it can use (automation activity and lines naming the target), so this is a
+# guard against a runaway log, not a window: a fortnight of this house's log
+# holds a few thousand such lines.
+INVESTIGATE_MAX_ENTRIES = 50000
+
+# A delayed action is logged by the SCHEDULER, whatever queued it:
+#   Schedule<TAB>trigger "Hall Coat Cupboard Turn On Light" (delayed action)
+# so the source column says Schedule for a trigger's delayed step. The word
+# before the quoted name is the real kind.
+_DELAYED_KIND_RE = re.compile(r'^\s*(trigger|schedule|action group)\s+"', re.IGNORECASE)
+_DELAYED_KINDS = {"trigger": "trigger", "schedule": "schedule",
+                  "action group": "action_group"}
+
+
+def _kind_from_message(message: str) -> Optional[str]:
+    """The automation kind a log line names at its start, or None."""
+    m = _DELAYED_KIND_RE.match(message or "")
+    return _DELAYED_KINDS[m.group(1).lower()] if m else None
+
 _LIVE_COLLECTIONS = {
     "trigger":      "triggers",
     "schedule":     "schedules",
@@ -459,12 +479,19 @@ class AutomationDetailHandler(BaseToolHandler):
 
             now = datetime.datetime.now()
             window_start = now - datetime.timedelta(days=search_days)
-            # _read_log_range returns (entries, meta) — meta reports the window
-            # actually scanned. search_days is already clamped to 14 above, which
-            # matches the reader's own span cap, so nothing is silently dropped
-            # here; the meta is ignored deliberately.
-            entries, _range_meta = self.log_query_handler._read_log_range(
-                window_start, None, None)
+            # Read the WHOLE window. The reader's default ceiling is the 2000
+            # newest entries (query_event_log's reply size), which here covered
+            # about a day and a half whatever search_days said. Keep only what
+            # this tool uses — automation activity and lines naming the target
+            # — and say so in the reply if even that was cut.
+            needle_lower = needle.lower()
+
+            def _useful(entry: Dict[str, Any]) -> bool:
+                return (entry.get("TypeStr") in AUTOMATION_LOG_SOURCES
+                        or needle_lower in str(entry.get("Message", "")).lower())
+
+            entries, range_meta = self.log_query_handler._read_log_range(
+                window_start, None, None, limit=INVESTIGATE_MAX_ENTRIES, keep=_useful)
 
             around_dt = None
             if around_time:
@@ -478,7 +505,7 @@ class AutomationDetailHandler(BaseToolHandler):
 
             target = self._locate_target(entries, needle, around_dt, occurrence)
             if target is None:
-                return {
+                missing = {
                     "success": False,
                     "error": "No matching event-log line found",
                     "searched_for": needle,
@@ -487,6 +514,9 @@ class AutomationDetailHandler(BaseToolHandler):
                             "the device may log under a different name — try "
                             "search_text with a distinctive fragment.",
                 }
+                if range_meta.get("truncated"):
+                    missing["log_scan"] = self._scan_summary(range_meta)
+                return missing
             target_ts, target_entry = target
 
             candidates = [
@@ -521,11 +551,26 @@ class AutomationDetailHandler(BaseToolHandler):
             }
             if device is not None:
                 result["target_event"]["device"] = device
+            result["log_scan"] = self._scan_summary(range_meta)
+            if range_meta.get("truncated"):
+                notes.append(
+                    f"The log window held more relevant lines than this tool keeps "
+                    f"({INVESTIGATE_MAX_ENTRIES}); only the newest were searched, from "
+                    f"{result['log_scan'].get('oldest_entry')}. Use around_time or a "
+                    f"smaller search_days to look earlier.")
             self.log_tool_outcome("investigate_event", True,
                                   f"{len(ranked)} candidates for {needle}")
             return result
         except Exception as exc:
             return self.handle_exception(exc, "investigate_event")
+
+    @staticmethod
+    def _scan_summary(meta: Dict[str, Any]) -> Dict[str, Any]:
+        return {"scanned_from": meta.get("scanned_from"),
+                "scanned_to": meta.get("scanned_to"),
+                "relevant_lines": meta.get("matched_before_limit"),
+                "truncated": bool(meta.get("truncated")),
+                "oldest_entry": meta.get("oldest_entry")}
 
     @staticmethod
     def _timestamped(entries: List[Dict[str, Any]]):
@@ -577,6 +622,9 @@ class AutomationDetailHandler(BaseToolHandler):
             kind = source_to_kind.get(entry.get("TypeStr"))
             if kind is None:
                 continue
+            # A delayed step is logged under Schedule whatever queued it; the
+            # message names the real kind ('trigger "X" (delayed action)').
+            kind = _kind_from_message(str(entry.get("Message", ""))) or kind
             name = _extract_element_name(str(entry.get("Message", "")))
             elem_id = self._unique_id_for_name(kind, name)
             key = (kind, elem_id or name, ts)

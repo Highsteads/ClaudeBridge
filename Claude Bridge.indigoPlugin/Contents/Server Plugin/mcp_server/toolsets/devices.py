@@ -40,14 +40,24 @@ def enrich_device_capabilities(device):
     return device
 
 
+# The lowest score that means every word of the name was found in the device's
+# name: 1.0 for the whole phrase, 0.95 for all the words in any order. Anything
+# lower is a spelling-similarity or synonym guess, and a guess never switches a
+# device — asking for a "Landing Two" that does not exist must not switch
+# "Landing One" because the two names look alike.
+_CONTROL_MIN_SCORE = 0.95
+
+
 def resolve_device_for_control(name: str, devices: List[Dict[str, Any]]):
     """Pick the ONE device a spoken name means, or refuse.
 
     Acts on a single exact-name match, or else on a single candidate scoring
-    0.5 or more. Anything else is refused with the candidates. Until 2.27.3 it
-    took the top hit whenever that scored 0.5, and any name merely containing
-    the words scores 1.0 — so with two "Hall Lamp..." devices it could switch
-    whichever the search listed first. Returns (device, None) or (None, refusal).
+    0.5 or more — and then only when that candidate contains every word of the
+    name (score 0.95 or more). A lone looser match is refused with the
+    candidate named, never acted on. Until 2.27.3 it took the top hit whenever
+    that scored 0.5, and any name merely containing the words scores 1.0 — so
+    with two "Hall Lamp..." devices it could switch whichever the search listed
+    first. Returns (device, None) or (None, refusal).
     """
     def _cands(items):
         return [{"id": d.get("id"), "name": d.get("name"),
@@ -64,7 +74,16 @@ def resolve_device_for_control(name: str, devices: List[Dict[str, Any]]):
                       "candidates": _cands(exact)}
     confident = [d for d in devices if (d.get("relevance_score") or 0) >= 0.5]
     if len(confident) == 1:
-        return confident[0], None
+        only = confident[0]
+        score = only.get("relevance_score") or 0
+        if score >= _CONTROL_MIN_SCORE:
+            return only, None
+        return None, {"success": False,
+                      "error": f"No device is called '{name}'. The nearest is "
+                               f"'{only.get('name')}' (score {score:.2f}), which is only a "
+                               f"loose match, so nothing was switched. Use its exact name "
+                               f"or its device id if that is the one you mean.",
+                      "candidates": _cands(confident)}
     if not confident:
         top = devices[0]
         return None, {"success": False,
@@ -76,6 +95,9 @@ def resolve_device_for_control(name: str, devices: List[Dict[str, Any]]):
                   "error": f"'{name}' matches {len(confident)} devices; nothing "
                            f"was switched. Use the full name or the device id.",
                   "candidates": _cands(confident)}
+
+
+_RESOLVE_TOP_K = 50
 
 
 def resolve_device(ctx, device) -> Tuple[Optional[int], Dict[str, Any], Optional[Dict[str, Any]]]:
@@ -93,7 +115,11 @@ def resolve_device(ctx, device) -> Tuple[Optional[int], Dict[str, Any], Optional
     text = str(device).strip()
     if text.lstrip("-").isdigit():
         return int(text), {}, None
-    found = ctx.search_handler.search(query=text, entity_types=["devices"], detail="slim")
+    # A fixed top_k: without it, words in the NAME ("one", "all", "list"...)
+    # set the result count, and "Landing One" came back as one hit that could
+    # be "Landing One Nightlight" instead of the device called exactly that.
+    found = ctx.search_handler.search(query=text, entity_types=["devices"], detail="slim",
+                                      top_k=_RESOLVE_TOP_K)
     devices = (found.get("results") or {}).get("devices") or []
     if not devices:
         return None, {}, refuse(f"No device found matching '{text}'")
@@ -154,6 +180,9 @@ def _resolve_types(device_types) -> Tuple[Optional[List[str]], Optional[Dict[str
       required=["query"])
 def search_entities(ctx, query, device_types=None, entity_types=None,
                     state_filter=None, detail="slim"):
+    # A bare string ("light") iterated letter by letter into "l", "i", "g"...
+    if isinstance(device_types, str):
+        device_types = [device_types]
     if device_types:
         device_types, refusal = _resolve_types(device_types)
         if refusal:
@@ -186,16 +215,25 @@ def search_entities(ctx, query, device_types=None, entity_types=None,
                                            "{\"temperature\": {\"gt\": 21}}")},
           "limit": {"type": "integer",
                     "description": "Max devices when filtering (default 200)"},
+          "detail": enum(["slim", "full"],
+                         "device_type only: 'slim' (default) short rows, 'full' every "
+                         "property"),
       })
-def list_devices(ctx, device_type=None, state_filter=None, limit=None):
+def list_devices(ctx, device_type=None, state_filter=None, limit=None, detail=None):
+    if detail is not None and not (device_type and not state_filter):
+        return refuse("list_devices: detail applies only with device_type alone")
     if not device_type and not state_filter:
         if limit is not None:
             return refuse("limit applies only with device_type or state_filter — "
                           "call list_devices with no arguments for every device")
         return ctx.list_handlers.list_all_devices()
     if device_type and not state_filter:
-        return ctx.get_devices_by_type_handler.get_devices(
-            device_type, limit=200 if limit is None else limit)
+        if detail is not None and detail not in ("slim", "full"):
+            return bad_choice("detail", detail, ("slim", "full"))
+        kwargs = {"limit": 200 if limit is None else limit}
+        if detail is not None:
+            kwargs["detail"] = detail
+        return ctx.get_devices_by_type_handler.get_devices(device_type, **kwargs)
     types = None
     if device_type:
         types, refusal = _resolve_types([device_type])
@@ -237,6 +275,9 @@ def get_device_by_name(ctx, name):
     result = ctx.data_provider.get_device_by_name(name)
     if result is None:
         return refuse(f"No device found matching '{name}'")
+    if isinstance(result, dict) and "error" in result:
+        # An ambiguous name is a refusal with candidates, not a device.
+        return {"success": False, **result}
     return {"success": True, "device": enrich_device_capabilities(result)}
 
 
@@ -278,9 +319,10 @@ _ACTION_ARGS = {
       description=(
           "Control one device, by id or by name. action: on / off (optional delay, and "
           "duration to revert automatically — 'fan on for 10 minutes' is duration=600), "
-          "toggle, brightness (value 0-100), brighten / dim (value = percentage points), "
+          "toggle, brightness (value 0-100), brighten / dim (value = percentage points, "
+          "more than 0), "
           "color (a 'color' hex code or CSS name such as 'dodgerblue', or red/green/blue "
-          "0-255, plus optional white and white_temperature), status_request (poll the "
+          "0-255, plus optional white 0-100 and white_temperature in Kelvin), status_request (poll the "
           "device), beep (to find it physically), ping (reachability), reset_energy (zero "
           "the kWh total; the old total is returned but cannot be restored). A name must "
           "match exactly or match one device confidently, otherwise nothing is switched and "
@@ -294,8 +336,9 @@ _ACTION_ARGS = {
           "red": number("Red channel 0-255"),
           "green": number("Green channel 0-255"),
           "blue": number("Blue channel 0-255"),
-          "white": number("White channel 0-255 (RGBW only)"),
-          "white_temperature": number("Colour temperature in Kelvin (e.g. 2700-6500)"),
+          "white": number("White level 0-100 (RGBW only)"),
+          "white_temperature": number("Colour temperature in Kelvin, 1200-15000 (e.g. "
+                                      "2700 warm, 6500 cool)"),
           "delay": DELAY,
           "duration": DURATION,
       },
@@ -314,6 +357,15 @@ def device_control(ctx, device, action, value=None, color=None, red=None, green=
         return stray
     if action in ("brightness", "brighten", "dim") and value is None:
         return refuse(f"device_control: action '{action}' needs value")
+    if action in ("brighten", "dim"):
+        try:
+            points = float(value)
+        except (TypeError, ValueError):
+            points = None
+        if isinstance(value, bool) or points is None or points <= 0:
+            other = "dim" if action == "brighten" else "brighten"
+            return refuse(f"device_control: {action} needs a positive value in percentage "
+                          f"points, got {value!r} — use {other} to go the other way")
 
     device_id, match, refusal = resolve_device(ctx, device)
     if refusal:
@@ -365,14 +417,17 @@ _HVAC_MODES = ["heat", "cool", "auto", "off", "programHeat", "programCool", "pro
 
 @tool("thermostat_control", scope="write", invalidates={"device"},
       description=("Change a thermostat or TRV (e.g. RAMSES, Evohome). Give any combination "
-                   "of heat_setpoint, cool_setpoint (degrees Celsius), heat_delta, cool_delta "
-                   "(step up with a positive number, down with a negative one), hvac_mode and "
-                   "fan_mode. They are applied in that order and the reply lists what was "
-                   "done; the first failure stops the rest."),
+                   "of heat_setpoint, cool_setpoint, heat_delta, cool_delta (step up with a "
+                   "positive number, down with a negative one), hvac_mode and fan_mode. "
+                   "Temperatures are in the device's own unit, as Indigo shows it; a value "
+                   "outside a sane band for that unit is refused, never clamped. They are "
+                   "applied in that order and the reply lists what was done, with "
+                   "confirmed=false where the device has not reported the new value yet; "
+                   "the first failure stops the rest."),
       properties={
           "device": DEVICE,
-          "heat_setpoint": number("Target heat temperature, degrees Celsius"),
-          "cool_setpoint": number("Target cool temperature, degrees Celsius"),
+          "heat_setpoint": number("Target heat temperature, in the device's own unit"),
+          "cool_setpoint": number("Target cool temperature, in the device's own unit"),
           "heat_delta": number("Degrees to raise (+) or lower (-) the heat setpoint"),
           "cool_delta": number("Degrees to raise (+) or lower (-) the cool setpoint"),
           "hvac_mode": enum(_HVAC_MODES, "HVAC operating mode"),
@@ -428,12 +483,14 @@ def thermostat_control(ctx, device, heat_setpoint=None, cool_setpoint=None, heat
 
 @tool("speed_control", scope="write", invalidates={"device"},
       description=("Set a fan or speed-control device. Give exactly one of level (0-100 "
-                   "percent), index (0 off, 1 low, 2 medium, 3 high) or step (+1 or -1 to move "
-                   "one index up or down)."),
+                   "percent), index (0 off, 1 low, 2 medium, 3 high on a four-speed device; the "
+                   "top index is the device's speedIndexCount minus one) or step (+1 or -1 to "
+                   "move one index up or down). The reply gives the speed the device reports "
+                   "afterwards."),
       properties={
           "device": DEVICE,
           "level": number("Speed level 0-100"),
-          "index": number("Speed index 0-3"),
+          "index": number("Speed index, 0 up to the device's speedIndexCount minus one"),
           "step": number("+1 for one index faster, -1 for one slower"),
       },
       required=["device"])
@@ -468,7 +525,7 @@ _SPRINKLER_ACTIONS = ("run", "stop", "pause", "resume", "next_zone", "previous_z
       properties={
           "device": DEVICE,
           "action": enum(_SPRINKLER_ACTIONS, "What to do"),
-          "zone": number("Zone index, 1-based (set_zone only)"),
+          "zone": number("Zone number, 1 up to the device's zone count (set_zone only)"),
       },
       required=["device", "action"])
 def sprinkler_control(ctx, device, action, zone=None):
@@ -509,24 +566,25 @@ def all_devices(ctx, action):
 
 
 @tool("lock_control", scope="admin", invalidates={"device"},
-      description=("Lock or unlock a Z-Wave or other lock device, optionally unlocking with a "
-                   "PIN code. ADMIN scope: this is physical security."),
+      description=("Lock or unlock a Z-Wave or other lock device. Indigo's lock and unlock "
+                   "commands take no PIN. The reply says whether the lock has reported the "
+                   "new state yet (confirmed). ADMIN scope: this is physical security."),
       properties={
           "device": DEVICE,
           "action": enum(["lock", "unlock"], "lock or unlock"),
-          "code": string("Optional PIN code (unlock only)"),
       },
       required=["device", "action"])
-def lock_control(ctx, device, action, code=None):
+def lock_control(ctx, device, action):
+    # No `code`: indigo.device.unlock takes no PIN (only delay and duration),
+    # and passing one raised a TypeError. With it gone from the schema the
+    # dispatcher refuses a `code` argument as unknown, naming the valid ones.
     if action not in ("lock", "unlock"):
         return bad_choice("action", action, ("lock", "unlock"))
-    if action == "lock" and code is not None:
-        return refuse("lock_control: code applies only to unlock")
     device_id, match, refusal = resolve_device(ctx, device)
     if refusal:
         return refusal
     dc = ctx.device_control_handler
-    result = dc.lock_device(device_id) if action == "lock" else dc.unlock_device(device_id, code=code)
+    result = dc.lock_device(device_id) if action == "lock" else dc.unlock_device(device_id)
     return _with_match(result, match)
 
 
