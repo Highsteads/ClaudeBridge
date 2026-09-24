@@ -47,6 +47,7 @@ def handler(tmp_path, monkeypatch):
     monkeypatch.setattr(mod.sqlite3, "connect", _tracing_connect)
     h = mod.PluginDevToolsHandler(data_provider=None)
     h.statements = statements
+    h._db_for_test = db_path
     return h
 
 
@@ -157,3 +158,22 @@ def test_rowid_floor_binary_search(history_handler):
     cur.execute("SELECT MIN(ts) FROM device_history_123 WHERE id >= ?", (floor_id,))
     assert cur.fetchone()[0] >= cutoff
     conn.close()
+
+
+@pytest.mark.parametrize("summary", [False, True])
+def test_no_history_query_reads_the_whole_table(handler, summary):
+    """Every statement must reach rows through the PK. A plain SCAN of the
+    table is the 7.6 s full read "SELECT MIN(id), MAX(id)" caused on a
+    4M-row table before 3.2.0."""
+    handler.statements.clear()
+    out = handler.device_history(9, hours=1, limit=5, summary=summary)
+    assert out["success"] is True
+    conn = sqlite3.connect(handler._db_for_test)
+    try:
+        for stmt in handler.statements:
+            if not stmt.lstrip().upper().startswith("SELECT") or "device_history_9" not in stmt:
+                continue
+            plan = [row[-1] for row in conn.execute("EXPLAIN QUERY PLAN " + stmt)]
+            assert not any(step.strip() == "SCAN device_history_9" for step in plan), (stmt, plan)
+    finally:
+        conn.close()

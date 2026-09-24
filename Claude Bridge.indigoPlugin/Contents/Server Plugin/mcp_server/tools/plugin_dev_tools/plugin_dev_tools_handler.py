@@ -63,6 +63,14 @@ _HISTORY_MAX_HOURS = 24 * 31
 # device writes over a million rows a month; past the cap it reports the
 # newest rows only and says so.
 _SUMMARY_ROW_CAP = 250_000
+# And the longest it may take. Warm, 250,000 rows of a 49-column table
+# summarise in about a second; the first read of a range from disk took 14 s
+# (measured 24-09-2026, Utility Room Fridge Freezer). The web server waits
+# for the whole of it, so past this the query is stopped and the caller told
+# to narrow the window.
+_SUMMARY_TIME_BUDGET = 5.0
+# SQLite virtual-machine steps between checks of that budget.
+_SUMMARY_PROGRESS_STEPS = 10_000
 
 
 # ── Path helpers ────────────────────────────────────────────────────────────
@@ -884,7 +892,13 @@ class PluginDevToolsHandler(BaseToolHandler):
         never correctness.
         """
         try:
-            cur.execute(f"SELECT MIN(id), MAX(id) FROM {table}")
+            # Two scalar subqueries, never "SELECT MIN(id), MAX(id)": SQLite
+            # answers a lone MIN or MAX from the PK index at once, but asked
+            # for both in one select it reads the whole table — 7.6 s on a
+            # 4.1M-row freezer table (measured 24-09-2026), on every call, on
+            # the web server's thread.
+            cur.execute(f"SELECT (SELECT MIN(id) FROM {table}), "
+                        f"(SELECT MAX(id) FROM {table})")
             row = cur.fetchone()
             if not row or row[0] is None:
                 return 0
@@ -916,31 +930,70 @@ class PluginDevToolsHandler(BaseToolHandler):
 
     def _history_summary(self, cur, table: str, did: int, floor_id: int,
                          cols: List[str], hours: int, hours_capped: bool) -> Dict[str, Any]:
-        """Counts instead of rows, read over the PK range only.
+        """Counts instead of rows, read over a PK range only.
 
-        One pass for the per-column aggregates and one for the per-day counts,
-        both over the same newest-first window capped at _SUMMARY_ROW_CAP.
+        Two scans of the same id range: the per-column aggregates, and row
+        counts per UTC hour, which become local days here in Python — asking
+        SQLite for local time converts every row, and cost more than the
+        aggregates themselves. The range starts _SUMMARY_ROW_CAP ids below the
+        newest (ids are near-contiguous, so this is "about" that many rows),
+        and a query still running after _SUMMARY_TIME_BUDGET is stopped.
         """
-        window = (f"(SELECT * FROM {table} WHERE id >= ? "
-                  f"ORDER BY id DESC LIMIT {_SUMMARY_ROW_CAP})")
+        cur.execute(f"SELECT MAX(id) FROM {table}")
+        newest_id = (cur.fetchone() or (None,))[0]
+        if newest_id is None:
+            newest_id = floor_id
+        low_id = max(floor_id, newest_id - _SUMMARY_ROW_CAP + 1)
+        truncated = low_id > floor_id
         states = [c for c in cols if c != "ts"]
-        parts = ["COUNT(*)", "MIN(datetime(ts, 'localtime'))",
-                 "MAX(datetime(ts, 'localtime'))"]
+        parts = ["COUNT(*)", "MIN(ts)", "MAX(ts)"]
         for c in states:
             q = _quote_ident(c)
             parts += [f"COUNT({q})", f"MIN({q})", f"MAX({q})"]
-        cur.execute(f"SELECT {', '.join(parts)} FROM {window}", (floor_id,))
-        agg = cur.fetchone() or ()
-        total = agg[0] if agg else 0
+
+        deadline = time.monotonic() + _SUMMARY_TIME_BUDGET
+        conn = cur.connection
+        conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0,
+                                 _SUMMARY_PROGRESS_STEPS)
+        try:
+            cur.execute(f"SELECT {', '.join(parts)} FROM {table} WHERE id >= ?", (low_id,))
+            agg = cur.fetchone() or ()
+            cur.execute(f"SELECT substr(replace(ts, 'T', ' '), 1, 13) AS hour, COUNT(*) "
+                        f"FROM {table} WHERE id >= ? GROUP BY hour", (low_id,))
+            per_hour = cur.fetchall()
+        except sqlite3.OperationalError as exc:
+            if "interrupt" not in str(exc).lower():
+                raise
+            return {"success": False,
+                    "error": (f"The summary of {table} took longer than "
+                              f"{_SUMMARY_TIME_BUDGET:.0f} s and was stopped, because the web "
+                              f"server waits for it. Ask for fewer hours; a second try is "
+                              f"often faster, once the rows are in the disk cache.")}
+        finally:
+            conn.set_progress_handler(None, 0)
+
+        per_day: Dict[str, int] = {}
+        for hour, n in per_hour:
+            try:
+                utc = datetime.strptime(str(hour), "%Y-%m-%d %H").replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            day = utc.astimezone().date().isoformat()
+            per_day[day] = per_day.get(day, 0) + n
         per_column = {}
         for i, c in enumerate(states):
             written, low, high = agg[3 + 3 * i: 6 + 3 * i]
             if written:
                 per_column[c] = {"rows_with_value": written, "min": low, "max": high}
-        cur.execute(f"SELECT date(ts, 'localtime') AS day, COUNT(*) FROM {window} "
-                    f"GROUP BY day ORDER BY day", (floor_id,))
-        per_day = {day: n for day, n in cur.fetchall() if day}
+
+        def _local(ts):
+            if not ts:
+                return None
+            cur.execute("SELECT datetime(?, 'localtime')", (ts,))
+            return cur.fetchone()[0]
+
         busiest = sorted(per_column.items(), key=lambda kv: -kv[1]["rows_with_value"])
+        total = agg[0] if agg else 0
         result = {
             "success":       True,
             "summary":       True,
@@ -949,20 +1002,20 @@ class PluginDevToolsHandler(BaseToolHandler):
             "hours":         hours,
             "hours_capped":  hours_capped,
             "row_count":     total,
-            "truncated":     total >= _SUMMARY_ROW_CAP,
+            "truncated":     truncated,
             "ts_timezone":   "local",
-            "ts_oldest":     agg[1] if agg else None,
-            "ts_newest":     agg[2] if agg else None,
-            "rows_per_day":  per_day,
+            "ts_oldest":     _local(agg[1] if agg else None),
+            "ts_newest":     _local(agg[2] if agg else None),
+            "rows_per_day":  dict(sorted(per_day.items())),
             "columns":       dict(busiest),
             "never_written": [c for c in states if c not in per_column],
             "note":          ("Each SQL Logger row is one state update, so rows_with_value "
                               "counts how often a state was written in the window. "
                               "Columns are ordered busiest first."),
         }
-        if result["truncated"]:
+        if truncated:
             result["truncated_note"] = (
-                f"Summarised the newest {_SUMMARY_ROW_CAP} rows only, covering "
+                f"Summarised about the newest {_SUMMARY_ROW_CAP} rows only, covering "
                 f"{result['ts_oldest']} to {result['ts_newest']}. Narrow hours for an "
                 f"exact count of the whole window.")
         if hours_capped:

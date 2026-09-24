@@ -82,9 +82,10 @@ Six tools learn the jobs Claude kept writing raw Python for. In past sessions ab
 - **Restarts report back.** `restart_plugin` waits for the plugin to come back (5 seconds by default, `wait_seconds` up to 20, or 0 not to wait) and says whether it started, which version is now running, and what it logged on the way, errors counted. It stops waiting the moment the plugin is up, because the wait holds up Indigo's web server.
 - **A shorter device reply.** `get_device_by_id` and `get_device_by_name` gave the owning plugin's settings three times over, plus a dozen empty properties. They now give them once, list any other plugin's settings separately, and name the device's group when it has one. `detail="full"` returns everything as before.
 - **Read a plugin's settings.** `get_plugin_status` with `include_prefs=true` returns the plugin's saved Configure settings, with passwords, keys and tokens hidden, and any field the plugin marks secure.
-- **History at a glance.** `device_history` with `summary=true` counts rows per day and, for each state, how often it was written and its lowest and highest value, busiest first. That shows straight away which state is filling the SQL Logger.
+- **History at a glance.** `device_history` with `summary=true` counts rows per day and, for each state, how often it was written and its lowest and highest value, busiest first. That shows straight away which state is filling the SQL Logger. It reads at most the newest 250,000 rows and gives up after 5 seconds rather than hold up the web server.
+- **History reads are much faster on big tables.** Every `device_history` call began by asking SQLite for a table's first and last row id in one query, which made it read the whole table: 7.6 seconds on a 4-million-row freezer plug, with the web server waiting. It now asks for each separately, which SQLite answers at once.
 
-45 new tests, 1,433 in all. Every new check was broken on purpose to prove a test catches it.
+48 new tests, 1,436 in all. Every new check was broken on purpose to prove a test catches it.
 
 ### 3.1.0 (2026-09-24)
 A second full review of the plugin, this time of the new 3.0 code, and every problem it found is fixed.

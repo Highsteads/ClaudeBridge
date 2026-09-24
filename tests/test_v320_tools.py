@@ -425,3 +425,11 @@ def test_restart_without_waiting_and_bad_waits(restarter):
     assert plugin.restarted and "started" not in out
     assert handler.restart_plugin("com.x.widget", wait_seconds="soon")["success"] is False
     assert handler.restart_plugin("com.x.widget", wait_seconds=-1)["success"] is False
+
+
+def test_summary_that_overruns_its_budget_is_stopped_and_says_so(history, monkeypatch):
+    monkeypatch.setattr(history, "_SUMMARY_TIME_BUDGET", -1.0)
+    monkeypatch.setattr(history, "_SUMMARY_PROGRESS_STEPS", 1)
+    out = history.PluginDevToolsHandler(data_provider=None).device_history(7, hours=2,
+                                                                          summary=True)
+    assert out["success"] is False and "Ask for fewer hours" in out["error"]
