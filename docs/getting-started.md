@@ -119,7 +119,9 @@ as "should work" rather than "known to work", and say so in an issue if it does 
 ## Connecting Claude Code
 
 Claude Code connects via a lightweight Python proxy script (`indigo_mcp_proxy.py`) that handles
-authentication and protocol translation. The plugin sets this up automatically when it starts.
+authentication and protocol translation. The plugin sets this up automatically when it starts,
+writing in the access key and the web server's own address as Indigo reports it — HTTPS and a
+port other than 8176 included — so there is nothing to edit.
 
 ### Find Your Endpoint URL
 

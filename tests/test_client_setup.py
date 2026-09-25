@@ -239,3 +239,102 @@ def test_dotfiles_are_read_and_written_as_utf8(env):
     _run(env)
     settings = json.loads((env.home / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert settings["note"] == "café £5"
+
+
+# ── 1.2: the web server's real address goes into the proxy too ──────────────
+
+def _deployed(env, url):
+    """Deploy with this web server URL and import the proxy that results."""
+    import importlib.util
+    _write_secrets(env, ["a-token-for-the-address-tests"])
+    assert client_setup.setup_claude_code_integration(
+        env.log, bundle_dir=str(env.bundle), install_folder=str(env.install),
+        home=str(env.home), web_server_url=url)
+    spec = importlib.util.spec_from_file_location(f"cb_deployed_{abs(hash(url))}", env.proxy)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.BEARER_TOKEN == "a-token-for-the-address-tests"
+    return module
+
+
+@pytest.mark.parametrize("url", [None, "", "not a url", "ftp://files.example/"])
+def test_no_usable_url_keeps_the_old_default(env, url):
+    proxy = _deployed(env, url)
+    assert (proxy.INDIGO_SCHEME, proxy.INDIGO_HOST, proxy.INDIGO_PORT) == ("http", "localhost", 8176)
+
+
+def test_another_hosts_address_is_written_in_full(env):
+    # 203.0.113.0/24 is a documentation range: never one of this machine's.
+    proxy = _deployed(env, "https://203.0.113.5:8443")
+    assert (proxy.INDIGO_SCHEME, proxy.INDIGO_HOST, proxy.INDIGO_PORT) == ("https", "203.0.113.5", 8443)
+
+
+@pytest.mark.parametrize("url,port", [("http://127.0.0.1:9000", 9000),
+                                      ("https://localhost", 443),
+                                      ("http://[::1]:8176/", 8176)])
+def test_a_loopback_address_stays_localhost(env, url, port):
+    proxy = _deployed(env, url)
+    assert proxy.INDIGO_HOST == "localhost" and proxy.INDIGO_PORT == port
+
+
+def test_this_macs_own_name_becomes_localhost(env, monkeypatch):
+    monkeypatch.setattr(client_setup.socket, "gethostname", lambda: "Indigo-Mac")
+    proxy = _deployed(env, "https://indigo-mac.local:8176")
+    assert (proxy.INDIGO_SCHEME, proxy.INDIGO_HOST, proxy.INDIGO_PORT) == ("https", "localhost", 8176)
+
+
+def test_an_address_on_this_machine_becomes_localhost():
+    """An address a socket can bind to is on one of this machine's interfaces."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("203.0.113.1", 9))      # UDP: picks a route, sends nothing
+            own = probe.getsockname()[0]
+    except OSError:
+        pytest.skip("no network interface to test with")
+    if own.startswith("127."):
+        pytest.skip("only a loopback interface here")
+    assert client_setup.is_this_machine(own)
+    assert client_setup.web_server_target(f"http://{own}:8176") == ("http", "localhost", 8176)
+    assert not client_setup.is_this_machine("203.0.113.5")
+
+
+def test_the_proxy_uses_tls_for_an_https_web_server(env):
+    import http.client
+    import ssl
+    proxy = _deployed(env, "https://203.0.113.5:8443")
+    proxy._connection = None
+    conn = proxy._get_connection()
+    assert isinstance(conn, http.client.HTTPSConnection)
+    assert (conn.host, conn.port) == ("203.0.113.5", 8443)
+    assert conn._context.verify_mode == ssl.CERT_REQUIRED       # another host: verified
+
+    proxy = _deployed(env, "https://127.0.0.1:8176")
+    proxy._connection = None
+    conn = proxy._get_connection()
+    assert isinstance(conn, http.client.HTTPSConnection) and conn.host == "localhost"
+    # Loopback: the certificate names the Mac, never "localhost", and the
+    # connection never leaves the machine.
+    assert conn._context.verify_mode == ssl.CERT_NONE
+
+
+def test_startup_passes_the_web_server_url(monkeypatch, tmp_path):
+    mod = load_plugin_module()
+    p = object.__new__(mod.Plugin)
+    p.logger = logging.getLogger("test-client-setup-url")
+    p.pluginPrefs = {}
+    ind = sys.modules["indigo"]
+    monkeypatch.setattr(ind, "server", SimpleNamespace(
+        getInstallFolderPath=lambda: str(tmp_path / "Indigo 2025.2"),
+        getWebServerURL=lambda: "https://203.0.113.5:8443"))
+    setup = MagicMock(return_value=[])
+    monkeypatch.setattr(mod.client_setup, "setup_claude_code_integration", setup)
+    p._configure_claude_code()
+    assert setup.call_args.kwargs["web_server_url"] == "https://203.0.113.5:8443"
+
+    def _raises():
+        raise RuntimeError("web server not configured")
+    monkeypatch.setattr(ind, "server", SimpleNamespace(
+        getInstallFolderPath=lambda: str(tmp_path / "Indigo 2025.2"), getWebServerURL=_raises))
+    p._configure_claude_code()
+    assert setup.call_args.kwargs["web_server_url"] == ""

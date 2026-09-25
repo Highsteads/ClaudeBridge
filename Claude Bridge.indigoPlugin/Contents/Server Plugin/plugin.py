@@ -383,11 +383,21 @@ class Plugin(indigo.PluginBase):
                 install_folder = indigo.server.getInstallFolderPath(),
                 home           = os.path.expanduser("~"),
                 fallback_token = CLAUDEBRIDGE_BEARER_TOKEN,
+                web_server_url = self._web_server_url(),
             )
         except Exception as exc:
             self.logger.warning(f"\t⚠️  Claude Code auto-configure failed ({type(exc).__name__}: "
                                 f"{exc}). The MCP server is running; set Claude Code up by hand "
                                 f"or fix the permissions and restart the plugin.")
+
+    def _web_server_url(self) -> str:
+        """Indigo's own web server URL, for the proxy to talk to, or "" when
+        Indigo cannot say (the proxy then keeps http://localhost:8176)."""
+        try:
+            return indigo.server.getWebServerURL() or ""
+        except Exception as exc:
+            self.logger.debug(f"Could not read the web server URL: {exc}")
+            return ""
 
     def _stop_started_components(self) -> None:
         """Undo a half-finished startup: stop the webhook worker and the
