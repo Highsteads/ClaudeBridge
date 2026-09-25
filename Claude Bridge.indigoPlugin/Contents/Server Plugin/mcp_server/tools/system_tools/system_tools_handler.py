@@ -33,6 +33,7 @@ except ImportError:
     pass
 
 from ..base_handler import BaseToolHandler
+from ..script_tools.script_tools_handler import is_protected_script
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
@@ -355,6 +356,8 @@ class SystemToolsHandler(BaseToolHandler):
                         continue
                     if entry.name.startswith("_"):
                         continue  # skip backups/archived files in subdirs
+                    if is_protected_script(entry.path):
+                        continue  # the deployed Claude Code proxy: it holds the access key
                     stat = entry.stat()
                     scripts.append({
                         "name":     entry.name,

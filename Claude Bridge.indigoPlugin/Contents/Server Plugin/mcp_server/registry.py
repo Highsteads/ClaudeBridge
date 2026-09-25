@@ -77,6 +77,7 @@ class ToolSpec:
     redact: bool = False
     destructive: bool = False
     refresh_search: bool = False
+    redact_output: bool = False
 
     @property
     def input_schema(self) -> Dict[str, Any]:
@@ -89,7 +90,7 @@ class ToolSpec:
 REGISTRY: Dict[str, ToolSpec] = {}
 
 _ALLOWED_META = {"cacheable", "reads", "invalidates", "sensitive", "redact",
-                 "destructive", "refresh_search"}
+                 "destructive", "refresh_search", "redact_output"}
 
 
 def _bucket_set(value: Optional[Iterable[str]], what: str, name: str) -> FrozenSet[str]:
@@ -141,6 +142,7 @@ def tool(name: str, *, description: str, scope: str,
             redact=bool(meta.get("redact", False)),
             destructive=bool(meta.get("destructive", False)),
             refresh_search=bool(meta.get("refresh_search", False)),
+            redact_output=bool(meta.get("redact_output", False)),
         )
         return func
     return _register
@@ -187,6 +189,10 @@ def redact_names() -> FrozenSet[str]:
 
 def search_refresh_names() -> FrozenSet[str]:
     return _flagged("refresh_search")
+
+
+def redact_output_names() -> FrozenSet[str]:
+    return _flagged("redact_output")
 
 
 def clear_all_names() -> FrozenSet[str]:

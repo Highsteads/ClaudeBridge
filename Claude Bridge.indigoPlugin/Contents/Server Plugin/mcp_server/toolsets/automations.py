@@ -44,7 +44,7 @@ def list_triggers(ctx):
 
 # ── Reading one automation ───────────────────────────────────────────────────
 
-@tool("get_automation", scope="read",
+@tool("get_automation", scope="read", redact_output=True,
       description=("Full definition of one trigger, schedule or action group: event settings "
                    "(triggers), decoded timing (schedules: time/date type, sun offsets, repeat "
                    "interval), conditions, and the ACTION STEPS — device commands, variable "
@@ -123,7 +123,7 @@ def find_automation_references(ctx, entity_type, entity_id, include_server_check
         include_scripts=coerce_bool(include_scripts, default=True))
 
 
-@tool("investigate_event", scope="read",
+@tool("investigate_event", scope="read", redact_output=True,
       description=("Answer 'what caused this device change?' — finds the change in the event "
                    "log, collects trigger/schedule/action-group activity in a window around it, "
                    "and ranks candidates by temporal proximity plus structural evidence (does "

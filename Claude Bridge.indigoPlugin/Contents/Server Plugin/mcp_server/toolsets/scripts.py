@@ -37,7 +37,7 @@ def list_python_scripts(ctx, backups_for=None):
     return ctx.system_tools_handler.list_python_scripts()
 
 
-@tool("read_script", scope="read",
+@tool("read_script", scope="read", redact_output=True,
       description="Read the full content of a Python script from the Indigo Scripts folder.",
       properties={"name": string("Script filename (with or without .py)")},
       required=["name"])

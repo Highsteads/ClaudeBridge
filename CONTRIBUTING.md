@@ -108,6 +108,9 @@ def list_widgets(ctx, limit=50):
    back, which adds the `confirm` argument and puts the call behind the
    delete preference; `sensitive=True` to scrub a failure whole;
    `redact=True` to keep a failure but blank secret values;
+   `redact_output=True` for a read that can show file or log text (a script,
+   an automation's embedded script, the event log), so a key without admin
+   gets every known secret value blanked from the reply;
    `refresh_search=True` when it adds, removes or renames devices, variables
    or action groups, so search sees the change at once. (A change made any
    other way — in the Indigo client, or by `execute_indigo_python` — reaches

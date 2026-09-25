@@ -119,7 +119,7 @@ def system_health(ctx):
     return ctx.system_tools_handler.system_health()
 
 
-@tool("query_event_log", scope="read",
+@tool("query_event_log", scope="read", redact_output=True,
       description=(
           "Query Indigo server event log entries. Without after/before returns the most recent "
           "line_count entries. With after/before reads from the on-disk log files and returns "
