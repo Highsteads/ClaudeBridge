@@ -176,8 +176,8 @@ You read the result, hit Enter to commit, done. No Googling
 ## What it does
 
 Claude Bridge gives Claude Code **69 MCP tools**, enough to read and change anything on a running
-Indigo server: **28 read** tools (pure queries), **21 write** tools (they change Indigo state) and
-**20 admin** tools (deletes, code execution, plugin lifecycle, physical security). By area:
+Indigo server: **28 read** tools (pure queries), **20 write** tools (they change Indigo state) and
+**21 admin** tools (deletes, code execution, plugin lifecycle, physical security). By area:
 
 - **Devices** — list, search and inspect by id, name, type or state; plain-English search; one
   `device_control` tool for on, off, toggle, brightness, colour, status, beep and ping, by id or by

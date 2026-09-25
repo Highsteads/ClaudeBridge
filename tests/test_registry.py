@@ -38,7 +38,7 @@ def _types(prop):
 def test_the_surface_is_the_agreed_69():
     assert len(REG) == 69
     by_scope = {sc: len(registry.names_in_scope(sc)) for sc in registry.SCOPES}
-    assert by_scope == {"read": 28, "write": 21, "admin": 20}
+    assert by_scope == {"read": 28, "write": 20, "admin": 21}
 
 
 @pytest.mark.parametrize("name", NAMES)

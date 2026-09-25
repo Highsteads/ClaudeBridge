@@ -62,7 +62,7 @@ _Pure queries — no state change. Require the `read` scope._
 | `server_info` | Facts about this Indigo server in one reply: install, Logs and database paths (to find the history DB and logs without typing a version number), the local web server URL, the Reflector's URL and connection status (url is null when no Reflector is active), the configured latitude/longitude, and sunrise and sunset for date_iso (YYYY-MM-DD, default today). |
 | `system_health` | Return a snapshot of Mac Mini system health: macOS version, Python version, disk usage (total/used/free/%), RAM summary, and uptime. No parameters required. |
 
-### Write tools (21)
+### Write tools (20)
 
 _Modify Indigo state. Require `write` (or `admin`)._
 
@@ -80,8 +80,7 @@ _Modify Indigo state. Require `write` (or `admin`)._
 | `log_message` | Write a message to the Indigo on-screen event log (Log Viewer). The message appears immediately. Use for status updates, confirmations, or debug output that the user can see in the Indigo UI. |
 | `move_to_folder` | Move a device, variable or trigger to a different folder. folder_id=0 means root. |
 | `rename_device` | Rename a device. |
-| `send_email` | Send an email via Indigo's configured SMTP device. Use for detailed reports, logs, or non-urgent notifications. |
-| `send_notification` | Send a Pushover push notification to the user's device. Use for important alerts, confirmations, or proactive updates. |
+| `send_notification` | Send a Pushover push notification to the user's own devices (the Pushover account set up in Indigo; the caller cannot choose another recipient). Use for important alerts, confirmations, or proactive updates. |
 | `set_enabled` | Enable or disable a trigger or schedule, by id or name. Optionally delay the change (delay_seconds) and/or revert it automatically after duration_seconds — e.g. silence a motion trigger for 30 minutes. |
 | `speed_control` | Set a fan or speed-control device. Give exactly one of level (0-100 percent), index (0 off, 1 low, 2 medium, 3 high on a four-speed device; the top index is the device's speedIndexCount minus one) or step (+1 or -1 to move one index up or down). The reply gives the speed the device reports afterwards. |
 | `sprinkler_control` | Drive a sprinkler device: run the programme, stop, pause, resume, next_zone, previous_zone, or set_zone with zone (1-based). |
@@ -90,7 +89,7 @@ _Modify Indigo state. Require `write` (or `admin`)._
 | `variable_create` | Create a new variable |
 | `variable_update` | Update a variable's value |
 
-### Admin tools (20)
+### Admin tools (21)
 
 _Destructive / irreversible / code-execution / lifecycle / physical-security. Require `admin`._
 
@@ -110,6 +109,7 @@ _Destructive / irreversible / code-execution / lifecycle / physical-security. Re
 | `remove_delayed_actions` | Cancel pending delayed actions. kind='device' cancels them for ONE device (e.g. a queued auto-off from device_control duration), leaving others alone; kind='schedule' for one schedule; kind='trigger' for one trigger; kind='all' removes every pending delayed action on the server — confirm with the user first. |
 | `restart_plugin` | Restart an Indigo plugin, then wait (default 10 s, at most 20) for it to log 'Started plugin' and report started, running_version, error and warning counts and the lines it logged while restarting — no separate status check or log search needed. The wait holds Indigo's web server, so it stops as soon as the plugin is up; wait_seconds=0 returns at once. Errors a plugin logs later than a second after starting are not included. Refuses Claude Bridge itself — that kills the session asking; restart it from the Indigo Plugins menu. |
 | `run_script` | Execute a Python script from the Python Scripts folder in the Indigo Python context, with full access to the indigo module. Use for triggering automation logic, one-off tasks, or testing scripts. Returns stdout/stderr. A run that takes longer than wait_seconds (default 5) keeps going in the background: the reply is {status: 'running', job_id}, and calling again with that job_id waits a little longer and returns the finished result. Only one run of this tool or its sibling can hold the output capture at a time; another is refused at once, naming the running job. Results are kept 10 minutes. |
+| `send_email` | Send an email via Indigo's configured SMTP device to any address. Use for detailed reports, logs, or non-urgent notifications. ADMIN scope: it sends data out of the house to a recipient the caller chooses. |
 | `variable_delete` | Permanently delete a variable. Destructive — cannot be undone. Requires confirm=true AND the plugin's delete preference to be enabled. |
 | `webhook_create` | Register an OUTBOUND webhook: the home POSTs a signed JSON event to an APPROVED external URL when a device/variable condition is met. ADMIN. The target must be on the egress allow-list (default-deny — private/LAN ranges need an explicit CIDR opt-in). Returns a one-time HMAC signing key — capture it. Requires 'Enable Event Webhooks' in the plugin config. |
 | `webhook_delete` | Delete an outbound webhook subscription by id. ADMIN. |
