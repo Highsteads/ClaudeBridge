@@ -118,3 +118,80 @@ def test_oversized_payload_is_dropped_not_sent(capture_server):
         assert "exceeds cap" in (sub.stats["last_error"] or "")
     finally:
         d.stop()
+
+
+# ── Every vetted address is tried in turn ─────────────────────────────────────
+
+def _addresses(*ips):
+    import ipaddress
+    return [ipaddress.ip_address(ip) for ip in ips]
+
+
+def test_a_dead_first_address_falls_through_to_the_next(capture_server, monkeypatch):
+    """A host with two addresses, the first unreachable (an IPv6 address on a
+    network without IPv6, say), used to fail on the first every time."""
+    import socket
+    from mcp_server.webhooks import webhook_dispatcher as wd
+    captured, port = capture_server
+    monkeypatch.setattr(wd, "vet_url", lambda url, allow, resolve=True:
+                        _addresses("192.0.2.1", "127.0.0.1"))
+    tried = []
+    real = socket.create_connection
+
+    def _connect(address, timeout=None, *a, **k):
+        tried.append(address[0])
+        if address[0] == "192.0.2.1":
+            raise ConnectionRefusedError(61, "Connection refused")
+        return real(address, timeout, *a, **k)
+    monkeypatch.setattr(wd.socket, "create_connection", _connect)
+
+    allow = Allowlist.from_entries(["127.0.0.1/32"], http_entries=["hooks.example"])
+    d = WebhookDispatcher(allowlist_provider=lambda: allow)
+    d.start()
+    try:
+        sub = Subscription(webhook_url=f"http://hooks.example:{port}/hook",
+                           entity_type="device", entity_id=4)
+        d.dispatch(sub, Event(event_type="device.state_changed", entity={"id": 4, "name": "A"}))
+        assert _wait_for(lambda: "body" in captured), "event was not delivered"
+        assert tried == ["192.0.2.1", "127.0.0.1"]
+        assert captured["headers"]["Host"] == f"hooks.example:{port}"   # pinned, not re-resolved
+        assert sub.stats["last_http_status"] == 200
+    finally:
+        d.stop()
+
+
+def test_when_every_address_fails_the_last_error_is_raised(monkeypatch):
+    import pytest as _pytest
+    from mcp_server.webhooks import webhook_dispatcher as wd
+    tried = []
+
+    def _connect(address, timeout=None, *a, **k):
+        tried.append(address[0])
+        raise ConnectionRefusedError(61, f"refused by {address[0]}")
+    monkeypatch.setattr(wd.socket, "create_connection", _connect)
+    d = WebhookDispatcher(allowlist_provider=lambda: None)
+    with _pytest.raises(ConnectionRefusedError, match="192.0.2.2"):
+        d._post_pinned("https://hooks.example/h", ["192.0.2.1", "192.0.2.2"], {}, b"{}", True)
+    assert tried == ["192.0.2.1", "192.0.2.2"]
+
+
+def test_the_addresses_share_one_delivery_deadline(monkeypatch):
+    """Falling through to the next address never stretches the delivery past
+    its deadline: once it has gone, no further address is tried."""
+    import socket
+    import pytest as _pytest
+    from mcp_server.webhooks import webhook_dispatcher as wd
+    tried = []
+
+    def _slow(address, timeout=None, *a, **k):
+        tried.append((address[0], timeout))
+        time.sleep(0.35)
+        raise socket.timeout("timed out")
+    monkeypatch.setattr(wd.socket, "create_connection", _slow)
+    d = WebhookDispatcher(allowlist_provider=lambda: None, connect_timeout=5, total_timeout=0.3)
+    started = time.monotonic()
+    with _pytest.raises(socket.timeout):
+        d._post_pinned("https://hooks.example/h", ["192.0.2.1", "192.0.2.2"], {}, b"{}", True)
+    assert [ip for ip, _ in tried] == ["192.0.2.1"]
+    assert tried[0][1] <= 0.3                     # the connect had only the time left
+    assert time.monotonic() - started < 1.0
