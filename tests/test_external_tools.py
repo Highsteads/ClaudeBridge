@@ -493,5 +493,9 @@ def test_the_dashboards_manifest_parses_under_this_reader():
         pytest.skip("Dashboards repo not on this machine")
     m = parse_manifest(open(DASHBOARDS_MANIFEST, encoding="utf-8").read(),
                        "com.clives.indigoplugin.dashboards", path=DASHBOARDS_MANIFEST)
-    assert m.prefix == "dashboards" and len(m.tools) == 8
+    # Count against the file itself, not a pinned number: Dashboards adds tools on its own
+    # release cycle (list_alerts in 3.47.0), and what this test guards is that the reader
+    # drops none of them.
+    declared = json.load(open(DASHBOARDS_MANIFEST, encoding="utf-8"))["tools"]
+    assert m.prefix == "dashboards" and len(m.tools) == len(declared) >= 8
     assert {t.name for t in m.tools if t.write} == {"set_room_folders", "set_camera", "remove_camera"}

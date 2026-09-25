@@ -673,8 +673,17 @@ class MCPHandler:
 
     @staticmethod
     def _accepted() -> Dict[str, Any]:
-        """202 Accepted with no body: a notification or response taken in."""
-        return {"status": 202, "headers": {}, "content": ""}
+        """202 Accepted: a notification or response taken in.
+
+        The body is ONE SPACE, not empty. Indigo's web server refuses a reply
+        whose "content" is empty or missing, answering the client 500 "incorrect
+        value returned from plugin" and logging a Web Server Error, while it
+        passes 202 itself through untouched (measured live 25-09-2026 against
+        3.3.0, which sent "" and logged one error per new MCP session). A client
+        ignores the body of a 202, so a single space is the nearest thing to
+        "no body" this server can send.
+        """
+        return {"status": 202, "headers": {}, "content": " "}
     
     def _origin_allowed(self, origin: Optional[str]) -> bool:
         guard = getattr(self, "_origin_guard", None)

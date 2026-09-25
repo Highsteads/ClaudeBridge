@@ -178,20 +178,28 @@ def test_missing_protocol_version_header_is_tolerated(tmp_path):
 
 # ── Notifications & unknown methods ───────────────────────────────────────────
 
+def _assert_iws_safe_202(resp):
+    # Indigo's web server refuses an EMPTY or missing "content" (it answers the
+    # client 500 "incorrect value returned from plugin" and logs a Web Server
+    # Error), so "no body" has to be a body of whitespace. 3.3.0 sent "" and
+    # logged one error per new MCP session (measured live 25-09-2026).
+    assert resp["status"] == 202
+    assert isinstance(resp.get("content"), str) and resp["content"]
+    assert resp["content"].strip() == ""
+
+
 def test_notification_is_202_accepted_with_no_body(tmp_path):
     # MCP Streamable HTTP (2025-03-26, 2025-06-18): a POST holding only a
     # notification the server accepts gets 202 Accepted and no body.
     h = _make_handler(tmp_path)
     resp = _post(h, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-    assert resp["status"] == 202
-    assert resp["content"] == ""
+    _assert_iws_safe_202(resp)
 
 
 def test_a_clients_jsonrpc_response_is_202_accepted(tmp_path):
     h = _make_handler(tmp_path)
     resp = _post(h, {"jsonrpc": "2.0", "id": 9, "result": {}})
-    assert resp["status"] == 202
-    assert resp["content"] == ""
+    _assert_iws_safe_202(resp)
 
 
 def test_a_notification_that_is_not_jsonrpc_is_400(tmp_path):
