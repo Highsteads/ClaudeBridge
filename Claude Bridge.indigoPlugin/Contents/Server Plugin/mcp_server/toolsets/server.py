@@ -202,8 +202,11 @@ _AUDITS = {
 }
 
 
+# audit(check="home") counts disabled triggers and schedules, so it reads
+# those buckets too: set_enabled must drop it, or the check after an enable
+# served the pre-change count for the whole TTL.
 @tool("audit", scope="read", cacheable=True,
-      reads={"device", "variable", "script", "external"},
+      reads={"device", "variable", "trigger", "schedule", "script", "external"},
       description=(
           "Run one health check, chosen by check. home: the overview — devices in error, low "
           "battery, stale devices, empty variables, disabled triggers and schedules, "

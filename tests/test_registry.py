@@ -236,17 +236,17 @@ def _warm(cache, *tools):
 
 def test_a_mutator_drops_exactly_the_reads_it_changes():
     cache = tool_cache.ToolCache(default_ttl=60)
-    _warm(cache, "list_triggers", "list_variables", "list_plugins")
+    _warm(cache, "list_action_groups", "list_variables", "list_plugins")
     dropped = cache.invalidate_for_tool("update_automation")
     assert dropped == 1
-    assert cache.get_or_compute("list_triggers", {}, lambda: "fresh")[1] is False
+    assert cache.get_or_compute("list_action_groups", {}, lambda: "fresh")[1] is False
     assert cache.get_or_compute("list_variables", {}, lambda: "x")[1] is True
     assert cache.get_or_compute("list_plugins", {}, lambda: "x")[1] is True
 
 
 def test_the_code_runners_clear_everything_and_a_read_drops_nothing():
     cache = tool_cache.ToolCache(default_ttl=60)
-    _warm(cache, "list_triggers", "list_variables")
+    _warm(cache, "list_action_groups", "list_variables")
     assert cache.invalidate_for_tool("list_devices") == 0
     assert cache.invalidate_for_tool("execute_indigo_python") == 2
     assert cache.stats()["entries"] == 0
