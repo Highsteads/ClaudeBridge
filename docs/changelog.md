@@ -8,6 +8,23 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 3.3.0 (2026-09-25)
+A security review of 3.2, and every finding it confirmed is fixed. The first four change what a key may do.
+
+- **A read-only key can no longer read the admin key.** The go-between script the plugin puts in Indigo's `Scripts` folder holds the web server's access key, and `read_script` could read it. No script tool will now read, list, change or run that file, whatever the key. For a key without admin, scripts, the scripts inside automations and the event log also come back with every known password and key blanked out.
+- **Sending e-mail needs an admin key.** It can go to any address, so it counts as data leaving the house. Pushover notifications, which only reach your own devices, still need write.
+- **Zeroing an energy total needs an admin key**, because the old figure cannot be put back. `device_control` itself is still a write tool.
+- **Z-Wave exclusion is behind the delete switch.** `zwave` with `enter_exclusion` removes the next device whose button is pressed from the network, so it now needs `confirm=true` and *Allow Claude to delete devices, variables and automations* switched on, like a delete.
+- **A plugin action cannot hold up the web server.** `execute_device_action` stops waiting after 20 seconds and says the action may still be running. It also refuses Claude Bridge's own actions.
+- **The rate limits shown are the ones applied.** Limits count per access key, and an admin key gets ten times the figures. Without a `scopes.json` every key is admin, so a stock install allows 1,200 calls a minute and 50,000 a day, not the 120 and 5,000 on show. The limits themselves have not changed; Configure and `/health` now say what they are, and `/health` shows each key its own.
+- **`/health` shows key names, scopes and recent calls to admin keys only.** Other keys get the basic status. Without a `scopes.json` every key is admin, so nothing changes there.
+- **The connection follows the MCP rules.** An unknown session gets HTTP 404, a missing one 400, and a notification 202 with no body, where all three got 200 before. The go-between script (now 1.8) copes with each of these and starts a fresh session by itself, including after a plugin restart. A request from a web page on another site is refused with 403.
+- **The go-between script finds the web server.** It used to assume `http://localhost:8176`. It now uses the address Indigo reports, so HTTPS and another port work.
+- **Smaller fixes.** Trigger and schedule lists are no longer cached, so a change made in Indigo shows at once, and the home audit sees an automation enabled or disabled straight away. A webhook whose first address does not answer tries the next. Asking for a prompt without a detail it needs is refused by name instead of filled with a placeholder.
+- **The documentation is honest about keys.** A write key can run any action group, trigger or schedule, including ones that unlock doors or run scripts, so give a phone a read key. The Security page lists everything a read key can see.
+
+89 new tests, 1,520 in all.
+
 ### 3.2.1 (2026-09-24)
 `restart_plugin` now waits up to 10 seconds by default, not 5.
 

@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 3.2.1
+**Version:** 3.3.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -74,6 +74,23 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 3.3.0 (2026-09-25)
+A security review of 3.2, and every finding it confirmed is fixed. The first four change what a key may do.
+
+- **A read-only key can no longer read the admin key.** The go-between script the plugin puts in Indigo's `Scripts` folder holds the web server's access key, and `read_script` could read it. No script tool will now read, list, change or run that file, whatever the key. For a key without admin, scripts, the scripts inside automations and the event log also come back with every known password and key blanked out.
+- **Sending e-mail needs an admin key.** It can go to any address, so it counts as data leaving the house. Pushover notifications, which only reach your own devices, still need write.
+- **Zeroing an energy total needs an admin key**, because the old figure cannot be put back. `device_control` itself is still a write tool.
+- **Z-Wave exclusion is behind the delete switch.** `zwave` with `enter_exclusion` removes the next device whose button is pressed from the network, so it now needs `confirm=true` and *Allow Claude to delete devices, variables and automations* switched on, like a delete.
+- **A plugin action cannot hold up the web server.** `execute_device_action` stops waiting after 20 seconds and says the action may still be running. It also refuses Claude Bridge's own actions.
+- **The rate limits shown are the ones applied.** Limits count per access key, and an admin key gets ten times the figures. Without a `scopes.json` every key is admin, so a stock install allows 1,200 calls a minute and 50,000 a day, not the 120 and 5,000 on show. The limits themselves have not changed; Configure and `/health` now say what they are, and `/health` shows each key its own.
+- **`/health` shows key names, scopes and recent calls to admin keys only.** Other keys get the basic status. Without a `scopes.json` every key is admin, so nothing changes there.
+- **The connection follows the MCP rules.** An unknown session gets HTTP 404, a missing one 400, and a notification 202 with no body, where all three got 200 before. The go-between script (now 1.8) copes with each of these and starts a fresh session by itself, including after a plugin restart. A request from a web page on another site is refused with 403.
+- **The go-between script finds the web server.** It used to assume `http://localhost:8176`. It now uses the address Indigo reports, so HTTPS and another port work.
+- **Smaller fixes.** Trigger and schedule lists are no longer cached, so a change made in Indigo shows at once, and the home audit sees an automation enabled or disabled straight away. A webhook whose first address does not answer tries the next. Asking for a prompt without a detail it needs is refused by name instead of filled with a placeholder.
+- **The documentation is honest about keys.** A write key can run any action group, trigger or schedule, including ones that unlock doors or run scripts, so give a phone a read key. The Security page lists everything a read key can see.
+
+89 new tests, 1,520 in all.
+
 ### 3.2.1 (2026-09-24)
 `restart_plugin` now waits up to 10 seconds by default, not 5.
 
@@ -91,21 +108,6 @@ Six tools learn the jobs Claude kept writing raw Python for. In past sessions ab
 - **History reads are much faster on big tables.** Every `device_history` call began by asking SQLite for a table's first and last row id in one query, which made it read the whole table: 7.6 seconds on a 4-million-row freezer plug, with the web server waiting. It now asks for each separately, which SQLite answers at once.
 
 48 new tests, 1,436 in all. Every new check was broken on purpose to prove a test catches it.
-
-### 3.1.0 (2026-09-24)
-A second full review of the plugin, this time of the new 3.0 code, and every problem it found is fixed.
-
-- **Switching a device by name is safer.** A device whose name contained "one" or "single" could be mistaken for a longer name starting the same way, and a lone near-miss could be switched when you meant something else. Now only the exact name, or a name containing every word you gave, is acted on; anything less is refused with the candidates listed.
-- **Colour changes work.** The colour command was sending Indigo settings it does not recognise, on the wrong scale, so no colour change ever reached a bulb.
-- **Thermostats in Fahrenheit are safe.** Nudging a setpoint used to squeeze the result into a Celsius range without saying so, which on a Fahrenheit thermostat meant a setpoint of 35. Values are now checked in the thermostat's own units and refused, never quietly changed.
-- **Passwords stay hidden.** Looking a device up used to return its settings in full, SMTP and router passwords included, even to a read-only key. Those values are now masked.
-- **The security summary tells the truth.** A locked front door, a garage door opener and a relay were all being reported as open doors, and every idle heating zone as heating. The summary now goes by what Indigo says each device is rather than by words in its name, and reports unlocked locks separately.
-- **"What caused this?" looks further back.** `investigate_event` only ever saw the last day and a half of the log, whatever you asked for. It now searches the whole window, and it recognises a delayed action started by a trigger.
-- **Scripts keep their permissions** when Claude edits them, and a script that ends with `sys.exit(1)` now counts as a failure.
-- **Quieter log.** Routine reads no longer write to the event log, and a mistake in Claude's own code is no longer logged as a red error for the error watcher to chase. Only real faults are errors now.
-- **Sturdier underneath.** A failure while setting up Claude Code no longer takes the whole server down with it. Error replies always reach the request that caused them. Webhooks keep working after being switched off and on, and a new menu item brings back a webhook that was paused after repeated failures. A plugin-provided tool can no longer hold up the web server for more than 20 seconds.
-
-About 230 new tests, 1,388 in all. Every fix was broken on purpose to prove a test catches it.
 
 ## Vibe coding for Indigo
 
