@@ -30,6 +30,7 @@ def test_buckets_are_pairwise_disjoint():
     "delete_folder", "variable_delete", "remove_delayed_actions", "lock_control",
     "execute_plugin_menu_item", "execute_client_menu_item", "execute_device_action",
     "zwave", "webhook_create", "webhook_list", "webhook_delete", "raw_server_request",
+    "send_email",
 ])
 def test_dangerous_tools_require_admin(tool):
     assert required_scope_for(tool) == "admin", f"{tool} must be admin-scoped"
@@ -55,6 +56,16 @@ def test_mutating_tools_require_at_least_write(tool):
 ])
 def test_read_tools_are_read(tool):
     assert required_scope_for(tool) == "read"
+
+
+def test_a_write_key_can_notify_the_owner_but_not_email_anyone(tmp_path):
+    """Pushover reaches only the owner's own devices; email goes to any address
+    the caller names, which is data leaving the house, so it is admin."""
+    mgr = ScopeManager(scopes_file=_write(tmp_path, {"tokens": {
+        "tablet": {"name": "tablet", "scopes": ["read", "write"]}}}))
+    mgr.check("tablet", "send_notification")
+    with pytest.raises(ScopeDenied):
+        mgr.check("tablet", "send_email")
 
 
 def test_unknown_tool_fails_closed_to_admin():
