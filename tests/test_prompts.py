@@ -30,9 +30,32 @@ def test_prompt_get_fills_arguments():
     assert got is not None
     text = got["messages"][0]["content"]["text"]
     assert "threshold=15" in text
-    # required-arg default placeholder when not supplied
-    plugin = get_prompt("recover_wedged_plugin", {})
-    assert "<plugin>" in plugin["messages"][0]["content"]["text"]
+    plugin = get_prompt("recover_wedged_plugin", {"plugin": "Dashboards"})
+    assert "Dashboards" in plugin["messages"][0]["content"]["text"]
+
+
+def test_a_missing_required_argument_is_refused_by_name():
+    """It used to be filled with a "<plugin>" placeholder, which sent Claude
+    looking for a plugin literally called that."""
+    import pytest
+    from mcp_server.prompts import MissingPromptArguments, get_prompt
+    for args in ({}, {"plugin": ""}, {"plugin": None}):
+        with pytest.raises(MissingPromptArguments) as exc:
+            get_prompt("recover_wedged_plugin", args)
+        assert exc.value.missing == ["plugin"]
+
+
+def test_prompts_get_answers_a_missing_argument_with_32602(tmp_path):
+    import json
+    from test_protocol_handle_request import _make_handler
+    h = _make_handler(tmp_path)
+    resp = h.handle_request("POST", {"accept": "application/json"}, json.dumps(
+        {"jsonrpc": "2.0", "id": 3, "method": "prompts/get",
+         "params": {"name": "zwave_tune_sensor", "arguments": {}}}))
+    err = json.loads(resp["content"])
+    assert err["id"] == 3
+    assert err["error"]["code"] == -32602
+    assert "device" in err["error"]["message"]
 
 
 def test_prompt_get_unknown_returns_none():
