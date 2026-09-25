@@ -5,6 +5,7 @@ Provides MCP tools for managing Indigo plugins.
 """
 
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
     from ...adapters.indigo_data_provider import IndigoDataProvider
 from ...common import plugin_actions
+from ...common.exec_lock import MAX_WAIT_SECONDS
 from ..base_handler import BaseToolHandler
 from .plugin_scanner import PluginScanner
 
@@ -293,6 +295,18 @@ class PluginControlHandler(BaseToolHandler):
                                   f"built-in device tools instead."),
                     }
 
+            # Claude Bridge's own actions would run on the plugin that is
+            # serving this very request, and with waitUntilDone it would wait
+            # on itself (see docs/providers.md: never call back with
+            # waitUntilDone=True).
+            if plugin_id == _OWN_PLUGIN_ID:
+                return {
+                    "success": False,
+                    "error": ("execute_device_action refuses Claude Bridge's own actions: "
+                              "they would run inside the plugin answering this request, "
+                              "which then waits on itself. Use the matching tool instead."),
+                }
+
             plugin = indigo.server.getPlugin(plugin_id)
 
             # getPlugin() with a WRONG id does not raise — it returns an object
@@ -367,7 +381,10 @@ class PluginControlHandler(BaseToolHandler):
             if props:
                 kwargs["props"] = props
 
-            returned = plugin.executeAction(action_type_id, **kwargs)
+            finished, returned, overrun = self._execute_with_deadline(
+                plugin, action_type_id, kwargs, f"{plugin_id}:{action_type_id}{target}")
+            if not finished:
+                return overrun
 
             result: Dict[str, Any] = {
                 "success": True,
@@ -406,6 +423,72 @@ class PluginControlHandler(BaseToolHandler):
             self.logger.error(error_msg, exc_info=True)
             self.log_tool_outcome("execute_device_action", False, error_msg)
             return {"success": False, "error": error_msg}
+
+    # How long the request thread waits for a plugin action. It is Indigo's
+    # web-server thread too, so the same cap as a plugin-provided tool's call
+    # (external_tools/dispatch.py) and a long Python run (exec_lock).
+    ACTION_DEADLINE_SECONDS = MAX_WAIT_SECONDS
+
+    def _execute_with_deadline(self, plugin, action_type_id: str, kwargs: Dict[str, Any],
+                               label: str):
+        """plugin.executeAction on a short-lived thread, waited on for at most
+        ACTION_DEADLINE_SECONDS. executeAction has no timeout of its own, so a
+        slow or hung action with waitUntilDone=True used to hold Indigo's web
+        server for as long as it took. Returns (finished, returned, overrun
+        reply). An action still going at the deadline cannot be cancelled: it
+        is left to finish, and its outcome is logged when it lands."""
+        slot: Dict[str, Any] = {}
+        handoff = threading.Lock()
+        started = time.monotonic()
+
+        def _run():
+            try:
+                slot["value"] = plugin.executeAction(action_type_id, **kwargs)
+            except Exception as exc:          # noqa: BLE001 — reported below
+                slot["exception"] = exc
+            with handoff:
+                slot["done"] = True
+                abandoned = slot.get("abandoned", False)
+            if abandoned:
+                try:
+                    elapsed = time.monotonic() - started
+                    if "exception" in slot:
+                        self.logger.warning(f"execute_device_action {label} finished after "
+                                            f"{elapsed:.0f}s, after its reply had gone back, "
+                                            f"and FAILED: {slot['exception']}")
+                    else:
+                        self.logger.info(f"execute_device_action {label} finished after "
+                                         f"{elapsed:.0f}s, after its reply had gone back")
+                except Exception:             # noqa: BLE001 — never kill the thread
+                    pass
+
+        worker = threading.Thread(target=_run, name=f"device-action-{action_type_id}",
+                                  daemon=True)
+        worker.start()
+        worker.join(self.ACTION_DEADLINE_SECONDS)
+        with handoff:
+            finished = slot.get("done", False)
+            if not finished:
+                slot["abandoned"] = True
+        if not finished:
+            deadline = self.ACTION_DEADLINE_SECONDS
+            self.logger.warning(f"⏱ execute_device_action {label} still running after "
+                                f"{deadline:g}s — replying now so the web server is not held")
+            return False, None, {
+                "success": False,
+                "timed_out": True,
+                "still_running": True,
+                "elapsed_seconds": round(time.monotonic() - started, 1),
+                "error": (f"The action did not finish within {deadline:g}s, so Claude Bridge "
+                          f"stopped waiting rather than hold Indigo's web server. It may "
+                          f"still be running inside the plugin and cannot be cancelled, so "
+                          f"its effect may yet land. Its outcome is written to the Claude "
+                          f"Bridge event log when it finishes; check that, or re-read the "
+                          f"device, before trying again."),
+            }
+        if "exception" in slot:
+            raise slot["exception"]
+        return True, slot.get("value"), None
 
     def _resolve_device(self, device_id: Any):
         """Accept a numeric id or an exact device name. Returns (device, error)."""

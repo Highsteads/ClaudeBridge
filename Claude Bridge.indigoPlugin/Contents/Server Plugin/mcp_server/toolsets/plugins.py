@@ -9,6 +9,7 @@
 
 from typing import Any, Dict
 
+from ..common.exec_lock import MAX_WAIT_SECONDS
 from ..registry import tool
 from ._schema import boolean, coerce_bool, id_or_name, number, refuse, string
 
@@ -139,8 +140,11 @@ def restart_plugin(ctx, plugin_id, wait_seconds=None):
           "device action with no device, or a stopped owning plugin come back as errors — "
           "Indigo itself returns cleanly and does nothing in all three cases. A plugin action "
           "reports success by changing state, not by returning a value, so re-read the device "
-          "to confirm the effect. ADMIN scope: these actuate real hardware (valves, locks, "
-          "doors, sprinklers)."),
+          f"to confirm the effect. The call waits at most {MAX_WAIT_SECONDS} seconds: an action "
+          "still going "
+          "then comes back as timed out, and may still finish inside the plugin. Refuses "
+          "Claude Bridge's own actions. ADMIN scope: these actuate real hardware (valves, "
+          "locks, doors, sprinklers)."),
       properties={
           "action_type_id": string("The <Action id=...> from the plugin's Actions.xml"),
           "device_id": id_or_name("Device id or exact name. REQUIRED for any action declared "
@@ -151,9 +155,8 @@ def restart_plugin(ctx, plugin_id, wait_seconds=None):
                                     "strings, so prefer strings unless the field is a checkbox.")},
           "plugin_id": string("Owning plugin's bundle id. Derived from the device when omitted; "
                               "required for a plugin-level action."),
-          "wait_until_done": boolean("Block until the plugin's callback returns (default true). "
-                                     "Dispatch is single-threaded, so a slow action holds every "
-                                     "other tool call."),
+          "wait_until_done": boolean("Wait for the plugin's callback to return (default true), "
+                                     f"for at most {MAX_WAIT_SECONDS} seconds."),
       },
       required=["action_type_id"])
 def execute_device_action(ctx, action_type_id, device_id=None, props=None, plugin_id=None,
