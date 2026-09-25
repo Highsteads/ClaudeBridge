@@ -28,14 +28,20 @@ def list_action_groups(ctx):
     return ctx.list_handlers.list_all_action_groups()
 
 
-@tool("list_schedules", scope="read", cacheable=True, reads={"schedule"},
+# Neither list is cached. A trigger or schedule enabled, renamed or deleted in
+# the Indigo client, by another plugin or by an action group never reaches
+# the cache: the plugin subscribes to device, variable and action-group
+# changes only, and the trigger and schedule change callbacks are not ones
+# this codebase can confirm Indigo offers. A cached list served that for the
+# whole TTL; both lists are cheap to build.
+@tool("list_schedules", scope="read",
       description=("List all Indigo schedules with their ID, name, enabled state, and next "
                    "scheduled execution time."))
 def list_schedules(ctx):
     return ctx.schedule_control_handler.list_schedules()
 
 
-@tool("list_triggers", scope="read", cacheable=True, reads={"trigger"},
+@tool("list_triggers", scope="read",
       description=("List all Indigo triggers with their ID, name, enabled state, and plugin "
                    "type information."))
 def list_triggers(ctx):

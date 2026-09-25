@@ -103,14 +103,36 @@ def test_folder_invalidation_wired():
 # ── Cache invalidation must cover every mutator ──────────────────────────────
 
 def test_update_writers_invalidate_their_caches():
-    """Triggers/schedules/action groups have no domain counter, so nothing else
-    drops their buckets — a renamed trigger read stale for the whole TTL."""
+    """Triggers/schedules have no domain counter, so nothing else drops their
+    buckets — a renamed trigger read stale for the whole TTL."""
     from mcp_server.common.tool_cache import _INVALIDATION_MAP
 
     tool = "update_automation"
     assert tool in _INVALIDATION_MAP, f"{tool} invalidates nothing"
-    for listing in ("list_triggers", "list_schedules", "list_action_groups"):
+    for listing in ("list_action_groups", "audit"):
         assert listing in _INVALIDATION_MAP[tool], f"{tool} leaves {listing} stale"
+
+
+def test_trigger_and_schedule_lists_are_never_cached():
+    """A trigger or schedule changed in the Indigo client reaches no change
+    callback here, so a cached list would be stale for the whole TTL."""
+    from mcp_server.common.tool_cache import ToolCache
+    cache = ToolCache(default_ttl=60, logger=_LOG)
+    for name in ("list_triggers", "list_schedules"):
+        cache.get_or_compute(name, {}, lambda: '{"success": true, "n": 1}')
+        assert cache.get_or_compute(name, {}, lambda: "fresh") == ("fresh", False), name
+
+
+def test_set_enabled_drops_the_cached_audit():
+    """audit(check='home') counts disabled triggers and schedules; the check
+    straight after set_enabled must see the change."""
+    from mcp_server.common.tool_cache import ToolCache
+    cache = ToolCache(default_ttl=60, logger=_LOG)
+    args = {"check": "home"}
+    cache.get_or_compute("audit", args, lambda: '{"success": true, "disabled_triggers": 0}')
+    assert cache.get_or_compute("audit", args, lambda: "stale")[1] is True
+    assert cache.invalidate_for_tool("set_enabled") == 1
+    assert cache.get_or_compute("audit", args, lambda: "fresh") == ("fresh", False)
 
 
 # ── enable/disable_action_group fully removed ────────────────────────────────
