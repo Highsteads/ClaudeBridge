@@ -3,8 +3,20 @@
 # Filename:    indigo_mcp_proxy.py
 # Description: stdio-to-HTTP proxy for Indigo MCP Server plugin (no OAuth)
 # Author:      CliveS & Claude Opus 5; Claude Opus 5.5 (1.6, 1.7)
-# Date:        24-09-2026
-# Version:     1.7
+# Date:        25-09-2026
+# Version:     1.8
+#
+# v1.8 (25-09-2026): follows the plugin's MCP Streamable HTTP status codes
+#   (3.3.0+). A session the server does not know now comes back as HTTP 404,
+#   and a missing one as 400, where it used to be 200 with a JSON-RPC -32600;
+#   either one re-handshakes and replays the request once, exactly as the
+#   -32600 did (still recognised, for an older plugin). A notification is now
+#   answered 202 Accepted with no body instead of 200 "{}". After a plugin
+#   restart the old session id is still let through until some client
+#   initializes, and from then on it gets the 404 and re-handshakes, so the
+#   proxy carries on across a restart either way. The web server's scheme,
+#   host and port are patched in by the plugin like the token, so an
+#   HTTPS-only or non-default-port web server works.
 #
 # v1.7 (24-09-2026): every request gets a JSON-RPC answer. A reply that parsed
 #   as JSON but was not JSON-RPC — the plugin's own 503 "MCP server unavailable"
@@ -119,16 +131,18 @@ class _HttpError(Exception):
     comes. Raising instead turns it into a proper JSON-RPC error for that id.
     """
 
-    def __init__(self, status: int, body: str = ""):
-        self.status = status
-        self.body   = body
+    def __init__(self, status: int, body: str = "", messages=None):
+        self.status   = status
+        self.body     = body
+        self.messages = messages or []   # any JSON-RPC messages the body held
         hint = ""
         if status == 401:
             hint = (" — the bearer token was rejected. Check that the plugin "
                     "patched a real token into this proxy (Claude Bridge logs "
                     "an error if it could not).")
         elif status == 404:
-            hint = " — endpoint not found. Is the Claude Bridge plugin enabled?"
+            hint = (" — not found: the session has expired, or the endpoint is missing. "
+                    "Is the Claude Bridge plugin enabled?")
         elif status == 503:
             hint = (" — Claude Bridge is running but its MCP server did not start. "
                     "The Indigo event log says why; reload the plugin once it is fixed.")
@@ -246,17 +260,18 @@ def _read_response(resp):
                 parsed = json.loads(body_str)
             except json.JSONDecodeError:
                 raise _HttpError(status, body_str[:400])
-            # "{}" is the server's acknowledgement of a notification — nothing
-            # to pass on. Anything else is checked below: only a JSON-RPC
-            # message is passed through to stdout. An HTML page, or JSON that
-            # is not JSON-RPC, written verbatim corrupts the client's stream
-            # AND leaves the pending request id unanswered.
+            # "{}" is how a plugin before 3.3.0 acknowledged a notification —
+            # nothing to pass on. (3.3.0 answers 202 with no body, which is the
+            # empty case above.) Anything else is checked below: only a
+            # JSON-RPC message is passed through to stdout. An HTML page, or
+            # JSON that is not JSON-RPC, written verbatim corrupts the client's
+            # stream AND leaves the pending request id unanswered.
             if not (isinstance(parsed, dict) and not parsed and status < 400):
                 messages.append(parsed)
                 emit_lines.append(body_str + "\n")
 
     if status >= 400:
-        raise _HttpError(status, _error_text(messages))
+        raise _HttpError(status, _error_text(messages), messages)
     for m in messages:
         if not _is_jsonrpc(m):
             raise _HttpError(status, json.dumps(m)[:400])
@@ -393,6 +408,17 @@ def _is_session_error(messages) -> bool:
     return False
 
 
+def _is_session_expired(exc: "_HttpError") -> bool:
+    """True if an HTTP error means our session is gone and a fresh initialize
+    will fix it: 404 Not Found for a session the server does not know, or 400
+    naming the missing session id (MCP Streamable HTTP). A 404 that is really
+    a missing endpoint is harmless here: the re-handshake gets the same 404,
+    fails, and the original error is reported."""
+    if session_id is None and exc.status == 404:
+        return False          # nothing was sent that could have expired
+    return exc.status == 404 or (exc.status == 400 and _is_session_error(exc.messages))
+
+
 def _rehandshake() -> bool:
     """
     Mint a fresh MCP session by replaying the cached initialize handshake, used
@@ -444,6 +470,10 @@ def post_message(data: dict):
         _last_init = json.loads(json.dumps(data))  # deep copy for later replay
 
     body = json.dumps(data).encode("utf-8")
+    # Transparent session recovery is for a request whose session the server
+    # no longer knows (the plugin restarted, or pruned an idle session).
+    can_recover = (not is_notification and method != "initialize"
+                   and _last_init is not None)
 
     try:
         if method == "initialize":
@@ -456,6 +486,11 @@ def post_message(data: dict):
             _write_error(data.get("id"), str(e))
         return
     except _HttpError as e:
+        # A 404 for an unknown session, or a 400 for a missing one (v1.8):
+        # re-handshake and replay once, as for the older -32600 below.
+        if can_recover and _is_session_expired(e) and _rehandshake():
+            _replay(data, body, method)
+            return
         # Answered, but not with JSON-RPC. Report it against the request id
         # rather than as a connection fault — the connection was fine.
         if not is_notification:
@@ -471,28 +506,33 @@ def post_message(data: dict):
         _write_error(data.get("id"), "Indigo's web server sent an empty reply")
         return
 
-    # Transparent session recovery: the server rejected our stale session id
-    # (IWS reloaded, or our session was pruned). Re-handshake with the cached
-    # initialize, then replay this request ONCE with the new session id. Only
-    # attempted once — if the replay still errors we surface whatever came back.
-    if (not is_notification
-            and method != "initialize"
-            and _is_session_error(messages)
-            and _last_init is not None
-            and _rehandshake()):
-        try:
-            messages, emit_lines = _attempt(body, _build_headers(), method, is_notification)
-        except (_SendFailed, _HttpError) as e:
-            _write_error(data.get("id"), str(e))
-            return
-        except Exception as e:
-            _write_error(data.get("id"), f"Connection error after re-handshake: {e}")
-            return
-        if not emit_lines:
-            _write_error(data.get("id"), "Indigo's web server sent an empty reply")
-            return
+    # Transparent session recovery, as a plugin before 3.3.0 reported it: HTTP
+    # 200 with JSON-RPC -32600 "Missing or invalid Mcp-Session-Id". Re-handshake
+    # with the cached initialize, then replay this request ONCE with the new
+    # session id. Only attempted once — if the replay still errors we surface
+    # whatever came back.
+    if can_recover and _is_session_error(messages) and _rehandshake():
+        _replay(data, body, method)
+        return
 
     _emit(emit_lines, is_notification)
+
+
+def _replay(data: dict, body: bytes, method):
+    """Send a request again after a re-handshake and write whatever comes back.
+    Once only: a second session error is reported, not chased."""
+    try:
+        messages, emit_lines = _attempt(body, _build_headers(), method, False)
+    except (_SendFailed, _HttpError) as e:
+        _write_error(data.get("id"), str(e))
+        return
+    except Exception as e:
+        _write_error(data.get("id"), f"Connection error after re-handshake: {e}")
+        return
+    if not emit_lines:
+        _write_error(data.get("id"), "Indigo's web server sent an empty reply")
+        return
+    _emit(emit_lines, False)
 
 
 def _write_error(req_id, message: str):

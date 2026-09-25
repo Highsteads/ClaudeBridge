@@ -114,14 +114,26 @@ def test_initialize_with_another_version_is_answered_with_ours(tmp_path):
     assert resp["headers"].get("Mcp-Session-Id")
 
 
-def test_unknown_session_rejected_when_sessions_exist(tmp_path):
+def test_unknown_session_is_404_when_sessions_exist(tmp_path):
+    # MCP Streamable HTTP: a session id the server does not know is 404 Not
+    # Found, and the client must initialize again. The body still says why.
     h = _make_handler(tmp_path)
     _initialize(h)                                    # store is now non-empty
     resp = _post(h, {"jsonrpc": "2.0", "id": 2, "method": "ping"},
                  {"mcp-session-id": "forged-session-id"})
-    err = json.loads(resp["content"])["error"]
-    assert err["code"] == -32600
-    assert "Mcp-Session-Id" in err["message"]
+    assert resp["status"] == 404
+    err = json.loads(resp["content"])
+    assert err["id"] == 2
+    assert err["error"]["code"] == -32600
+    assert "Mcp-Session-Id" in err["error"]["message"]
+
+
+def test_missing_session_is_400_when_sessions_exist(tmp_path):
+    h = _make_handler(tmp_path)
+    _initialize(h)
+    resp = _post(h, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    assert resp["status"] == 400
+    assert "Mcp-Session-Id" in json.loads(resp["content"])["error"]["message"]
 
 
 def test_empty_store_grace_lets_stale_session_reconnect(tmp_path):
@@ -152,6 +164,7 @@ def test_mismatched_protocol_version_header_is_rejected(tmp_path):
     h = _make_handler(tmp_path)
     resp = _post(h, {"jsonrpc": "2.0", "id": 5, "method": "ping"},
                  {"mcp-protocol-version": "2024-01-01"})
+    assert resp["status"] == 400                      # as the 2025-06-18 transport requires
     err = json.loads(resp["content"])["error"]
     assert err["code"] == -32600
     assert "protocol version" in err["message"].lower()
@@ -165,11 +178,27 @@ def test_missing_protocol_version_header_is_tolerated(tmp_path):
 
 # ── Notifications & unknown methods ───────────────────────────────────────────
 
-def test_notification_returns_empty_json_body(tmp_path):
+def test_notification_is_202_accepted_with_no_body(tmp_path):
+    # MCP Streamable HTTP (2025-03-26, 2025-06-18): a POST holding only a
+    # notification the server accepts gets 202 Accepted and no body.
     h = _make_handler(tmp_path)
     resp = _post(h, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-    assert resp["status"] == 200
-    assert resp["content"] == "{}"
+    assert resp["status"] == 202
+    assert resp["content"] == ""
+
+
+def test_a_clients_jsonrpc_response_is_202_accepted(tmp_path):
+    h = _make_handler(tmp_path)
+    resp = _post(h, {"jsonrpc": "2.0", "id": 9, "result": {}})
+    assert resp["status"] == 202
+    assert resp["content"] == ""
+
+
+def test_a_notification_that_is_not_jsonrpc_is_400(tmp_path):
+    h = _make_handler(tmp_path)
+    resp = _post(h, {"method": "notifications/initialized"})    # no "jsonrpc"
+    assert resp["status"] == 400
+    assert json.loads(resp["content"])["error"]["code"] == -32600
 
 
 def test_unknown_method_is_32601(tmp_path):
