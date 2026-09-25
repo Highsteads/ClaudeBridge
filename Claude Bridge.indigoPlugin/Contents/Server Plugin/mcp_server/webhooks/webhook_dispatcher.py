@@ -9,10 +9,14 @@ the queue and delivers each event with this discipline:
     (vet_url) against a freshly-read allow-list. A target that has rebound to a
     blocked address since registration is dropped, never sent. This is the real
     security boundary (create-time validation is only UX).
-  * CONNECTION PINNING — the TCP socket connects to the exact IP vet_url
+  * CONNECTION PINNING — the TCP socket connects to an exact IP vet_url
     returned, while TLS SNI + certificate validation use the original hostname.
     The HTTP client therefore cannot perform its own second DNS resolution to a
-    different (malicious) address.
+    different (malicious) address. vet_url refuses the whole URL if ANY
+    resolved address fails the firewall, so every address it returns is
+    vetted; they are tried in turn, within the one delivery deadline, until
+    one accepts the connection (a host with an IPv6 and an IPv4 address, one
+    of them unreachable, used to fail on the first every time).
   * NO REDIRECTS — a 3xx is treated as a delivery failure, never followed
     (redirect-to-internal is the classic SSRF bypass).
   * HMAC-SHA256 signing over `timestamp + "." + body`, tight timeouts, and
@@ -44,7 +48,7 @@ import socket
 import ssl
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 from urllib.parse import urlsplit
 
 from ..security.egress_guard import EgressDenied, vet_url
@@ -272,10 +276,10 @@ class WebhookDispatcher:
         if sub.auth_token:
             headers["Authorization"] = "Bearer " + sub.auth_token
 
-        # 5. deliver to the PINNED ip, with retry on 5xx / network error. The
-        # whole retry run is ONE event: it records one success or ONE failure,
-        # after the last attempt, so QUARANTINE_AFTER counts events.
-        pinned = str(vetted[0])
+        # 5. deliver to a PINNED, vetted ip, with retry on 5xx / network error.
+        # The whole retry run is ONE event: it records one success or ONE
+        # failure, after the last attempt, so QUARANTINE_AFTER counts events.
+        pinned = [str(ip) for ip in vetted]
         attempts = self._max_retries + 1
         for attempt in range(attempts):
             retryable = False
@@ -331,9 +335,17 @@ class WebhookDispatcher:
     # IP-pinned POST
     # ------------------------------------------------------------------
 
-    def _post_pinned(self, url: str, ip: str, headers: Dict[str, str], body: bytes, verify_ssl: bool) -> int:
-        """POST to the pre-vetted IP. The TCP socket connects to `ip`; TLS SNI and
-        certificate validation use the URL's hostname (not the IP); no redirects."""
+    def _post_pinned(self, url: str, ips: Sequence[str], headers: Dict[str, str], body: bytes,
+                     verify_ssl: bool) -> int:
+        """POST to a pre-vetted IP. The TCP socket connects to one of `ips` (a
+        single address is accepted too), trying each in turn until one accepts
+        the connection, all within one deadline; TLS SNI and certificate
+        validation use the URL's hostname (not the IP); no redirects. Only a
+        failure to CONNECT moves on to the next address: once connected, the
+        request may have been delivered, so a later failure is not retried
+        against another address here."""
+        if isinstance(ips, str):
+            ips = [ips]
         p = urlsplit(url)
         host = p.hostname
         port = p.port or (443 if p.scheme == "https" else 80)
@@ -357,7 +369,21 @@ class WebhookDispatcher:
                 )
             return left
 
-        raw = socket.create_connection((ip, port), timeout=self._connect_timeout)
+        raw = None
+        last_error: Optional[BaseException] = None
+        for ip in ips:
+            # Outside the try: once the delivery deadline has passed this
+            # raises, and no further address is tried.
+            budget = min(self._connect_timeout, _remaining())
+            try:
+                raw = socket.create_connection((ip, port), timeout=budget)
+                break
+            except OSError as exc:          # refused, unreachable or timed out
+                last_error = exc
+                self._logger.debug(f"webhook: could not connect to {ip} ({exc}); "
+                                   f"trying the next vetted address")
+        if raw is None:
+            raise last_error or OSError("no vetted address to connect to")
         try:
             raw.settimeout(_remaining())
             if p.scheme == "https":
