@@ -44,7 +44,9 @@ from .tools.plugin_dev_tools import PluginDevToolsHandler
 from .tools.automation_detail import AutomationDetailHandler
 from .adapters.indidb import IndiDbStructureStore
 from .external_tools import ExternalToolManager, manifest_fingerprint
-from .security.scope_manager import register_dynamic_scope, unregister_dynamic_scopes
+from .security.scope_manager import (register_dynamic_scope, required_scope_for,
+                                     unregister_dynamic_scopes)
+from .security import change_log as change_log_mod
 from .security.origin_guard import OriginGuard
 from .security.secret_redactor import SecretRedactor
 
@@ -76,6 +78,7 @@ class MCPHandler:
         rate_limit_per_day:    int = 5_000,
         cache_ttl_seconds:     int = 60,
         scopes_file:           Optional[str] = None,
+        change_log_dir:        Optional[str] = None,
     ):
         """
         Initialize the MCP handler.
@@ -90,11 +93,22 @@ class MCPHandler:
             rate_limit_per_day:    Per-access-key daily cap (default 5000; admin 10x).
             cache_ttl_seconds:     TTL for cacheable read tools, 0 disables.
             scopes_file: Optional path to scopes.json for per-token authorisation.
+            change_log_dir: Folder for the permanent change log (3.4.0). None
+                            (tests) records nothing.
         """
         self.data_provider = data_provider
         self.logger = logger or logging.getLogger("Plugin")
         self.plugin = plugin
         self._secret_redactor: Optional[SecretRedactor] = None   # built on first failure
+        # Every call needing write or admin, kept for good (3.4.0). Redaction
+        # and the disk write happen on the change log's own thread.
+        self.change_log: Optional[change_log_mod.ChangeLog] = None
+        if change_log_dir:
+            self.change_log = change_log_mod.ChangeLog(
+                change_log_dir,
+                secret_values=lambda: self._get_secret_redactor().load(),
+                logger=self.logger,
+            )
 
         # Session management. _sessions_lock guards every read/write/iteration
         # of _sessions under concurrent IWS dispatch.
@@ -293,10 +307,19 @@ class MCPHandler:
         return _call
 
     def _on_exec_job_finished(self, job) -> None:
-        """exec_lock finish listener: drop every cached read."""
+        """exec_lock finish listener: drop every cached read, and record the
+        outcome of a run whose call came back "running" (3.4.0)."""
         dropped = self.tool_cache.clear()
         if dropped:
             self.logger.debug(f"Cache: dropped {dropped} entries after job {job.job_id} finished")
+        if getattr(self, "change_log", None) is not None:
+            result = job.result if isinstance(job.result, dict) else {}
+            ok = result.get("success") is not False and not (
+                "error" in result and result.get("success") is not True)
+            self.change_log.record_job_finished(
+                tool=job.tool, job_id=job.job_id, ok=ok,
+                error=None if ok else str(result.get("error") or "failed"),
+                seconds=job.elapsed())
 
     @staticmethod
     def _get_db_file_path():
@@ -312,6 +335,8 @@ class MCPHandler:
         from .common import exec_lock
         if exec_lock._on_finished == self._on_exec_job_finished:
             exec_lock.set_finish_listener(None)
+        if getattr(self, "change_log", None) is not None:
+            self.change_log.stop()
         if self.entity_index_manager:
             self.entity_index_manager.stop()
 
@@ -1027,6 +1052,7 @@ class MCPHandler:
                 f"⛔ Scope denied for tool '{tool_name}' "
                 f"(token='{self.scope_manager.name_for_token(bearer)}', has={sd.granted})"
             )
+            self._log_change(bearer, tool_name, tool_args, "refused", error=str(sd))
             return self._json_error(msg_id, -32099, str(sd))
 
         spec = registry.spec_for(tool_name)   # None for a plugin-provided tool
@@ -1059,6 +1085,7 @@ class MCPHandler:
             delete_gate.check(tool_name, tool_args)
         except DeleteDenied as dd:
             self.logger.warning(f"⛔ Delete refused for '{tool_name}': {dd}")
+            self._log_change(bearer, tool_name, tool_args, "refused", error=str(dd))
             return self._json_error(msg_id, -32099, str(dd))
         if spec is not None and spec.gated:
             # Consumed by the gate above. The handlers are called with
@@ -1108,6 +1135,8 @@ class MCPHandler:
         ok = False
         cache_hit = False
         resp_bytes = 0
+        result = None
+        failure = None          # the error text, for the change log
         try:
             # Cache-aware dispatch — only for tools in the read allow-list
             def _compute():
@@ -1174,6 +1203,7 @@ class MCPHandler:
                 detail = "see the Claude Bridge event log for details"
             else:
                 detail = str(e)
+            failure = str(e)
             # A tool that failed is a tool RESULT with isError, not a protocol
             # error (MCP 2025-06-18): the model reads it and can correct
             # itself, where a JSON-RPC error is for the client, not the model.
@@ -1193,6 +1223,53 @@ class MCPHandler:
                     "bytes":       resp_bytes,
                     "ts":          time.time(),
                 })
+            if not cache_hit:
+                outcome, job_id, error = self._change_outcome(result, ok, failure)
+                self._log_change(bearer, tool_name, tool_args, outcome,
+                                 error=error, duration_ms=duration_ms, job_id=job_id)
+
+    def _log_change(self, bearer: Optional[str], tool_name: str, tool_args: Any,
+                    outcome: str, *, error: Optional[str] = None,
+                    duration_ms: Optional[int] = None,
+                    job_id: Optional[str] = None) -> None:
+        """Record a call in the change log when it needs write or admin
+        (3.4.0). Never raises: bookkeeping must not cost the caller a reply."""
+        log = getattr(self, "change_log", None)   # absent on a test skeleton
+        if log is None:
+            return
+        try:
+            args = tool_args if isinstance(tool_args, dict) else {}
+            required = required_scope_for(tool_name, args)
+            if not change_log_mod.is_change(required):
+                return
+            if outcome != "refused" and change_log_mod.is_collect_only(tool_name, args):
+                return
+            log.record(
+                key=self.scope_manager.name_for_token(bearer), tool=tool_name,
+                args=args, outcome=outcome, duration_ms=duration_ms,
+                error=error, job_id=job_id, scope=required)
+        except Exception as exc:        # noqa: BLE001
+            self.logger.debug(f"Change log: could not record {tool_name}: {exc}")
+
+    @staticmethod
+    def _change_outcome(result: Any, ok: bool, failure: Optional[str]):
+        """(outcome, job_id, error) for the change log. A run that was handed
+        to a background job reports "running" with its job id, and its end is
+        recorded when the job finishes."""
+        obj = None
+        if isinstance(result, str) and result.lstrip().startswith("{"):
+            try:
+                obj = json.loads(result)
+            except (ValueError, TypeError):
+                obj = None
+        if ok and isinstance(obj, dict) and obj.get("status") == "running" and obj.get("job_id"):
+            return "running", str(obj["job_id"]), None
+        if ok:
+            return "ok", None, None
+        if failure:
+            return "failed", None, failure
+        err = obj.get("error") if isinstance(obj, dict) else None
+        return "failed", None, str(err if err is not None else "failed")
 
     @staticmethod
     def _tool_result(msg_id: Any, tool_name: str, text: Any, *, is_error: bool,

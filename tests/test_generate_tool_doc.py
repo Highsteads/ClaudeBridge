@@ -11,6 +11,7 @@
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -95,8 +96,12 @@ def test_check_fails_on_a_stale_count_and_passes_once_written(tmp_path):
     cfg = os.path.join(repo, "docs", "_config.yml")
     with open(cfg, encoding="utf-8") as fh:
         text = fh.read()
+    # Stale the count by one, whatever it is now (it was pinned to 69 -> 70,
+    # which stopped being stale the day the real count became 70).
+    m = re.search(r"through (\d+) tools", text)
+    assert m, "the docs site config no longer says 'through N tools'"
     with open(cfg, "w", encoding="utf-8") as fh:
-        fh.write(text.replace("through 69 tools", "through 70 tools"))
+        fh.write(text.replace(m.group(0), f"through {int(m.group(1)) + 1} tools"))
     failed = _run_check(repo)
     assert failed.returncode == 1 and "docs/_config.yml" in failed.stderr
     subprocess.run([sys.executable, os.path.join(repo, "scripts", "generate_tool_doc.py"),

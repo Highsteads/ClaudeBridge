@@ -8,6 +8,16 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 3.4.0 (2026-09-25)
+Claude Bridge now keeps a permanent record of every change made through it: each call that needs the write or admin scope, whether it worked, failed or was refused.
+
+- **What each entry says.** When, which access key (by its name from `scopes.json`, never the key itself), the tool, its arguments including the full Python or script it ran, what happened, and how long it took. A background run that outlives its call gets a second entry when it finishes. The tool's reply is never kept.
+- **Secrets are blanked first.** An argument named like a credential, such as a lock's `pin`, is replaced outright, and every credential value Claude Bridge knows about is blanked wherever it appears, inside Python too. If those values cannot be read, the entry leaves the arguments out rather than write them unredacted.
+- **Where it lives.** One file a month in the plugin's folder under Indigo's `Preferences/Plugins`, readable only by the Mac user that runs Indigo. Nothing deletes it. Writing happens on a thread of its own, so it never slows a reply.
+- **Reading it.** Plugins > Claude Bridge > Print Recent Changes puts the last 20 in the event log as plain lines. The new `change_log` tool lets Claude search it by time, tool, key or outcome. It is a read tool, and a key without admin sees it with credential values blanked.
+
+The Security page describes it in full. 70 tools now, 29 of them read-only.
+
 ### 3.3.1 (2026-09-25)
 Every new Claude session left an error in the Indigo log. Since 3.3.0 the plugin answers a notification with an empty 202 reply, as the MCP rules ask, but Indigo's web server refuses an empty reply from a plugin: it logged `internal server error` for `/mcp/` and sent the client a 500 instead. Nothing stopped working, because the go-between script ignores the answer to a notification. The reply now carries a single space, which the web server passes through and every MCP client ignores.
 

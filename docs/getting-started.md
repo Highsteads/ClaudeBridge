@@ -40,7 +40,7 @@ second bill.
 2. Unzip the downloaded file — you will get `Claude Bridge.indigoPlugin`
 3. Double-click `Claude Bridge.indigoPlugin` — Indigo will install it automatically
 4. In the Indigo client: **Plugins → Manage Plugins → Enable** Claude Bridge
-5. **Restart Claude Code** — you should see 69 `indigo-mcp` tools available
+5. **Restart Claude Code** — you should see 70 `indigo-mcp` tools available
 
 Each time it starts, the plugin sets Claude Code up for you: it copies the go-between script
 (`indigo_mcp_proxy.py`) into Indigo's `Scripts` folder, writes your Indigo access key into it, and

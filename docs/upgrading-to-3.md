@@ -5,7 +5,7 @@ nav_order: 12
 
 # Upgrading to 3.0
 
-Claude Bridge 3.0 has 69 tools where 2.27 had 169. Most of the difference is families of
+Claude Bridge 3.0 cut the tool list from 169 in 2.27 to 69. Most of the difference is families of
 near-identical tools merged into one tool that takes an `action` or `kind`, so nothing you could
 do before has gone except the items listed at the end. Claude reads the new tool list when it
 connects, so in conversation you need do nothing. This page is for anything you have written

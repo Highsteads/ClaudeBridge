@@ -2,16 +2,17 @@
 # -*- coding: utf-8 -*-
 # Filename:    server.py
 # Description: Server-wide reads — the house status, energy history, server
-#              facts, the event log, control pages, health and raw requests.
+#              facts, the event log, control pages, health, raw requests and
+#              the change log.
 # Author:      CliveS & Claude Opus 5.5
-# Date:        23-09-2026
-# Version:     1.0
+# Date:        25-09-2026
+# Version:     1.1 (3.4.0: change_log)
 
 from typing import Any, Dict
 
 from ..registry import tool
-from ._schema import (bad_choice, boolean, coerce_bool, enum, id_or_name, number, refuse,
-                      string, unused_args)
+from ._schema import (bad_choice, boolean, coerce_bool, enum, id_or_name, integer, number,
+                      refuse, string, unused_args)
 
 _REPORT_SECTIONS = ["energy", "heating", "security", "devices", "alerts", "automation"]
 _HOME_SECTIONS = ("summary", "energy", "heating", "security", "report")
@@ -245,3 +246,42 @@ def audit(ctx, check, threshold=None, days=None, include_warnings=None, path=Non
         return stray
     kwargs = {k: given[k] for k in allowed if given[k] is not None}
     return getattr(getattr(ctx, handler_name), method)(**kwargs)
+
+
+@tool("change_log", scope="read", redact_output=True,
+      description=(
+          "The permanent record of every change made through Claude Bridge: each call that "
+          "needs the write or admin scope, whether it worked, failed or was refused. Each "
+          "entry gives the time, the access key's NAME (never the key), the tool, its "
+          "arguments with every known secret blanked (including the full Python or script "
+          "it ran), the outcome (ok, failed, refused, or running for a background job, "
+          "whose end has its own 'job finished' entry) and how long it took. Newest first. "
+          "Filters match exactly, ignoring case. Argument text is cut to 200 characters "
+          "unless full=true. Kept in monthly files in the plugin's Preferences folder, "
+          "which nothing deletes."),
+      properties={
+          "limit":   integer("Most entries to return, newest first (default 20, most 500)"),
+          "since":   string("Only entries at or after this local time: '2026-09-25' or "
+                            "'2026-09-25T14:30'"),
+          "tool":    string("Only this tool, e.g. 'execute_indigo_python'"),
+          "key":     string("Only calls made with this access key name (from scopes.json; "
+                            "'default' when there is none)"),
+          "outcome": enum(["ok", "failed", "refused", "running"], "Only this outcome"),
+          "full":    boolean("Return argument text in full rather than cut to 200 characters "
+                             "(default false)"),
+      })
+def change_log(ctx, limit=20, since=None, tool=None, key=None, outcome=None, full=False):
+    from ..security.change_log import summarise
+    log = getattr(ctx, "change_log", None)
+    if log is None:
+        return refuse("the change log is not running in this Claude Bridge")
+    try:
+        found = log.read(limit=limit, since=since, tool=tool, key=key, outcome=outcome)
+    except ValueError as exc:
+        return refuse(str(exc))
+    entries = found["entries"] if coerce_bool(full) else summarise(found["entries"])
+    reply: Dict[str, Any] = {"success": True, "count": len(entries), "more": found["more"],
+                             "entries": entries, "folder": log.folder}
+    if found["unreadable_lines"]:
+        reply["unreadable_lines"] = found["unreadable_lines"]
+    return reply

@@ -80,6 +80,42 @@ are values shorter than six characters. If the values cannot be read, the reply 
 bare "see the event log". The other sensitive tools (email, notifications, webhooks, script
 creation) always return that bare message on failure.
 
+## The change log
+
+From 3.4.0 Claude Bridge keeps a record of every call that needs the write or admin scope,
+whether it worked, failed or was refused. Nothing ever deletes it. Each entry says:
+
+- when, to the second;
+- which access key, by the name it has in `scopes.json` ("default" when there is no
+  `scopes.json`). The key itself is never written down;
+- the tool and its arguments, including the full Python or script it ran, up to 64 KB of each;
+- the outcome: done, failed (with the first 500 characters of the error), refused (with the
+  reason), or started in the background. A background run that outlives its call gets a second
+  entry when it finishes;
+- how long it took.
+
+It never keeps the tool's reply.
+
+Secrets are blanked before anything is written. An argument whose name marks a credential (a
+lock `pin`, a `password`, a `token`) is replaced outright, and every credential value Claude
+Bridge knows about (the same ones listed under [Running code](#running-code)) is replaced
+wherever it appears, inside Python included. If those values cannot be read, the arguments are
+left out of that entry rather than written unredacted.
+
+The log is one file a month, `changes-YYYY-MM.jsonl`, in
+`Preferences/Plugins/com.clives.indigoplugin.claudebridge/change-log/` under the Indigo folder.
+The folder and files can be read only by the Mac user that runs Indigo. To read it:
+
+- **Plugins > Claude Bridge > Print Recent Changes** writes the last 20 to the event log in plain
+  lines and says where the files are.
+- **The `change_log` tool** lets Claude search it by time, tool, key or outcome. It is a read
+  tool; a key without admin gets its text with the known credential values blanked, as it does
+  for scripts.
+
+The entries are written by a thread of their own, so a busy log never slows a reply. If changes
+ever arrive faster than they can be written, the next entry records how many were missed, and
+the event log says so once.
+
 ## What a read-only key can see
 
 A read key can see everything in the house that Claude Bridge can read, which is more than device

@@ -4,7 +4,7 @@
 # Description: Claude Bridge - exposes Indigo to Claude over the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5.5
 # Date:        25-09-2026
-# Version:     3.3.1
+# Version:     3.4.0
 
 try:
     import indigo
@@ -309,6 +309,7 @@ class Plugin(indigo.PluginBase):
                 rate_limit_per_day=self.rate_limit_per_day,
                 cache_ttl_seconds=self.cache_ttl_seconds,
                 scopes_file=scopes_file,
+                change_log_dir=os.path.join(self._webhook_prefs_dir(), "change-log"),
             )
 
             # Log MCP client connection information
@@ -913,6 +914,24 @@ class Plugin(indigo.PluginBase):
                               json.dumps(data, default=str, indent=2))
         except Exception as e:
             indigo.server.log(f"Claude Bridge: Health snapshot failed: {e}", isError=True)
+
+    def show_changes_menu(self) -> None:
+        """Menu action: print the last 20 changes, newest first, and say where
+        the whole change log is kept (3.4.0)."""
+        log = getattr(self.mcp_handler, "change_log", None) if self.mcp_handler else None
+        if log is None:
+            indigo.server.log("Claude Bridge: the change log is not running", isError=True)
+            return
+        try:
+            from mcp_server.security.change_log import describe
+            found = log.read(limit=20)
+            lines = [f"Claude Bridge - the last {len(found['entries'])} change(s), newest first:"]
+            lines += [f"   {describe(e)}" for e in found["entries"]] or ["   (none recorded yet)"]
+            lines += ["", f"The whole log, one file a month: {log.folder}",
+                      "Claude can read it with the change_log tool."]
+            indigo.server.log("\n".join(lines))
+        except Exception as e:
+            indigo.server.log(f"Claude Bridge: could not read the change log: {e}", isError=True)
 
     def show_explorer_url_menu(self) -> None:
         """Menu action: print the tool explorer URL(s) to the Indigo log."""

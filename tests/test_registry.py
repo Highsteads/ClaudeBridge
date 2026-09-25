@@ -35,10 +35,11 @@ def _types(prop):
     return found
 
 
-def test_the_surface_is_the_agreed_69():
-    assert len(REG) == 69
+def test_the_surface_is_the_agreed_70():
+    # 69 at 3.0; change_log (read) added in 3.4.0.
+    assert len(REG) == 70
     by_scope = {sc: len(registry.names_in_scope(sc)) for sc in registry.SCOPES}
-    assert by_scope == {"read": 28, "write": 20, "admin": 21}
+    assert by_scope == {"read": 29, "write": 20, "admin": 21}
 
 
 @pytest.mark.parametrize("name", NAMES)

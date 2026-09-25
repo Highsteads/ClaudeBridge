@@ -6,7 +6,7 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 **Platform:** Indigo 2023.2 or later, macOS
 **Bundle ID:** `com.clives.indigoplugin.claudebridge`
-**Version:** 3.3.1
+**Version:** 3.4.0
 
 *Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
 
@@ -14,14 +14,14 @@ Once it's installed you just ask. "Which lights are on?" "Turn the fan on for te
 
 ## How it works
 
-Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **69 tools** for reading and controlling your system.
+Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **70 tools** for reading and controlling your system.
 
 ```
 ┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
 │  Claude Code        │         │  go-between script   │         │  Indigo web  │
 │  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
 │                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (69 tools)  │
+│                     │         │  key automatically   │         │  (70 tools)  │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 
@@ -74,6 +74,16 @@ the short version.
 The three most recent releases, word for word. Every release before these is in
 **[the version history](docs/changelog.md)**, which the documentation site also carries.
 
+### 3.4.0 (2026-09-25)
+Claude Bridge now keeps a permanent record of every change made through it: each call that needs the write or admin scope, whether it worked, failed or was refused.
+
+- **What each entry says.** When, which access key (by its name from `scopes.json`, never the key itself), the tool, its arguments including the full Python or script it ran, what happened, and how long it took. A background run that outlives its call gets a second entry when it finishes. The tool's reply is never kept.
+- **Secrets are blanked first.** An argument named like a credential, such as a lock's `pin`, is replaced outright, and every credential value Claude Bridge knows about is blanked wherever it appears, inside Python too. If those values cannot be read, the entry leaves the arguments out rather than write them unredacted.
+- **Where it lives.** One file a month in the plugin's folder under Indigo's `Preferences/Plugins`, readable only by the Mac user that runs Indigo. Nothing deletes it. Writing happens on a thread of its own, so it never slows a reply.
+- **Reading it.** Plugins > Claude Bridge > Print Recent Changes puts the last 20 in the event log as plain lines. The new `change_log` tool lets Claude search it by time, tool, key or outcome. It is a read tool, and a key without admin sees it with credential values blanked.
+
+The Security page describes it in full. 70 tools now, 29 of them read-only.
+
 ### 3.3.1 (2026-09-25)
 Every new Claude session left an error in the Indigo log. Since 3.3.0 the plugin answers a notification with an empty 202 reply, as the MCP rules ask, but Indigo's web server refuses an empty reply from a plugin: it logged `internal server error` for `/mcp/` and sent the client a 500 instead. Nothing stopped working, because the go-between script ignores the answer to a notification. The reply now carries a single space, which the web server passes through and every MCP client ignores.
 
@@ -93,11 +103,6 @@ A security review of 3.2, and every finding it confirmed is fixed. The first fou
 - **The documentation is honest about keys.** A write key can run any action group, trigger or schedule, including ones that unlock doors or run scripts, so give a phone a read key. The Security page lists everything a read key can see.
 
 89 new tests, 1,520 in all.
-
-### 3.2.1 (2026-09-24)
-`restart_plugin` now waits up to 10 seconds by default, not 5.
-
-A plugin that finishes its web requests before stopping, as Dashboards does, takes about six and a half seconds to come back, so every restart of it was reported as "not started yet" when it was fine. The wait still ends the moment the plugin starts, so a quick plugin answers as fast as before.
 
 ## Vibe coding for Indigo
 
@@ -167,8 +172,8 @@ You read the result, hit Enter to commit, done. No Googling
 
 ## What it does
 
-Claude Bridge gives Claude Code **69 MCP tools**, enough to read and change anything on a running
-Indigo server: **28 read** tools (pure queries), **20 write** tools (they change Indigo state) and
+Claude Bridge gives Claude Code **70 MCP tools**, enough to read and change anything on a running
+Indigo server: **29 read** tools (pure queries), **20 write** tools (they change Indigo state) and
 **21 admin** tools (deletes, code execution, plugin lifecycle, physical security, e-mail). By area:
 
 - **Devices** — list, search and inspect by id, name, type or state; plain-English search; one
@@ -258,7 +263,7 @@ second bill.
 3. Double-click `Claude Bridge.indigoPlugin` — Indigo will install it automatically
 4. **Indigo → Plugins → Manage Plugins → Enable Claude Bridge**
    *(The plugin auto-creates its device on first enable — no "New Device" step needed)*
-5. **Restart Claude Code** — you should see 69 `indigo-mcp` tools available
+5. **Restart Claude Code** — you should see 70 `indigo-mcp` tools available
 
 That is all. Each time it starts, the plugin sets Claude Code up for you: it copies the
 go-between script into Indigo's `Scripts` folder, writes your Indigo access key into it (from
