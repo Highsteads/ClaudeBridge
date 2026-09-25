@@ -238,3 +238,31 @@ def test_telemetry_records_response_bytes(tmp_path):
     h._handle_tools_call(1, {"name": "list_devices", "arguments": {}})
     entry = h._tool_call_log[0]
     assert entry["bytes"] == len("hello")
+
+
+# ── An action that needs more than its tool's scope ───────────────────────────
+
+def test_a_write_key_cannot_reset_an_energy_total(tmp_path):
+    """device_control is a write tool, but reset_energy zeroes a kWh total that
+    cannot be put back, so that one action needs admin."""
+    from mcp_server import registry
+    spec = registry.spec_for("device_control")
+    seen = []
+    h = _make_handler(tmp_path, scopes_data={"tokens": {
+        "tablet": {"name": "tablet", "scopes": ["read", "write"]},
+        "desk": {"name": "desk", "scopes": ["read", "write", "admin"]}}},
+        tools={"device_control": _tool(lambda **kw: seen.append(kw) or "ok",
+                                       required=list(spec.required),
+                                       properties=spec.properties)})
+
+    def _call(key, action):
+        return h._handle_tools_call(1, {"name": "device_control",
+                                        "arguments": {"device": 5, "action": action}},
+                                    {"authorization": f"Bearer {key}"})
+
+    denied = _call("tablet", "reset_energy")
+    assert denied["error"]["code"] == -32099
+    assert "reset_energy" in denied["error"]["message"] and "admin" in denied["error"]["message"]
+    assert _call("tablet", "on")["result"]["isError"] is False
+    assert _call("desk", "reset_energy")["result"]["isError"] is False
+    assert [c["action"] for c in seen] == ["on", "reset_energy"]

@@ -106,7 +106,10 @@ def list_widgets(ctx, limit=50):
    caching; `invalidates={...}` on anything that changes what a cached read
    shows (`{"*"}` clears the lot); `destructive=True` for a delete with no way
    back, which adds the `confirm` argument and puts the call behind the
-   delete preference; `sensitive=True` to scrub a failure whole;
+   delete preference; for a tool that takes several actions,
+   `destructive_actions={"enter_exclusion"}` gates only those actions and
+   `action_scopes={"reset_energy": "admin"}` makes one action need a higher
+   scope than the tool's own; `sensitive=True` to scrub a failure whole;
    `redact=True` to keep a failure but blank secret values;
    `redact_output=True` for a read that can show file or log text (a script,
    an automation's embedded script, the event log), so a key without admin

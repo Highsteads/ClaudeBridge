@@ -461,7 +461,9 @@ _ACTION_ARGS = {
 }
 
 
+# reset_energy needs admin: the kWh total it zeroes cannot be put back.
 @tool("device_control", scope="write", invalidates={"device"},
+      action_scopes={"reset_energy": "admin"},
       description=(
           "Control one device, by id or by name. action: on / off (optional delay, and "
           "duration to revert automatically — 'fan on for 10 minutes' is duration=600), "

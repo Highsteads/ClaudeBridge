@@ -78,6 +78,29 @@ class ToolSpec:
     destructive: bool = False
     refresh_search: bool = False
     redact_output: bool = False
+    # Per-action rules for a tool that takes several actions: the actions that
+    # need a higher scope than the tool's own, as (action, scope) pairs, and
+    # the actions behind the delete gate.
+    action_scopes: Tuple[Tuple[str, str], ...] = ()
+    destructive_actions: FrozenSet[str] = frozenset()
+
+    @property
+    def gated(self) -> bool:
+        """True if some call of this tool goes through the delete gate, so the
+        tool carries the `confirm` argument."""
+        return self.destructive or bool(self.destructive_actions)
+
+    def scope_for(self, args: Optional[Dict[str, Any]] = None) -> str:
+        """The scope this call needs: an action's own, or else the tool's."""
+        action = (args or {}).get(ACTION_ARG)
+        for name, scope in self.action_scopes:
+            if action == name:
+                return scope
+        return self.scope
+
+    def is_destructive_call(self, args: Optional[Dict[str, Any]] = None) -> bool:
+        """True if this call goes through the delete gate."""
+        return self.destructive or (args or {}).get(ACTION_ARG) in self.destructive_actions
 
     @property
     def input_schema(self) -> Dict[str, Any]:
@@ -90,7 +113,22 @@ class ToolSpec:
 REGISTRY: Dict[str, ToolSpec] = {}
 
 _ALLOWED_META = {"cacheable", "reads", "invalidates", "sensitive", "redact",
-                 "destructive", "refresh_search", "redact_output"}
+                 "destructive", "refresh_search", "redact_output", "action_scopes",
+                 "destructive_actions"}
+
+# The argument a multi-action tool chooses its action with. action_scopes and
+# destructive_actions are keyed on its value.
+ACTION_ARG = "action"
+
+
+def _action_names(name: str, props: Dict[str, Any], values: Iterable[str], what: str):
+    """Check that every action named in a per-action rule is one the tool's
+    `action` enum offers, so a typo cannot leave an action unguarded."""
+    offered = set((props.get(ACTION_ARG) or {}).get("enum") or ())
+    unknown = sorted(set(values) - offered)
+    if unknown:
+        raise ValueError(f"tool {name!r}: {what} names action(s) {unknown} that its "
+                         f"'{ACTION_ARG}' argument does not offer")
 
 
 def _bucket_set(value: Optional[Iterable[str]], what: str, name: str) -> FrozenSet[str]:
@@ -119,11 +157,33 @@ def tool(name: str, *, description: str, scope: str,
 
     props = {k: dict(v) for k, v in (properties or {}).items()}
     desc = " ".join(description.split())
+
+    action_scopes = tuple(sorted((meta.get("action_scopes") or {}).items()))
+    _action_names(name, props, (a for a, _ in action_scopes), "action_scopes")
+    for action, action_scope in action_scopes:
+        if action_scope not in SCOPES or SCOPES.index(action_scope) <= SCOPES.index(scope):
+            raise ValueError(f"tool {name!r}: action {action!r} must need a scope above "
+                             f"{scope!r}, got {action_scope!r}")
+        desc = desc.rstrip() + f" The {action} action needs the {action_scope} scope."
+
+    destructive_actions = frozenset(meta.get("destructive_actions") or ())
+    _action_names(name, props, destructive_actions, "destructive_actions")
+    if meta.get("destructive") and destructive_actions:
+        raise ValueError(f"tool {name!r}: destructive=True already gates every action")
+
     if meta.get("destructive"):
         from .security import delete_gate
         props["confirm"] = {"type": "boolean",
                             "description": delete_gate.CONFIRM_ARG_DESCRIPTION}
         desc = desc.rstrip() + delete_gate.CONFIRM_DESCRIPTION_SUFFIX
+    elif destructive_actions:
+        from .security import delete_gate
+        listed = ", ".join(sorted(destructive_actions))
+        props["confirm"] = {"type": "boolean",
+                            "description": (f"Only for {listed}: "
+                                            + delete_gate.CONFIRM_ARG_DESCRIPTION)}
+        desc = (desc.rstrip() + f" {listed} cannot be undone, so it requires confirm=true "
+                "AND the plugin's delete preference to be enabled.")
 
     def _register(func):
         if name in REGISTRY:
@@ -143,6 +203,8 @@ def tool(name: str, *, description: str, scope: str,
             destructive=bool(meta.get("destructive", False)),
             refresh_search=bool(meta.get("refresh_search", False)),
             redact_output=bool(meta.get("redact_output", False)),
+            action_scopes=action_scopes,
+            destructive_actions=destructive_actions,
         )
         return func
     return _register

@@ -68,7 +68,7 @@ def test_the_function_accepts_exactly_the_declared_arguments(name):
     params = inspect.signature(spec.func).parameters
     names = [p for p in params if p != "ctx"]
     takes_kwargs = any(p.kind is p.VAR_KEYWORD for p in params.values())
-    declared = set(spec.properties) - ({"confirm"} if spec.destructive else set())
+    declared = set(spec.properties) - ({"confirm"} if spec.gated else set())
     if not takes_kwargs:
         assert declared == set(names), f"{name}: schema {sorted(declared)} vs function {names}"
     for req in spec.required:
@@ -88,8 +88,38 @@ def test_destructive_tools_carry_confirm_and_are_admin():
 
 def test_a_non_destructive_tool_has_no_confirm():
     for name, spec in REG.items():
-        if not spec.destructive:
+        if not spec.gated:
             assert "confirm" not in spec.properties, name
+
+
+def test_zwave_exclusion_alone_is_gated_and_carries_confirm():
+    spec = REG["zwave"]
+    assert spec.destructive_actions == {"enter_exclusion"}
+    assert "confirm" in spec.properties and "confirm" not in spec.required
+    assert spec.is_destructive_call({"action": "enter_exclusion"})
+    assert not spec.is_destructive_call({"action": "enter_inclusion"})
+
+
+def test_reset_energy_alone_needs_admin():
+    spec = REG["device_control"]
+    assert spec.scope == "write"
+    assert spec.scope_for({"action": "reset_energy"}) == "admin"
+    assert spec.scope_for({"action": "on"}) == "write"
+    assert "reset_energy action needs the admin scope" in spec.description
+
+
+@pytest.mark.parametrize("meta", [
+    {"action_scopes": {"no_such_action": "admin"}},
+    {"action_scopes": {"go": "read"}},          # a per-action scope may only go up
+    {"destructive_actions": {"no_such_action"}},
+    {"destructive": True, "destructive_actions": {"go"}},
+])
+def test_a_per_action_rule_that_cannot_hold_is_refused_at_import(meta):
+    with pytest.raises(ValueError):
+        registry.tool("widget_probe", scope="write", description="d",
+                      properties={"action": {"type": "string", "enum": ["go", "stop"]}},
+                      **meta)(lambda ctx, action: None)
+    assert "widget_probe" not in REG
 
 
 def test_cacheable_tools_are_reads_and_declare_what_they_read():
