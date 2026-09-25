@@ -1029,6 +1029,14 @@ class MCPHandler:
                     result = self._redact_error_result(result)
                 elif spec is not None and spec.sensitive:
                     result = self._scrub_error_result(result)
+            # A tool that shows file or log text — a script, an automation's
+            # embedded script, the event log — can carry a credential the owner
+            # typed into it. A caller without admin gets every known secret
+            # value blanked, on success as well as failure. The cache holds the
+            # plain reply; each caller's copy is redacted on the way out.
+            if spec is not None and spec.redact_output and "admin" not in scopes:
+                result, redacted_ok = self._redact_for_non_admin(tool_name, result)
+                ok = ok and redacted_ok
             # Payload size — the real cost driver is how much the CLIENT has to
             # read, not server latency; surfaced per-tool via /health.
             resp_bytes = len(result) if isinstance(result, (str, bytes)) else 0
@@ -1163,6 +1171,11 @@ class MCPHandler:
                     "running_job_id", "elapsed_seconds"):
             if key in obj:
                 scrubbed[key] = obj[key]
+        # A refusal to touch the deployed Claude Code proxy is the script
+        # tools' own fixed wording, never tool output, so the caller sees it.
+        if obj.get("protected_script") is True and isinstance(obj.get("error"), str):
+            scrubbed["error"] = obj["error"]
+            scrubbed["protected_script"] = True
         return safe_json_dumps(scrubbed)
 
     def _get_secret_redactor(self) -> SecretRedactor:
@@ -1201,6 +1214,29 @@ class MCPHandler:
                 f"returning the scrubbed form instead"
             )
             return self._scrub_error_result(result)
+
+    def _redact_for_non_admin(self, tool_name: str, result: Any):
+        """A redact_output tool's reply for a caller without admin: every known
+        secret value blanked. Fails closed — if the values cannot be read the
+        reply is withheld, never sent unredacted. Returns (reply, ok)."""
+        try:
+            values = self._get_secret_redactor().load()
+            if not isinstance(result, str):
+                result = safe_json_dumps(result)
+            try:
+                obj = json.loads(result)
+            except (ValueError, TypeError):
+                return SecretRedactor.redact_text(result, values), True
+            return safe_json_dumps(SecretRedactor.redact_obj(obj, values)), True
+        except Exception as exc:
+            self.logger.warning(f"⛔ {tool_name}: could not load the secret values to redact "
+                                f"its reply ({type(exc).__name__}); reply withheld")
+            return safe_json_dumps({
+                "success": False,
+                "error": (f"{tool_name} could not check its reply for credentials, so it is "
+                          f"withheld from a key without admin scope. See the Claude Bridge "
+                          f"event log."),
+            }), False
 
     def _redact_error_text(self, text: str) -> str:
         """String form of _redact_error_result, for the raised-exception path."""
@@ -1307,19 +1343,7 @@ class MCPHandler:
         if uri in self._resources:
             try:
                 content = self._resources[uri]["function"]()
-                return {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {
-                        "contents": [
-                            {
-                                "uri": uri,
-                                "mimeType": "application/json",
-                                "text": content
-                            }
-                        ]
-                    }
-                }
+                return self._resource_reply(msg_id, uri, content, headers)
             except Exception as e:
                 self.logger.error(f"Resource {uri} error: {e}")
                 return self._json_error(
@@ -1339,19 +1363,7 @@ class MCPHandler:
                     if param_value:
                         try:
                             content = info["function"](param_value)
-                            return {
-                                "jsonrpc": "2.0",
-                                "id": msg_id,
-                                "result": {
-                                    "contents": [
-                                        {
-                                            "uri": uri,
-                                            "mimeType": "application/json",
-                                            "text": content
-                                        }
-                                    ]
-                                }
-                            }
+                            return self._resource_reply(msg_id, uri, content, headers)
                         except Exception as e:
                             self.logger.error(f"Resource {uri} error: {e}")
                             return self._json_error(
@@ -1362,6 +1374,34 @@ class MCPHandler:
         
         return self._json_error(msg_id, -32002, f"Resource not found: {uri}")
     
+    # The resources that show log text or an automation's embedded scripts.
+    # For a caller without admin their text is redacted, as the matching tools'
+    # replies are (redact_output in the registry).
+    _REDACTED_RESOURCE_PREFIXES = ("indigo://logs/", "indigo://triggers/", "indigo://schedules/")
+
+    def _resource_reply(self, msg_id: Any, uri: str, content: Any,
+                        headers: Optional[Dict[str, str]]) -> Dict[str, Any]:
+        """The resources/read reply for one resource's text."""
+        if uri.startswith(self._REDACTED_RESOURCE_PREFIXES):
+            scopes = self.scope_manager.scopes_for_token(self._extract_bearer(headers or {}))
+            if "admin" not in scopes:
+                content, ok = self._redact_for_non_admin(uri, content)
+                if not ok:
+                    return self._json_error(msg_id, -32603, json.loads(content)["error"])
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "contents": [
+                    {
+                        "uri": uri,
+                        "mimeType": "application/json",
+                        "text": content
+                    }
+                ]
+            }
+        }
+
     # ── Plugin-provided tools (v2.26.0) ─────────────────────────────────
 
     def _external_writes_allowed(self) -> bool:

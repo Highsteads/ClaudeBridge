@@ -36,8 +36,9 @@ try:
 except ImportError:
     pass
 
+from ...client_setup import PROXY_NAME, scripts_dir_for
 from ...common.output_clip import clip_into
-from ..base_handler import BaseToolHandler
+from ..base_handler import BaseToolHandler, CallerError
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
@@ -107,6 +108,41 @@ def _backup_dir() -> str:
     return os.path.join(_scripts_dir(), BACKUP_DIR_NAME)
 
 
+class ProtectedScriptError(CallerError):
+    """The name reaches the Claude Code proxy the plugin deploys into Scripts/."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            f"'{name}' is Claude Bridge's own Claude Code proxy ({PROXY_NAME}). It holds "
+            f"the web server's access key, so the script tools never read, list, write, "
+            f"archive or run it. It is rewritten every time the plugin starts.")
+
+
+def _deployed_proxy_path() -> str:
+    """Where client_setup deploys the proxy: <PA base>/Scripts/indigo_mcp_proxy.py."""
+    return str(scripts_dir_for(indigo.server.getInstallFolderPath()) / PROXY_NAME)
+
+
+def is_protected_script(path: str) -> bool:
+    """True if path is, or names, the deployed proxy.
+
+    The deployed proxy carries the live bearer token — the ADMIN key when there
+    is no scopes.json — and it sits in Scripts/, which read_script searches. So
+    a read key could have read the admin key out of it. The name is compared
+    case-blind (macOS volumes usually are), and an existing file is compared by
+    identity too, so a symlink or hard link to the proxy under another name is
+    caught as well."""
+    if os.path.basename(path).casefold() == PROXY_NAME.casefold():
+        return True
+    if not os.path.isabs(path):
+        return False
+    try:
+        proxy = _deployed_proxy_path()
+        return os.path.exists(path) and os.path.exists(proxy) and os.path.samefile(path, proxy)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _resolve(name: str) -> str:
     """
     Return full path for a script name (adds .py if missing).
@@ -125,6 +161,8 @@ def _resolve(name: str) -> str:
         raise ValueError("Invalid script name")
     if not name.endswith(".py"):
         name = name + ".py"
+    if is_protected_script(name):
+        raise ProtectedScriptError(name)
 
     allowed = [os.path.realpath(d) for d in (_all_scripts_dirs() + [_scripts_dir()])]
 
@@ -135,11 +173,15 @@ def _resolve(name: str) -> str:
     for folder in _all_scripts_dirs():
         candidate = os.path.join(folder, name)
         if os.path.isfile(candidate) and _contained(candidate):
+            if is_protected_script(candidate):
+                raise ProtectedScriptError(name)
             return candidate
     # Not found in any folder — return path in primary folder for creation
     target = os.path.join(_scripts_dir(), name)
     if not _contained(target):
         raise ValueError("Resolved script path escapes the scripts folder")
+    if is_protected_script(target):
+        raise ProtectedScriptError(name)
     return target
 
 
@@ -195,6 +237,15 @@ class ScriptToolsHandler(BaseToolHandler):
     ):
         super().__init__(tool_name="script_tools", logger=logger)
         self.data_provider = data_provider
+
+    def handle_exception(self, e: Exception, context: str = "") -> dict:
+        """As the base class, but a refusal to touch the deployed proxy is
+        marked, so the dispatcher's error scrub for write_script still lets the
+        caller see why (the text is the plugin's own, never file content)."""
+        result = super().handle_exception(e, context)
+        if isinstance(e, ProtectedScriptError):
+            result["protected_script"] = True
+        return result
 
     # ────────────────────────────────────────────────────────────────────────
     # read_script
@@ -511,6 +562,8 @@ class ScriptToolsHandler(BaseToolHandler):
         """List auto-backups available for a given script name."""
         self.log_incoming_request("list_script_backups", {"name": name})
         try:
+            if is_protected_script(_script_stem(name) + ".py"):
+                raise ProtectedScriptError(name)
             backup_dir = _backup_dir()
             ts_re      = _backup_name_re(_script_stem(name))
 
