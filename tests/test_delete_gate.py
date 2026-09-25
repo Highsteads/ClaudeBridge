@@ -181,3 +181,48 @@ def test_a_string_confirm_is_refused_with_the_real_reason(text):
     assert "JSON boolean true" in message
     assert repr(text) in message
     assert "reconnect" not in message
+
+
+# ── One action of a multi-action tool (zwave enter_exclusion) ────────────────
+
+def _zwave_handler(tmp_path, seen):
+    from mcp_server import registry
+    spec = registry.spec_for("zwave")
+    tool = _tool(lambda **kw: seen.append(kw) or "ok", required=list(spec.required),
+                 properties=spec.properties)
+    return _make_handler(tmp_path, scopes_data=ADMIN_SCOPES, tools={"zwave": tool})
+
+
+def _zwave(h, **args):
+    return h._handle_tools_call(1, {"name": "zwave", "arguments": args},
+                                {"authorization": "Bearer root"})
+
+
+def test_zwave_exclusion_is_refused_without_confirm_and_the_preference(tmp_path):
+    seen = []
+    h = _zwave_handler(tmp_path, seen)
+    _allow(True)
+    resp = _zwave(h, action="enter_exclusion")
+    assert resp["error"]["code"] == -32099 and "confirm" in resp["error"]["message"]
+    _allow(False)
+    resp = _zwave(h, action="enter_exclusion", confirm=True)
+    assert resp["error"]["code"] == -32099 and "preferences" in resp["error"]["message"]
+    assert seen == []
+
+
+def test_zwave_exclusion_runs_with_both_and_confirm_is_consumed(tmp_path):
+    seen = []
+    h = _zwave_handler(tmp_path, seen)
+    _allow(True)
+    resp = _zwave(h, action="enter_exclusion", confirm=True)
+    assert resp["result"]["isError"] is False
+    assert seen == [{"action": "enter_exclusion"}]
+
+
+def test_the_other_zwave_actions_are_not_gated(tmp_path):
+    seen = []
+    h = _zwave_handler(tmp_path, seen)
+    _allow(False)
+    resp = _zwave(h, action="enter_inclusion")
+    assert resp["result"]["isError"] is False
+    assert seen == [{"action": "enter_inclusion"}]

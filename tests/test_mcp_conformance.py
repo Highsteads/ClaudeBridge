@@ -120,8 +120,15 @@ def test_annotations_follow_scope_and_the_delete_gate(tmp_path):
         ann = listed[name]["annotations"]
         assert ann["readOnlyHint"] is (spec.scope == "read"), name
         if spec.scope != "read":
-            assert ann["destructiveHint"] is (spec.destructive or spec.scope == "admin"), name
+            admin_action = any(sc == "admin" for _, sc in spec.action_scopes)
+            assert ann["destructiveHint"] is (spec.gated or spec.scope == "admin"
+                                              or admin_action), name
     assert listed["delete_device"]["annotations"] == {"readOnlyHint": False, "destructiveHint": True}
+    # A write tool with one irreversible action is not an ordinary write.
+    assert listed["device_control"]["annotations"] == {"readOnlyHint": False,
+                                                       "destructiveHint": True}
+    assert listed["variable_update"]["annotations"] == {"readOnlyHint": False,
+                                                        "destructiveHint": False}
     assert listed["list_devices"]["annotations"] == {"readOnlyHint": True}
 
 

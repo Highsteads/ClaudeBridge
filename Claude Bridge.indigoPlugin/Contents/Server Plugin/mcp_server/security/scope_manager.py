@@ -79,12 +79,6 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _registry_scope(tool_name: str) -> Optional[str]:
-    from .. import registry
-    spec = registry.spec_for(tool_name)
-    return spec.scope if spec is not None else None
-
-
 # Plugin-provided tools (v2.26.0). They are registered at runtime from other
 # plugins' manifests, so they cannot appear in the static sets above. Each is
 # classified when it is registered — "read" or "write" from its manifest's
@@ -112,15 +106,18 @@ def dynamic_scope_names() -> Set[str]:
     return set(_DYNAMIC_SCOPES)
 
 
-def required_scope_for(tool_name: str) -> str:
+def required_scope_for(tool_name: str, tool_args: Optional[Dict] = None) -> str:
     """Return the scope name required to invoke *tool_name* (fail-closed).
 
-    The registry wins over a dynamic (plugin-provided) classification — the
-    external-tool manager already refuses a name that collides with a built-in.
+    With the call's arguments, an action that needs more than the tool's own
+    scope counts (device_control's reset_energy needs admin). The registry
+    wins over a dynamic (plugin-provided) classification — the external-tool
+    manager already refuses a name that collides with a built-in.
     """
-    scope = _registry_scope(tool_name)
-    if scope is not None:
-        return scope
+    from .. import registry
+    spec = registry.spec_for(tool_name)
+    if spec is not None:
+        return spec.scope_for(tool_args)
     if tool_name in _DYNAMIC_SCOPES:
         return _DYNAMIC_SCOPES[tool_name]
     # Unknown — fail closed, so nothing can reach a read/write token until it
@@ -133,12 +130,14 @@ def required_scope_for(tool_name: str) -> str:
 class ScopeDenied(Exception):
     """Raised when a token lacks the scope needed to call a tool."""
 
-    def __init__(self, tool: str, required: str, granted: Set[str]):
+    def __init__(self, tool: str, required: str, granted: Set[str],
+                 action: Optional[str] = None):
         self.tool     = tool
         self.required = required
         self.granted  = sorted(granted)
+        what = f"Tool '{tool}' action '{action}'" if action else f"Tool '{tool}'"
         super().__init__(
-            f"Tool '{tool}' requires scope '{required}'; "
+            f"{what} requires scope '{required}'; "
             f"token has {self.granted or ['<none>']}"
         )
 
@@ -346,15 +345,19 @@ class ScopeManager:
             return "unregistered" if self._configured else "default"
         return info.get("name") or "unregistered"
 
-    def check(self, bearer: Optional[str], tool_name: str) -> Set[str]:
+    def check(self, bearer: Optional[str], tool_name: str,
+              tool_args: Optional[Dict] = None) -> Set[str]:
         """
-        Raise :class:`ScopeDenied` if the token lacks the scope for *tool_name*.
+        Raise :class:`ScopeDenied` if the token lacks the scope for *tool_name*
+        (and, given the call's arguments, for the action it chose).
         Returns the resolved scope set (so callers can log/cache it).
         """
         scopes   = self.scopes_for_token(bearer)
-        required = required_scope_for(tool_name)
+        required = required_scope_for(tool_name, tool_args)
         if required not in scopes:
-            raise ScopeDenied(tool_name, required, scopes)
+            action = (tool_args or {}).get("action")
+            raise ScopeDenied(tool_name, required, scopes,
+                              action if required != required_scope_for(tool_name) else None)
         return scopes
 
     def summary(self) -> Dict:

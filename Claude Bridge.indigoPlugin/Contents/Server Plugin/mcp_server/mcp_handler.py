@@ -860,7 +860,8 @@ class MCPHandler:
         spec = registry.spec_for(name)
         if spec is not None:
             read_only = spec.scope == "read"
-            destructive = spec.destructive or spec.scope == "admin"
+            destructive = (spec.gated or spec.scope == "admin"
+                           or any(sc == "admin" for _, sc in spec.action_scopes))
         elif info.get("external_provider"):
             read_only = not info.get("write", True)
             destructive = False
@@ -918,7 +919,7 @@ class MCPHandler:
 
         # ── Scope gate ──────────────────────────────────────────────────
         try:
-            self.scope_manager.check(bearer, tool_name)
+            self.scope_manager.check(bearer, tool_name, tool_args)
         except ScopeDenied as sd:
             self.logger.warning(
                 f"⛔ Scope denied for tool '{tool_name}' "
@@ -957,7 +958,7 @@ class MCPHandler:
         except DeleteDenied as dd:
             self.logger.warning(f"⛔ Delete refused for '{tool_name}': {dd}")
             return self._json_error(msg_id, -32099, str(dd))
-        if spec is not None and spec.destructive:
+        if spec is not None and spec.gated:
             # Consumed by the gate above. The handlers are called with
             # **tool_args and none of them takes a `confirm` parameter, so it
             # has to come out here or every gated delete TypeErrors.

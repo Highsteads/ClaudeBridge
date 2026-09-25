@@ -21,7 +21,10 @@ _ACTIONS = {
 }
 
 
-@tool("zwave", scope="admin", invalidates={"device"},
+# enter_exclusion goes behind the delete gate: the next device whose button is
+# pressed is removed from the network, and getting it back means pairing it
+# again by hand, often up a ladder.
+@tool("zwave", scope="admin", invalidates={"device"}, destructive_actions={"enter_exclusion"},
       description=(
           "Manage the Z-Wave network. ADMIN. set_config_parameter: program a device "
           "(device_id, param_index, param_size = byte width 1, 2 or 4, param_value "

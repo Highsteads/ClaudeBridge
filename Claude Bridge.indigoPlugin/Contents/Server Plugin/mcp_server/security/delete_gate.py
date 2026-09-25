@@ -31,7 +31,7 @@ tool gains or loses a recovery path, move it in or out of this set rather than
 adding a special case at the call site.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .. import runtime_config
 
@@ -39,6 +39,9 @@ from .. import runtime_config
 # @tool decorator, mcp_server/registry.py): delete_device, variable_delete,
 # delete_automation and delete_folder. Folder deletes are included because they
 # can cascade into their contents, which is strictly worse than one object.
+# One action of a multi-action tool can be gated on its own
+# (destructive_actions): zwave's enter_exclusion removes hardware from the
+# Z-Wave network, and re-including it means pairing it again by hand.
 # DESTRUCTIVE_TOOLS stays importable, derived on access.
 
 
@@ -49,10 +52,17 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def is_gated(tool_name: str) -> bool:
+def is_gated(tool_name: str, tool_args: Optional[Dict[str, Any]] = None) -> bool:
+    """True if this call must pass the gate. With no arguments, whether the
+    whole tool is gated; with them, also whether the chosen action is (zwave's
+    enter_exclusion, which removes hardware from the network)."""
     from .. import registry
     spec = registry.spec_for(tool_name)
-    return bool(spec is not None and spec.destructive)
+    if spec is None:
+        return False
+    if tool_args is None:
+        return spec.destructive
+    return spec.is_destructive_call(tool_args)
 
 
 # The pluginPrefs key and the label a user sees, kept together so an error
@@ -91,7 +101,7 @@ def is_enabled() -> bool:
 
 def check(tool_name: str, tool_args: Dict[str, Any]) -> None:
     """Raise DeleteDenied unless BOTH conditions hold. No-op for other tools."""
-    if not is_gated(tool_name):
+    if not is_gated(tool_name, tool_args):
         return
 
     confirmed = tool_args.get("confirm") is True
