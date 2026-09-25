@@ -45,6 +45,7 @@ from .tools.automation_detail import AutomationDetailHandler
 from .adapters.indidb import IndiDbStructureStore
 from .external_tools import ExternalToolManager, manifest_fingerprint
 from .security.scope_manager import register_dynamic_scope, unregister_dynamic_scopes
+from .security.origin_guard import OriginGuard
 from .security.secret_redactor import SecretRedactor
 
 
@@ -558,6 +559,18 @@ class MCPHandler:
         # Normalize headers to lowercase
         headers = {k.lower(): v for k, v in headers.items()}
         accept = headers.get("accept", "")
+
+        # The Origin check the MCP transport requires of every server (DNS
+        # rebinding): a browser page from any other site is refused. No Origin
+        # at all is a client that is not a browser, and is let through.
+        origin = headers.get("origin")
+        if not self._origin_allowed(origin):
+            self.logger.warning(f"⛔ Refused an MCP request from a web page at {origin!r}: "
+                                f"not this Mac or the Indigo server")
+            return self._json_response(
+                self._json_error(None, -32600, "Forbidden: requests from this Origin are "
+                                               "not accepted"),
+                status=403)
         
         # Only support POST
         if method != "POST":
@@ -663,6 +676,12 @@ class MCPHandler:
         """202 Accepted with no body: a notification or response taken in."""
         return {"status": 202, "headers": {}, "content": ""}
     
+    def _origin_allowed(self, origin: Optional[str]) -> bool:
+        guard = getattr(self, "_origin_guard", None)
+        if guard is None:
+            guard = self._origin_guard = OriginGuard()
+        return guard.allowed(origin)
+
     def _dispatch_message(
         self,
         msg: Dict[str, Any],
