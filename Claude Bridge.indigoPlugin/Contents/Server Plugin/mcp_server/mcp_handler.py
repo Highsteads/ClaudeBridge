@@ -84,8 +84,9 @@ class MCPHandler:
             logger: Optional logger instance
             plugin: Owning Plugin instance — used for triggerEvent() calls
                     and tool-call telemetry. May be None in test contexts.
-            rate_limit_per_minute: Per-session sliding-window cap (default 120).
-            rate_limit_per_day:    Per-session daily cap (default 5000).
+            rate_limit_per_minute: Per-access-key sliding-window cap (default 120;
+                                   an admin key gets 10x).
+            rate_limit_per_day:    Per-access-key daily cap (default 5000; admin 10x).
             cache_ttl_seconds:     TTL for cacheable read tools, 0 disables.
             scopes_file: Optional path to scopes.json for per-token authorisation.
         """
@@ -419,13 +420,52 @@ class MCPHandler:
                 ],
             },
             "entity_index": index_status,
-            "rate_limiter": {
-                "per_minute":   self.rate_limiter.per_minute,
-                "per_day":      self.rate_limiter.per_day,
-                "per_session":  self.rate_limiter.snapshot(),
-            },
+            "rate_limiter": self._rate_limit_report(),
             "cache":  self.tool_cache.stats(),
             "scopes": self.scope_manager.summary(),
+        }
+
+    def _rate_limit_report(self) -> Dict[str, Any]:
+        """The limits as they are actually applied. Configure's two figures are
+        counted per access key, and an admin key gets admin_multiplier times
+        them — which, with no scopes.json, is every key."""
+        every_key_admin = not self.scope_manager.is_configured
+        return {
+            "counted_per":      "access key",
+            "configured":       {"per_minute": self.rate_limiter.per_minute,
+                                 "per_day":    self.rate_limiter.per_day},
+            "admin_multiplier": self.rate_limiter.admin_multiplier,
+            "effective":        self.rate_limiter.effective_limits(),
+            "every_key_is_admin": every_key_admin,
+            "note": ("Limits count calls per access key. A key with the admin scope gets "
+                     f"{self.rate_limiter.admin_multiplier:g}x the configured figures"
+                     + ("; there is no scopes.json, so every key is admin and the admin "
+                        "limits apply to all of them." if every_key_admin else ".")),
+            "per_key":          self.rate_limiter.snapshot(),
+        }
+
+    def health_for_caller(self, headers: Optional[Dict[str, str]],
+                          plugin_start_time: float = None) -> Dict[str, Any]:
+        """/health as the calling key may see it. The full snapshot names the
+        configured keys and their scopes and lists recent tool calls, so only
+        an admin key gets it; any other key gets the basic status and its own
+        rate limits."""
+        headers = {str(k).lower(): v for k, v in (headers or {}).items()}
+        scopes = self.scope_manager.scopes_for_token(self._extract_bearer(headers))
+        data = self.get_health_data(plugin_start_time=plugin_start_time)
+        if "admin" in scopes:
+            return data
+        per_minute, per_day = self.rate_limiter._limits_for_scope(scopes)
+        return {
+            "status":           data["status"],
+            "plugin":           data["plugin"],
+            "protocol_version": data["protocol_version"],
+            "uptime_seconds":   data["uptime_seconds"],
+            "tools":            data["tools"],
+            "resources":        data["resources"],
+            "rate_limit":       {"counted_per": "access key",
+                                 "per_minute": per_minute, "per_day": per_day},
+            "detail":           "Key names, scopes and recent calls need an admin key.",
         }
 
     def get_tool_explorer_html(self, endpoint_url: str = "") -> str:

@@ -88,3 +88,44 @@ def test_rate_limiter_snapshot_keeps_anonymous_readable():
     rl = RateLimiter(per_minute=100, per_day=5000, logger=_LOG)
     rl.check("anonymous", {"read"})
     assert "anonymous" in rl.snapshot()
+
+
+# ── The limits reported are the limits applied ──────────────────────────────
+
+def test_effective_limits_include_the_admin_multiplier():
+    rl = RateLimiter(per_minute=120, per_day=5_000, logger=_LOG)
+    assert rl.effective_limits() == {
+        "admin":         {"per_minute": 1_200, "per_day": 50_000},
+        "read_or_write": {"per_minute": 120,   "per_day": 5_000},
+    }
+
+
+def test_snapshot_gives_each_key_the_limits_it_is_held_to():
+    rl = RateLimiter(per_minute=2, per_day=10, logger=_LOG)
+    rl.check("admin-key", {"read", "write", "admin"})
+    rl.check("phone-key", {"read"})
+    snap = {v["admin"]: v for v in rl.snapshot().values()}
+    assert snap[True]["limit_per_minute"] == 20 and snap[True]["limit_per_day"] == 100
+    assert snap[False]["limit_per_minute"] == 2 and snap[False]["limit_per_day"] == 10
+    # And the reported figure is the one enforced: the admin key really does
+    # get 20 calls a minute.
+    for _ in range(19):
+        rl.check("admin-key", {"read", "write", "admin"})
+    with pytest.raises(RateLimitExceeded) as exc:
+        rl.check("admin-key", {"read", "write", "admin"})
+    assert exc.value.limit == 20 and exc.value.scope == "admin"
+
+
+def test_the_count_is_per_key_not_per_session(tmp_path):
+    """A client that opens a new session keeps its key's count: the dispatcher
+    keys on the bearer, so two sessions with one key share one allowance."""
+    from test_dispatch import _make_handler, _tool
+    h = _make_handler(tmp_path, tools={"ping_tool": _tool(lambda **kw: "ok")}, per_minute=2)
+
+    def _call(session):
+        return h._handle_tools_call(1, {"name": "ping_tool", "arguments": {}},
+                                    {"authorization": "Bearer same-key",
+                                     "mcp-session-id": session})
+    assert "result" in _call("session-1")
+    assert "result" in _call("session-2")
+    assert _call("session-3")["error"]["code"] == -32099

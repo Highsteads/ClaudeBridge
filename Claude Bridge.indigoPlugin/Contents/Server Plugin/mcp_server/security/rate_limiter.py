@@ -1,11 +1,15 @@
 """
-Per-caller sliding-window rate limiter for Claude Bridge MCP requests.
+Per-access-key sliding-window rate limiter for Claude Bridge MCP requests.
 
 Two limits, both sliding-window (more accurate than fixed buckets):
   - Per-minute  (default 120)
   - Per-day     (default 5000)
 
-Limits are configurable per scope: 'admin' tokens get 10x the default.
+The limits count calls per ACCESS KEY (the bearer token), not per session: a
+client that opens a new session keeps its key's count. A key with the 'admin'
+scope gets 10x the configured figures — and with no scopes.json every key is
+admin, so on a stock install the limits actually applied are 1,200 a minute
+and 50,000 a day. /health reports the limits in force for each key.
 A ``RateLimitExceeded`` exception is raised on overflow; the dispatcher
 converts it into a JSON-RPC error (-32099 in the server-defined range).
 """
@@ -17,11 +21,11 @@ import logging
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Deque, Dict, Optional, Tuple
+from typing import Any, Deque, Dict, Optional, Tuple
 
 
 class RateLimitExceeded(Exception):
-    """Raised when a session has exhausted its quota for the current window."""
+    """Raised when an access key has used up its quota for the current window."""
 
     def __init__(self, scope: str, window: str, limit: int, retry_after: float):
         self.scope       = scope
@@ -43,7 +47,7 @@ class RateLimiter:
     Args:
         per_minute:   Max requests per 60-second window (per caller).
         per_day:      Max requests per 86400-second window.
-        admin_multiplier: Limit multiplier for sessions whose scopes include 'admin'.
+        admin_multiplier: Limit multiplier for keys whose scopes include 'admin'.
                           Defaults to 10x — admin tooling shouldn't be throttled hard.
         logger:       Optional logger.
     """
@@ -66,16 +70,30 @@ class RateLimiter:
         # caller key (bearer, session id or "anonymous") → deque of timestamps (oldest first)
         self._minute_log: Dict[str, Deque[float]] = defaultdict(deque)
         self._day_log:    Dict[str, Deque[float]] = defaultdict(deque)
+        # caller key → whether its last call was counted at the admin limits
+        self._key_admin:  Dict[str, bool] = {}
         self._lock = threading.Lock()
         self._last_sweep = 0.0   # monotonic ts of last stale-key sweep
 
     def _limits_for_scope(self, scopes: set) -> Tuple[int, int]:
-        if "admin" in scopes:
+        return self._limits(admin="admin" in scopes)
+
+    def _limits(self, admin: bool) -> Tuple[int, int]:
+        if admin:
             return (
                 int(self.per_minute * self.admin_multiplier),
                 int(self.per_day    * self.admin_multiplier),
             )
         return self.per_minute, self.per_day
+
+    def effective_limits(self) -> Dict[str, Dict[str, int]]:
+        """The limits actually applied, by kind of key — what Configure's two
+        figures become once the admin multiplier is in."""
+        out = {}
+        for label, admin in (("admin", True), ("read_or_write", False)):
+            per_minute, per_day = self._limits(admin)
+            out[label] = {"per_minute": per_minute, "per_day": per_day}
+        return out
 
     def _sweep_locked(self, now: float) -> None:
         """
@@ -94,6 +112,7 @@ class RateLimiter:
             if not dl:
                 self._day_log.pop(sid, None)
                 self._minute_log.pop(sid, None)   # minute entries are older still
+                self._key_admin.pop(sid, None)
 
     def check(self, session_id: str, scopes: set) -> None:
         """
@@ -104,10 +123,13 @@ class RateLimiter:
             session_id = "anonymous"
 
         now = time.monotonic()
-        per_minute, per_day = self._limits_for_scope(scopes or set())
+        is_admin = "admin" in (scopes or set())
+        per_minute, per_day = self._limits(is_admin)
+        kind = "admin" if is_admin else "read_or_write"
 
         with self._lock:
             self._sweep_locked(now)
+            self._key_admin[session_id] = is_admin
             min_log = self._minute_log[session_id]
             day_log = self._day_log[session_id]
 
@@ -122,17 +144,18 @@ class RateLimiter:
             # Enforce
             if len(min_log) >= per_minute:
                 retry = self.MINUTE - (now - min_log[0])
-                raise RateLimitExceeded("session", "per_minute", per_minute, retry)
+                raise RateLimitExceeded(kind, "per_minute", per_minute, retry)
             if len(day_log) >= per_day:
                 retry = self.DAY - (now - day_log[0])
-                raise RateLimitExceeded("session", "per_day", per_day, retry)
+                raise RateLimitExceeded(kind, "per_day", per_day, retry)
 
             # Record
             min_log.append(now)
             day_log.append(now)
 
-    def snapshot(self) -> Dict[str, Dict[str, int]]:
-        """Return current usage per session — used by /health endpoint.
+    def snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """Return current usage per access key, with the limits that key is
+        held to — used by the /health endpoint.
 
         The bucket key is the RAW bearer token (see check(): keyed on
         `bearer or session_id`). /health is only IWS-bearer-gated, travels over
@@ -142,13 +165,18 @@ class RateLimiter:
         which still uniquely distinguishes callers for the usage counts.
         """
         with self._lock:
-            return {
-                self._mask_key(sid): {
-                    "minute": len(self._minute_log.get(sid, ())),
-                    "day":    len(self._day_log.get(sid, ())),
+            out: Dict[str, Dict[str, Any]] = {}
+            for sid in set(self._minute_log) | set(self._day_log):
+                is_admin = self._key_admin.get(sid, False)
+                per_minute, per_day = self._limits(is_admin)
+                out[self._mask_key(sid)] = {
+                    "minute":           len(self._minute_log.get(sid, ())),
+                    "day":              len(self._day_log.get(sid, ())),
+                    "limit_per_minute": per_minute,
+                    "limit_per_day":    per_day,
+                    "admin":            is_admin,
                 }
-                for sid in set(self._minute_log) | set(self._day_log)
-            }
+            return out
 
     @staticmethod
     def _mask_key(key: str) -> str:
@@ -158,7 +186,8 @@ class RateLimiter:
         return "token-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
     def reset_session(self, session_id: str) -> None:
-        """Forget a session's history — call when a session terminates."""
+        """Forget one caller key's history."""
         with self._lock:
             self._minute_log.pop(session_id, None)
             self._day_log.pop(session_id, None)
+            self._key_admin.pop(session_id, None)
