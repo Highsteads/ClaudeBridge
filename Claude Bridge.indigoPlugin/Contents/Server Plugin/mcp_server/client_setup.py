@@ -5,8 +5,8 @@
 #              with the bearer token patched in, and registers it in ~/.mcp.json
 #              and ~/.claude/settings.json
 # Author:      CliveS & Claude Opus 5.5
-# Date:        24-09-2026
-# Version:     1.1
+# Date:        25-09-2026
+# Version:     1.2
 #
 # Moved out of plugin.py in the 3.0 spring clean so it can be tested against
 # temporary folders. Every path comes in as an argument; nothing here imports
@@ -18,12 +18,22 @@
 #   live token sat in a readable file. The token goes in as a Python string
 #   literal (json.dumps), so no character in it can break the source. Every
 #   read and write names UTF-8.
+#
+# 1.2 (25-09-2026): the web server's scheme, host and port are patched into
+#   the proxy too, from indigo.server.getWebServerURL() (passed in, as this
+#   module does not import indigo). The proxy used to assume http on
+#   localhost:8176, so an HTTPS-only or moved web server was unreachable. The
+#   host stays "localhost" when the URL names this Mac; with no usable URL the
+#   old defaults stand.
 
+import ipaddress
 import json
 import os
 import re
+import socket
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from urllib.parse import urlsplit
 
 SERVER_KEY = "indigo-mcp"
 PROXY_NAME = "indigo_mcp_proxy.py"
@@ -33,6 +43,87 @@ PROXY_NAME = "indigo_mcp_proxy.py"
 # value is a whole double-quoted Python string literal, escapes included, so a
 # proxy that was already patched can be patched again.
 _TOKEN_LINE = re.compile(r'^(BEARER_TOKEN\s*=\s*)"(?:[^"\\\n]|\\.)*"', re.MULTILINE)
+
+# The web server the proxy talks to: the proxy's defaults, and the lines they
+# are written into.
+DEFAULT_TARGET = ("http", "localhost", 8176)
+_TARGET_LINES = {
+    "INDIGO_SCHEME": re.compile(r'^(INDIGO_SCHEME\s*=\s*)"[^"\n]*"', re.MULTILINE),
+    "INDIGO_HOST":   re.compile(r'^(INDIGO_HOST\s*=\s*)"[^"\n]*"', re.MULTILINE),
+    "INDIGO_PORT":   re.compile(r'^(INDIGO_PORT\s*=\s*)\d+', re.MULTILINE),
+}
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def is_this_machine(host: str) -> bool:
+    """True if host names this Mac: a loopback name, the Mac's own host name
+    (with or without .local), or an address that is on one of its interfaces —
+    which is exactly an address a socket can bind to. Best effort: a lookup
+    that fails answers False, and the URL's own host is then used."""
+    host = (host or "").strip("[]").rstrip(".").lower()
+    if not host:
+        return False
+    if _is_loopback(host):
+        return True
+    try:
+        own = socket.gethostname().lower()
+        own_base = own[:-len(".local")] if own.endswith(".local") else own
+        if own and host in (own, own_base, f"{own_base}.local"):
+            return True
+        for family, _type, _proto, _name, sockaddr in socket.getaddrinfo(host, None):
+            address = sockaddr[0]
+            if _is_loopback(address):
+                return True
+            with socket.socket(family, socket.SOCK_DGRAM) as probe:
+                try:
+                    probe.bind((address, 0))
+                    return True
+                except OSError:
+                    continue
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return False
+
+
+def web_server_target(url: Optional[str]) -> Tuple[str, str, int]:
+    """(scheme, host, port) for the proxy from Indigo's web server URL, or
+    DEFAULT_TARGET when there is no usable URL."""
+    try:
+        parts = urlsplit(str(url or "").strip())
+        scheme = (parts.scheme or "").lower()
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return DEFAULT_TARGET
+    if scheme not in ("http", "https") or not host:
+        return DEFAULT_TARGET
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    if is_this_machine(host):
+        host = "localhost"
+    return scheme, host, int(port)
+
+
+def _patch_target(text: str, target: Tuple[str, str, int], logger) -> str:
+    """The proxy source pointed at target. A missing line is warned about and
+    left at its default: the proxy still runs, just not with the new value."""
+    scheme, host, port = target
+    values = {"INDIGO_SCHEME": json.dumps(scheme), "INDIGO_HOST": json.dumps(host),
+              "INDIGO_PORT": str(int(port))}
+    for name, pattern in _TARGET_LINES.items():
+        text, count = pattern.subn(lambda m, v=values[name]: m.group(1) + v, text)
+        if not count:
+            logger.warning(f"\t⚠️  {name} line not found in the bundled MCP proxy — "
+                           f"it keeps its built-in default")
+    return text
 
 
 def scripts_dir_for(install_folder) -> Path:
@@ -118,13 +209,17 @@ def patch_bearer_token(proxy_path: Path, token: str, logger) -> bool:
         return False
 
 
-def deploy_proxy(bundle_dir, install_folder, fallback_token: str, logger) -> Optional[bool]:
-    """Copy the bundled proxy into Indigo's Scripts folder and patch the token.
+def deploy_proxy(bundle_dir, install_folder, fallback_token: str, logger,
+                 web_server_url: Optional[str] = None) -> Optional[bool]:
+    """Copy the bundled proxy into Indigo's Scripts folder and patch the token
+    and the web server's address.
 
     Returns True when the proxy was deployed with a token, False when it was
     copied but carries no token, None when the bundle has no proxy to copy.
     The token comes from Indigo's secrets.json first, then from
-    CLAUDEBRIDGE_BEARER_TOKEN in IndigoSecrets.py (``fallback_token``)."""
+    CLAUDEBRIDGE_BEARER_TOKEN in IndigoSecrets.py (``fallback_token``). The
+    address comes from ``web_server_url`` (indigo.server.getWebServerURL()),
+    falling back to http://localhost:8176."""
     bundle_proxy = Path(bundle_dir) / PROXY_NAME
     if not bundle_proxy.exists():
         logger.warning(f"\t{PROXY_NAME} not found in bundle — skipping proxy setup")
@@ -133,6 +228,10 @@ def deploy_proxy(bundle_dir, install_folder, fallback_token: str, logger) -> Opt
     dest_proxy  = scripts_dir / PROXY_NAME
     scripts_dir.mkdir(parents=True, exist_ok=True)
     source = bundle_proxy.read_text(encoding="utf-8")
+    target = web_server_target(web_server_url)
+    source = _patch_target(source, target, logger)
+    if target != DEFAULT_TARGET:
+        logger.debug(f"\tMCP proxy points at {target[0]}://{target[1]}:{target[2]}")
 
     token = read_iws_token(install_folder, logger) or (fallback_token or "")
     patched = False
@@ -197,15 +296,18 @@ def update_claude_settings(home, logger) -> bool:
 
 
 def setup_claude_code_integration(logger, *, bundle_dir, install_folder, home,
-                                  fallback_token: str = "") -> List[str]:
+                                  fallback_token: str = "",
+                                  web_server_url: Optional[str] = None) -> List[str]:
     """Everything Claude Code needs to connect, with no Terminal steps: the
-    proxy in Indigo's Scripts folder with the token in it, and the two
-    dotfile entries. Returns the list of things it changed."""
+    proxy in Indigo's Scripts folder with the token and the web server's
+    address in it, and the two dotfile entries. Returns the list of things it
+    changed."""
     changed = []
     # Only claim the proxy was configured when the token actually went in -
     # reporting success on the no-token and patch-failed paths is how a broken
     # deployment looks healthy.
-    if deploy_proxy(bundle_dir, install_folder, fallback_token, logger):
+    if deploy_proxy(bundle_dir, install_folder, fallback_token, logger,
+                    web_server_url=web_server_url):
         changed.append("proxy script")
     proxy_path = scripts_dir_for(install_folder) / PROXY_NAME
     if update_mcp_json(home, proxy_path, logger):

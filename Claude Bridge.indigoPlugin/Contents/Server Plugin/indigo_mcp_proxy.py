@@ -69,11 +69,18 @@
 # reset" seen on the first MCP call after a long idle gap or a plugin reload.
 
 import errno
+import ipaddress
 import sys
 import json
+import ssl
 import time
 import http.client
 
+# INDIGO_SCHEME, INDIGO_HOST and INDIGO_PORT are patched in by the plugin at
+# start-up, like BEARER_TOKEN below, from indigo.server.getWebServerURL(): the
+# host stays "localhost" when the web server is on this Mac. These are the
+# defaults when it cannot tell.
+INDIGO_SCHEME          = "http"
 INDIGO_HOST            = "localhost"
 INDIGO_PORT            = 8176
 INDIGO_MCP_PATH        = "/message/com.clives.indigoplugin.claudebridge/mcp/"
@@ -157,13 +164,39 @@ class _SendFailed(Exception):
     side effect, so we surface it instead."""
 
 
+def _is_loopback_host(host: str) -> bool:
+    if str(host).lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(str(host).strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def _tls_context() -> ssl.SSLContext:
+    """The TLS settings for an HTTPS web server. Over loopback the certificate
+    is not checked: Indigo's certificate names the Mac's network name (or is
+    self-signed), never "localhost", and a loopback connection never leaves
+    this Mac, so there is nobody in the middle for the check to catch. To any
+    other host the certificate is verified as normal."""
+    context = ssl.create_default_context()
+    if _is_loopback_host(INDIGO_HOST):
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def _get_connection():
     """Return a reusable persistent HTTP connection."""
     global _connection
     if _connection is None:
         # 300s: long-running tools (vector-store warmup, semantic search, a
         # sleeping execute_indigo_python) can exceed a 60s ceiling.
-        _connection = http.client.HTTPConnection(INDIGO_HOST, INDIGO_PORT, timeout=300)
+        if INDIGO_SCHEME == "https":
+            _connection = http.client.HTTPSConnection(INDIGO_HOST, INDIGO_PORT, timeout=300,
+                                                      context=_tls_context())
+        else:
+            _connection = http.client.HTTPConnection(INDIGO_HOST, INDIGO_PORT, timeout=300)
     return _connection
 
 
