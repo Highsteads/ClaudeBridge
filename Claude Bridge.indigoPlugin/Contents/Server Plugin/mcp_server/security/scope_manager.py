@@ -317,6 +317,11 @@ class ScopeManager:
 
     # ── Lookup ────────────────────────────────────────────────────────────
 
+    @property
+    def is_configured(self) -> bool:
+        """False while there is no scopes.json — every key then has every scope."""
+        return self._configured
+
     def scopes_for_token(self, bearer: Optional[str]) -> Set[str]:
         """
         Return the scope set for the given bearer token.

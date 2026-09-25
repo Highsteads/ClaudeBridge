@@ -23,11 +23,14 @@ No Anthropic API key is needed: Claude Code uses your own Claude account.</Label
     <!-- Phase 2 hardening: rate limit + cache TTL  -->
     <Field id="rate_limit_per_minute" type="textfield" defaultValue="120">
         <Label>Rate limit (per minute):</Label>
-        <Description>Per-session sliding-window cap. 'admin'-scoped tokens get 10×.</Description>
+        <Description>Calls a minute, per access key. An admin key gets 10×.</Description>
     </Field>
     <Field id="rate_limit_per_day" type="textfield" defaultValue="5000">
         <Label>Rate limit (per day):</Label>
-        <Description>Per-session daily cap.</Description>
+        <Description>Calls a day, per access key. An admin key gets 10×.</Description>
+    </Field>
+    <Field id="rate_limit_help" type="label" fontSize="small" alignWithControl="false">
+        <Label>Both limits count calls per access key, not per session. A key with the admin scope gets ten times these figures, and without a scopes.json every key is admin — so on a stock install the limits in force are 1,200 a minute and 50,000 a day. The plugin's /health page shows the limits each key is held to.</Label>
     </Field>
     <Field id="cache_ttl_seconds" type="textfield" defaultValue="60">
         <Label>Read-cache TTL (seconds):</Label>

@@ -696,11 +696,12 @@ class Plugin(indigo.PluginBase):
         Returns plugin uptime, session count, tool inventory and recent
         tool-call latencies as JSON. Cheap to call — safe for monitors.
 
-        Auth: gated by IWS bearer auth only (like every /message/ endpoint) —
-        it does NOT pass through the plugin's per-token scope layer. That is
-        intentional: it performs no mutation, only read-only diagnostics, so a
-        'read'-equivalent gate is sufficient. Rate-limiter keys (bearer tokens)
-        are masked to a non-reversible digest before they reach this payload —
+        Auth: IWS bearer auth first (like every /message/ endpoint), then the
+        plugin's scopes: the full snapshot names the configured keys and their
+        scopes and lists recent tool calls, so only an admin key gets it. Any
+        other key gets the basic status and its own rate limits (see
+        MCPHandler.health_for_caller). Rate-limiter keys (bearer tokens) are
+        masked to a non-reversible digest before they reach this payload —
         see RateLimiter.snapshot() — so no token strings are exposed.
         """
         if not self.mcp_handler:
@@ -713,7 +714,8 @@ class Plugin(indigo.PluginBase):
                 }),
             }
         try:
-            data = self.mcp_handler.get_health_data(plugin_start_time=self._start_time)
+            headers = dict(action.props.get("headers", {}) or {})
+            data = self.mcp_handler.health_for_caller(headers, plugin_start_time=self._start_time)
             return {
                 "status":  200,
                 "headers": {"Content-Type": "application/json; charset=utf-8"},
@@ -1441,12 +1443,16 @@ class Plugin(indigo.PluginBase):
                 self.cache_ttl_seconds     = _cache_ttl
             try:
                 if self.mcp_handler:
-                    self.mcp_handler.rate_limiter.per_minute = self.rate_limit_per_minute
-                    self.mcp_handler.rate_limiter.per_day    = self.rate_limit_per_day
+                    limiter = self.mcp_handler.rate_limiter
+                    limiter.per_minute = self.rate_limit_per_minute
+                    limiter.per_day    = self.rate_limit_per_day
                     self.mcp_handler.tool_cache.set_ttl(self.cache_ttl_seconds)
+                    admin = limiter.effective_limits()["admin"]
                     self.logger.info(
                         f"\t✅ Rate limits updated: {self.rate_limit_per_minute}/min, "
-                        f"{self.rate_limit_per_day}/day; cache TTL {self.cache_ttl_seconds}s"
+                        f"{self.rate_limit_per_day}/day per access key (an admin key gets "
+                        f"{admin['per_minute']}/min, {admin['per_day']}/day); "
+                        f"cache TTL {self.cache_ttl_seconds}s"
                     )
             except Exception as _e:
                 self.logger.warning(f"\t⚠️  Could not apply Phase 2 settings to the "

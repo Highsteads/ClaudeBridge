@@ -15,7 +15,7 @@ you do.
 
 | Setting | What it does |
 |---|---|
-| Rate limit (per minute / per day) | How many tool calls a token may make. Defaults 120 a minute, 5,000 a day |
+| Rate limit (per minute / per day) | How many tool calls each access key may make. Defaults 120 a minute, 5,000 a day. They count per access key, not per session, and a key with the admin scope gets ten times the figures. Without a `scopes.json` every key is admin, so on a stock install the limits in force are 1,200 a minute and 50,000 a day. The plugin's `/health` page shows the limits each key is held to |
 | Read-cache TTL (seconds) | How long a read answer is served from cache. Mutating tools invalidate the related cache buckets themselves, and a client can send `Cache-Control: no-cache` |
 | Allow plugin-provided tools to make changes | The one switch over other plugins' write tools (see [Letting your plugin add tools](providers.md)). On by default; read tools always work |
 | Enable Event Webhooks, egress allow-list, plain-HTTP allow-list | The "home calls out" feature, off by default, and the only destinations it may ever post to. See [Security](security.md) |
@@ -78,7 +78,7 @@ read or needed.
 | Item | What it does |
 |---|---|
 | Print MCP Client Connection Information | The endpoint URLs, local and on the network |
-| Print Plugin Health | Uptime, sessions and per-tool latencies |
+| Print Plugin Health | Uptime, sessions, per-tool latencies and the rate limits each key is held to. The same snapshot at the `/health` address needs an admin key; any other key gets the basic status and its own limits |
 | Print Tool Explorer URL | A page listing every tool with its schema |
 | Create Starter scopes.json / Reload scopes.json | Per-token scopes, above |
 | Clear Read-Cache | Forget every cached read answer |
