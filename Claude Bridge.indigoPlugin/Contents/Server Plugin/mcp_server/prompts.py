@@ -91,12 +91,31 @@ def list_prompts() -> List[Dict[str, Any]]:
     return out
 
 
+class MissingPromptArguments(ValueError):
+    """A prompt was asked for without an argument it declares as required."""
+
+    def __init__(self, prompt: str, missing: List[str]):
+        self.prompt = prompt
+        self.missing = missing
+        super().__init__(f"Missing required argument(s) for prompt {prompt!r}: "
+                         f"{', '.join(missing)}")
+
+
 def get_prompt(name: str, arguments: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """Return the prompts/get payload for *name*, or None if unknown."""
+    """Return the prompts/get payload for *name*, or None if unknown.
+
+    Raises MissingPromptArguments when a required argument is absent or blank.
+    It used to be filled with a "<device>" placeholder, which sent Claude off
+    to look for a device literally called "<device>"."""
     p = _PROMPTS.get(name)
     if not p:
         return None
     args = dict(arguments or {})
+    missing = [a["name"] for a in p.get("arguments", [])
+               if a.get("required") and (args.get(a["name"]) is None
+                                         or not str(args.get(a["name"])).strip())]
+    if missing:
+        raise MissingPromptArguments(name, missing)
     # Fill declared arguments, defaulting the optional ones sensibly.
     fmt = {"threshold": args.get("threshold", 20)}
     for a in p.get("arguments", []):

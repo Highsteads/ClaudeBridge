@@ -804,12 +804,15 @@ class MCPHandler:
                 "result": {"prompts": list_prompts()}
             }
         elif method == "prompts/get":
-            from .prompts import get_prompt
+            from .prompts import MissingPromptArguments, get_prompt
             p = (params or {})
             p_args = p.get("arguments") or {}
             if not isinstance(p_args, dict):
                 return self._json_error(msg_id, -32602, "Invalid params: arguments must be a JSON object")
-            result = get_prompt(str(p.get("name") or ""), p_args)
+            try:
+                result = get_prompt(str(p.get("name") or ""), p_args)
+            except MissingPromptArguments as exc:
+                return self._json_error(msg_id, -32602, str(exc))
             if result is None:
                 return self._json_error(msg_id, -32602, f"Unknown prompt: {p.get('name')!r}")
             return {"jsonrpc": "2.0", "id": msg_id, "result": result}
