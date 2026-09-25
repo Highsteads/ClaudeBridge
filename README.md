@@ -177,7 +177,7 @@ You read the result, hit Enter to commit, done. No Googling
 
 Claude Bridge gives Claude Code **69 MCP tools**, enough to read and change anything on a running
 Indigo server: **28 read** tools (pure queries), **20 write** tools (they change Indigo state) and
-**21 admin** tools (deletes, code execution, plugin lifecycle, physical security). By area:
+**21 admin** tools (deletes, code execution, plugin lifecycle, physical security, e-mail). By area:
 
 - **Devices** — list, search and inspect by id, name, type or state; plain-English search; one
   `device_control` tool for on, off, toggle, brightness, colour, status, beep and ping, by id or by
@@ -210,17 +210,23 @@ checked on every push. The fuller tour by area is
 [What it does](https://highsteads.github.io/ClaudeBridge/what-it-does.html).
 
 ## How it keeps your house safe
-- **Everything stays local.** Searching and control all happen on your own
-  Mac. The only thing that ever leaves the machine is your conversation with
-  Claude itself.
+- **The work stays local.** Searching and control all happen on your own
+  Mac. What leaves it is your conversation with Claude, and anything you ask
+  Claude to send out: an e-mail (admin keys only), a Pushover notification to
+  your own devices, and event webhooks, which are off until you turn them on
+  and can only reach the addresses you allow.
 - **No extra doors into your network.** Everything travels through Indigo's
   own web server on its existing port, protected by Indigo's own access key,
   and the Reflector gives you secure remote access for free.
-- **Permission levels.** Every tool is classed as read, write, or admin. If
-  you hand out a read-only key it really is read-only — and anything
-  destructive (deleting things, running code, unlocking a door, the new
-  folder deletes) needs the admin level. Anything not explicitly classified
-  is locked down, not waved through.
+- **Permission levels.** Every tool is classed as read, write, or admin. A
+  read-only key really is read-only. Deleting things, running code, locking
+  and unlocking, sending e-mail, zeroing an energy total and the other things
+  that cannot be taken back need the admin level. Anything not explicitly
+  classified is locked down, not waved through. But a **write** key can run
+  any action group and fire any trigger or schedule, and those run whatever
+  they contain, including unlocking a door or an embedded script, so give a
+  phone a read key. The [Security](https://highsteads.github.io/ClaudeBridge/security.html)
+  page has the detail.
 - **Careful by default.** Dangerous operations refuse ambiguous input rather
   than guessing, deletes that can cascade make you say so explicitly, and
   the plugin checks its own permission setup every time it starts.

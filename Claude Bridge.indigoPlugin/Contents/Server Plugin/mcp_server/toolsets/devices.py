@@ -423,7 +423,8 @@ def get_device_by_name(ctx, name, detail=None):
 
 
 @tool("device_history", scope="read",
-      description=("Read recent SQL Logger history for one device. Returns timestamp + "
+      description=("Read recent SQL Logger history for one device, from the SQLite SQL Logger "
+                   "database (a PostgreSQL SQL Logger is not read). Returns timestamp + "
                    "non-null state columns. Column names are stored LOWERCASE (batterysoc, not "
                    "batterySoc); an unknown name is an error listing the valid columns. Rows are "
                    "sparse — only changed values are written, so forward-fill before deriving "

@@ -51,7 +51,7 @@ SCOPE_ORDER = [
     (
         "admin",
         "Admin tools",
-        "Destructive / irreversible / code-execution / lifecycle / physical-security. Require `admin`.",
+        "Destructive / irreversible / code-execution / lifecycle / physical-security / data leaving the house. Require `admin`.",
     ),
 ]
 

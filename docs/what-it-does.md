@@ -45,7 +45,8 @@ tool is listed by name in the [Tool reference](tools.md).
   record, or two periods compared side by side.
 - **Reset an energy total** — `device_control` with `action='reset_energy'`
   zeroes the lifetime kWh count on an energy-metering plug when you want to
-  start a fresh measurement.
+  start a fresh measurement. The old total cannot be put back, so this one
+  action needs an admin key.
 
 ### Variables & action groups
 - Create, read, update, and organise variables and their folders.
@@ -122,12 +123,14 @@ Any Indigo plugin can add tools of its own to Claude Bridge by shipping one JSON
   whole home, configurable by section (energy, heating, security, devices,
   alerts, automation).
 - **`device_history`** — a device's recent history from the SQL Logger
-  database, for trends and "when did this last change".
+  database, for trends and "when did this last change". SQLite SQL Logger
+  only; an install that logs to PostgreSQL gets an error.
 
 ### Notifications
-- `send_email` via Indigo's first SMTP device, `send_notification` via
-  Pushover (priority, sound, title, body), and `log_message` for writing a
-  line straight to the Indigo event log.
+- `send_email` via Indigo's first SMTP device (admin scope, because it can
+  reach any address), `send_notification` via Pushover to your own devices
+  (priority, sound, title, body), and `log_message` for writing a line
+  straight to the Indigo event log.
 
 ### Folders & server info
 - `create_folder` for device and variable folders (asking twice is harmless —

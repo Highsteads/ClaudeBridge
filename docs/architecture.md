@@ -76,7 +76,7 @@ they can be up to five minutes old: ask for the device or variable itself for a 
 ## Long runs
 
 `execute_indigo_python` and `run_script` run as jobs. A run that finishes inside `wait_seconds`
-(eight by default) answers straight away. A longer one carries on in the background and the reply
+(5 by default, at most 20) answers straight away. A longer one carries on in the background and the reply
 carries a `job_id`. Calling the tool again with that id waits a little longer and returns the
 result. Only one run can capture output at a time, so a second is refused and names the job in the
 way, and a finished result is kept for ten minutes.
