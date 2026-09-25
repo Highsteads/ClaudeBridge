@@ -602,19 +602,37 @@ class MCPHandler:
         # with no id leaves that request pending in the client for ever.
         msg_id = payload.get("id") if isinstance(payload, dict) else None
 
+        # A JSON-RPC RESPONSE from the client (an id, a result or error, no
+        # method). This server never sends the client a request, so there is
+        # nothing to match it to; it is accepted and dropped, as the
+        # Streamable HTTP transport requires: 202, no body.
+        if (isinstance(payload, dict) and payload.get("jsonrpc") == "2.0"
+                and "method" not in payload and "id" in payload
+                and ("result" in payload or "error" in payload)):
+            return self._accepted()
+
+        is_notification = isinstance(payload, dict) and "id" not in payload
+
         # Process single message
         try:
             # Single message
             resp = self._dispatch_message(payload, headers)
-            
-            # If it was a notification (no id), return 200 with empty JSON for IWS compatibility
-            if isinstance(payload, dict) and "id" not in payload:
-                return {
-                    "status": 200, 
-                    "headers": {"Content-Type": "application/json; charset=utf-8"},
-                    "content": "{}"
-                }
-            
+
+            # A notification the server accepts gets 202 Accepted and no body
+            # (MCP Streamable HTTP, 2025-03-26 and 2025-06-18). One it cannot
+            # accept — not a JSON-RPC message at all — gets 400. Until 3.3.0
+            # both got 200 with "{}".
+            if is_notification:
+                if isinstance(resp, dict) and "error" in resp:
+                    return self._json_response(resp, status=400)
+                return self._accepted()
+
+            # An HTTP status other than 200, asked for by the dispatcher: 404
+            # for a session this server does not know, 400 for a missing one.
+            status = 200
+            if isinstance(resp, dict) and "_http_status" in resp:
+                status = resp.pop("_http_status")
+
             # Check for session ID in response
             extra_headers = {}
             if isinstance(resp, dict) and "_mcp_session_id" in resp:
@@ -622,27 +640,28 @@ class MCPHandler:
                 extra_headers["Mcp-Session-Id"] = session_id
 
             return {
-                "status": 200,
+                "status": status,
                 "headers": {
                     "Content-Type": "application/json; charset=utf-8",
                     **extra_headers
                 },
                 "content": json.dumps(resp)
             }
-                
+
         except Exception:
             self.logger.exception("Unhandled MCP error")
-            if isinstance(payload, dict) and "id" not in payload:
+            if is_notification:
                 # A notification never gets a reply, fault or not.
-                return {
-                    "status": 200,
-                    "headers": {"Content-Type": "application/json; charset=utf-8"},
-                    "content": "{}"
-                }
+                return self._accepted()
             return self._json_response(
                 self._json_error(msg_id, -32603, "Internal error"),
                 status=200
             )
+
+    @staticmethod
+    def _accepted() -> Dict[str, Any]:
+        """202 Accepted with no body: a notification or response taken in."""
+        return {"status": 202, "headers": {}, "content": ""}
     
     def _dispatch_message(
         self,
@@ -702,7 +721,9 @@ class MCPHandler:
         if method != "initialize" and not method.startswith("notifications/"):
             if protocol_version_header and protocol_version_header != self.PROTOCOL_VERSION:
                 self.logger.debug(f"Invalid protocol version: {protocol_version_header}")
-                return self._json_error(msg_id, -32600, f"Unsupported protocol version: {protocol_version_header}")
+                # 400 Bad Request, as the 2025-06-18 transport requires.
+                return self._http_error(400, msg_id, -32600,
+                                        f"Unsupported protocol version: {protocol_version_header}")
 
         # Session validation (skip for initialize and notifications).
         # NOTE: the `and self._sessions` grace clause is deliberately retained.
@@ -710,6 +731,12 @@ class MCPHandler:
         # session id. The bundled proxy (1.4+) re-handshakes on a session error,
         # but other clients (mcp-remote, a hand-written one) may not, and the
         # empty-store grace is what lets those carry on after a restart.
+        #
+        # Once sessions exist, the HTTP status says what is wrong, as the
+        # Streamable HTTP transport requires: 404 Not Found for a session id
+        # this server does not know (the client must initialize again) and 400
+        # Bad Request for no session id at all. The JSON-RPC body still names
+        # the session, so a client that reads only the body can recover too.
         session_id = headers.get("mcp-session-id")
         if method != "initialize" and not method.startswith("notifications/") and self._sessions:
             with self._sessions_lock:
@@ -717,8 +744,12 @@ class MCPHandler:
                 if known:
                     self._sessions[session_id]["last_seen"] = time.time()
             if not known:
-                self.logger.debug(f"Invalid session ID for {method}")
-                return self._json_error(msg_id, -32600, "Missing or invalid Mcp-Session-Id")
+                self.logger.debug(f"{'Unknown' if session_id else 'Missing'} session ID for {method}")
+                if session_id:
+                    return self._http_error(404, msg_id, -32600,
+                                            "Unknown or expired Mcp-Session-Id: send initialize "
+                                            "to start a new session")
+                return self._http_error(400, msg_id, -32600, "Missing Mcp-Session-Id header")
 
         # Route to appropriate handler
         if method == "initialize":
@@ -1731,6 +1762,13 @@ class MCPHandler:
             "content": json.dumps(obj)
         }
     
+    def _http_error(self, http_status: int, msg_id: Any, code: int,
+                    message: str) -> Dict[str, Any]:
+        """A JSON-RPC error that handle_request sends with this HTTP status."""
+        error = self._json_error(msg_id, code, message)
+        error["_http_status"] = http_status
+        return error
+
     def _json_error(
         self, 
         msg_id: Any, 
