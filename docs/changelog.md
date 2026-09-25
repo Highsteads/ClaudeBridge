@@ -8,6 +8,14 @@ nav_order: 11
 Every release, newest first. The three most recent also appear under **What's new** in the
 [README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
 
+### 3.5.0 (2026-09-25)
+Long lists now come a page at a time, and a new tool reads a variable's history.
+
+- **Paging.** `list_devices` with no filter used to send every device in full, 245 KB on a house of 210 devices. It now sends 50 at a time. `list_devices`, `list_variables`, `list_triggers`, `list_schedules` and `list_action_groups` all sort by name, take `limit` and `offset`, and say how many there are in total and where the next page starts (`next_offset`, empty on the last page). With a filter, and for the other four lists, a page is 200, so on most houses they still arrive in one go. `list_devices` now also accepts `limit` without a filter, where it used to refuse it.
+- **`variable_history`.** A variable's history from the SQL Logger, by id or name. The logger writes a row only when the value changes, so the reply also says what the value was when the window opened. With `summary=true` it says how many times the value changed and how long each value held (the way to answer "how long was the heating on today"), with a time-weighted average for a number. A deleted variable's history can still be read by its old id. It reads the database the same careful way `device_history` does, by id range, never scanning a whole table.
+
+71 tools now, 30 of them read-only.
+
 ### 3.4.0 (2026-09-25)
 Claude Bridge now keeps a permanent record of every change made through it: each call that needs the write or admin scope, whether it worked, failed or was refused.
 

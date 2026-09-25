@@ -3,18 +3,19 @@
 # Filename:    devices.py
 # Description: Device tools — finding, reading and controlling devices.
 # Author:      CliveS & Claude Opus 5.5
-# Date:        23-09-2026
-# Version:     1.0
+# Date:        25-09-2026
+# Version:     1.1 (3.5.0: list_devices pages, with offset and next_offset)
 
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..common import device_capabilities
+from ..common.paging import paged_reply, paging_args
 from ..common.indigo_device_types import DeviceTypeResolver, IndigoDeviceType, IndigoEntityType
 from ..registry import tool
 from ..tools.device_control.color_names import parse_color
 from ._schema import (DELAY, DEVICE, DURATION, bad_choice, boolean, coerce_bool, enum,
-                      id_or_name, number, refuse, string, unused_args)
+                      id_or_name, integer, number, refuse, string, unused_args)
 
 _DEVICE_TYPES_HELP = ("Valid types: dimmer, relay, sensor, multiio, speedcontrol, sprinkler, "
                       "thermostat, device. Aliases supported: light→dimmer, switch→relay, "
@@ -271,14 +272,16 @@ def search_entities(ctx, query, device_types=None, entity_types=None,
 
 
 @tool("list_devices", scope="read", cacheable=True, reads={"device"},
-      description=("List devices. With no arguments, every device, which is large on a big "
-                   "estate — prefer a filter or `fields`. device_type narrows to one type "
-                   "(aliases accepted), plugin_id to one plugin's devices, folder to one device "
-                   "folder (id or name), and state_filter to devices whose states match, e.g. "
-                   "{\"onState\": true} or {\"heatIsOn\": true}. fields returns just id, name "
-                   "and the properties or states named, e.g. [\"address\", \"batteryLevel\"]. "
-                   "Any filter returns count, total_matched and truncated, and limit caps the "
-                   "list (default 200)."),
+      description=("List devices, a page at a time, sorted by name. With no filter the "
+                   "page is 50 full device rows — prefer a filter or `fields`. device_type "
+                   "narrows to one type (aliases accepted), plugin_id to one plugin's devices, "
+                   "folder to one device folder (id or name), and state_filter to devices "
+                   "whose states match, e.g. {\"onState\": true} or {\"heatIsOn\": true}. "
+                   "fields returns just id, name and the properties or states named, e.g. "
+                   "[\"address\", \"batteryLevel\"]. Every reply says total, offset, count "
+                   "and next_offset: call again with offset=next_offset for the next page, "
+                   "until next_offset is null. limit sets the page size (default 50 with no "
+                   "filter, 200 with one; most 1000)."),
       properties={
           "device_type": string("Optional device type. " + _DEVICE_TYPES_HELP),
           "plugin_id": string("Optional: only devices owned by this plugin bundle id"),
@@ -292,51 +295,62 @@ def search_entities(ctx, query, device_types=None, entity_types=None,
                            "description": ("Optional state conditions using Indigo state names, "
                                            "e.g. {\"onState\": true}, "
                                            "{\"temperature\": {\"gt\": 21}}")},
-          "limit": {"type": "integer",
-                    "description": "Max devices when filtering (default 200)"},
+          "limit": integer("Page size (default 50 with no filter, 200 with one; most 1000)"),
+          "offset": integer("Where the page starts: 0 for the first, then the next_offset "
+                            "the previous page gave (default 0)"),
           "detail": enum(["slim", "full"],
                          "device_type only: 'slim' (default) short rows, 'full' every "
                          "property"),
       })
 def list_devices(ctx, device_type=None, state_filter=None, limit=None, detail=None,
-                 plugin_id=None, folder=None, fields=None):
+                 plugin_id=None, folder=None, fields=None, offset=None):
+    unfiltered = not (device_type or state_filter or plugin_id is not None
+                      or folder is not None or fields is not None)
+    off, lim, problem = paging_args(offset, limit, 50 if unfiltered else 200)
+    if problem:
+        return refuse(problem)
     if plugin_id is not None or folder is not None or fields is not None:
-        return _list_devices_filtered(ctx, device_type, state_filter, limit, detail,
-                                      plugin_id, folder, fields)
+        result = _list_devices_filtered(ctx, device_type, state_filter, detail,
+                                        plugin_id, folder, fields)
+        return _page_devices(result, off, lim)
     if detail is not None and not (device_type and not state_filter):
         return refuse("list_devices: detail applies only with device_type alone")
-    if not device_type and not state_filter:
-        if limit is not None:
-            return refuse("limit applies only with device_type or state_filter — "
-                          "call list_devices with no arguments for every device")
-        return ctx.list_handlers.list_all_devices()
+    if unfiltered:
+        return paged_reply(ctx.list_handlers.list_all_devices(), "devices", off, lim)
     if device_type and not state_filter:
         if detail is not None and detail not in ("slim", "full"):
             return bad_choice("detail", detail, ("slim", "full"))
-        kwargs = {"limit": 200 if limit is None else limit}
+        kwargs = {"limit": _EVERY}
         if detail is not None:
             kwargs["detail"] = detail
-        return ctx.get_devices_by_type_handler.get_devices(device_type, **kwargs)
+        return _page_devices(ctx.get_devices_by_type_handler.get_devices(device_type, **kwargs),
+                             off, lim)
     types = None
     if device_type:
         types, refusal = _resolve_types([device_type])
         if refusal:
             return refusal
     result = ctx.list_handlers.get_devices_by_state(state_filter, types)
-    try:
-        cap = max(1, int(200 if limit is None else limit))
-    except (TypeError, ValueError):
-        cap = 200
-    devices = result.get("devices") or []
-    result["total_matched"] = len(devices)
-    result["truncated"] = len(devices) > cap
-    result["limit"] = cap
-    result["devices"] = devices[:cap]
-    result["count"] = len(result["devices"])
-    return result
+    return _page_devices(result, off, lim)
 
 
-def _list_devices_filtered(ctx, device_type, state_filter, limit, detail,
+# The handlers underneath cap their own lists; they are asked for everything
+# and the one page is cut here, so every branch pages the same way.
+_EVERY = 1_000_000
+
+
+def _page_devices(result, offset, limit):
+    """Page a handler's {"devices": [...]} reply; pass a refusal through."""
+    if not isinstance(result, dict) or not isinstance(result.get("devices"), list):
+        return result
+    if result.get("success") is False or "error" in result:
+        return result
+    reply = paged_reply(result["devices"], "devices", offset, limit, base=result)
+    reply["total_matched"] = reply["total"]
+    return reply
+
+
+def _list_devices_filtered(ctx, device_type, state_filter, detail,
                            plugin_id, folder, fields):
     if detail is not None:
         return refuse("list_devices: detail does not combine with plugin_id, folder or "
@@ -360,15 +374,11 @@ def _list_devices_filtered(ctx, device_type, state_filter, limit, detail,
         folder_id, problem = ctx.list_handlers.resolve_device_folder(folder)
         if problem:
             return refuse(problem)
-    try:
-        cap = max(1, int(200 if limit is None else limit))
-    except (TypeError, ValueError):
-        return refuse(f"limit must be a whole number, got {limit!r}")
     return ctx.list_handlers.list_devices_filtered(
         device_types=types, state_filter=state_filter,
         plugin_id=None if plugin_id is None else str(plugin_id).strip(),
         folder_id=folder_id, fields=[f.strip() for f in fields] if fields else None,
-        limit=cap)
+        limit=_EVERY)
 
 
 _ONE_DEVICE_DETAIL = enum(

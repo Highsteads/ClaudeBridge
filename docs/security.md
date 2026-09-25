@@ -129,8 +129,10 @@ states:
   including the source of any embedded script.
 - **The event log.** `query_event_log`, `investigate_event` and the recent-log resource return
   the event log, which can hold whatever a plugin or script chose to write to it.
-- **Device history.** `device_history` reads the SQL Logger's history database. It works only
-  with the SQLite SQL Logger; an install that logs to PostgreSQL gets an error instead.
+- **Device and variable history.** `device_history` and `variable_history` read the SQL
+  Logger's history database, including the history of a variable that has since been deleted.
+  They work only with the SQLite SQL Logger; an install that logs to PostgreSQL gets an error
+  instead.
 
 For a key **without admin**, the script text, the embedded automation scripts and the event log
 lines have every credential value Claude Bridge knows about replaced with a marker such as

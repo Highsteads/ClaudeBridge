@@ -251,21 +251,32 @@ def test_list_devices_routes_each_combination():
         "get_devices_by_state": lambda *a, **k: {"devices": [{"id": i} for i in range(5)],
                                                   "count": 5}}))
     everything = call_tool(ctx, "list_devices")
-    assert everything == [{"id": 1}]
+    assert everything["devices"] == [{"id": 1}]
+    assert everything["total"] == 1 and everything["next_offset"] is None
+    assert everything["limit"] == 50, "no filter: 50 full rows a page (3.5.0)"
 
+    # The handler is asked for everything; the page is cut in the tool, so
+    # every branch pages the same way (3.5.0).
     call_tool(ctx, "list_devices", device_type="light", limit=7)
-    assert _only_call(ctx.get_devices_by_type_handler) == ("get_devices", ("light",), {"limit": 7})
+    assert _only_call(ctx.get_devices_by_type_handler) == (
+        "get_devices", ("light",), {"limit": 1_000_000})
 
     out = call_tool(ctx, "list_devices", state_filter={"onState": True}, device_type="switch",
                     limit=2)
     method, args, _ = ctx.list_handlers.calls[-1]
     assert method == "get_devices_by_state" and args == ({"onState": True}, ["relay"])
     assert out["count"] == 2 and out["total_matched"] == 5 and out["truncated"] is True
+    assert out["next_offset"] == 2
+    last = call_tool(ctx, "list_devices", state_filter={"onState": True}, device_type="switch",
+                     limit=2, offset=4)
+    assert last["count"] == 1 and last["next_offset"] is None
 
 
 def test_list_devices_refusals():
     ctx = _ctx()
-    assert "limit" in call_tool(ctx, "list_devices", limit=5)["error"]
+    assert "limit" in call_tool(ctx, "list_devices", limit=0)["error"]
+    assert "offset" in call_tool(ctx, "list_devices", offset=-1)["error"]
+    assert "offset" in call_tool(ctx, "list_devices", offset="page two")["error"]
     bad = call_tool(ctx, "list_devices", state_filter={"onState": True}, device_type="toaster")
     assert "Invalid device types" in bad["error"]
     _nothing_called(ctx)

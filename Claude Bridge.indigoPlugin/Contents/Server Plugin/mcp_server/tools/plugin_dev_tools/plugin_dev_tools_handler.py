@@ -8,8 +8,8 @@
 #              history queries. These are NOT IOM wrappers — they operate on
 #              the plugin bundle and Indigo SQL Logger sqlite database.
 # Author:      CliveS & Claude Opus 4.7
-# Date:        27-05-2026
-# Version:     1.0
+# Date:        25-09-2026
+# Version:     1.1 (3.5.0: variable_history)
 #
 # All filesystem paths are derived at call time:
 #   - installed plugin:  indigo.server.getInstallFolderPath() / Plugins / <name>.indigoPlugin
@@ -80,6 +80,77 @@ def _indigo_base() -> str:
 
 def _plugins_dir() -> str:
     return os.path.join(_indigo_base(), "Plugins")
+
+def _utc_text_to_local(text: Any) -> Optional[str]:
+    """A SQL Logger UTC timestamp as local 'YYYY-MM-DD HH:MM:SS'."""
+    dt = _parse_utc_text(text)
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_utc_text(text: Any) -> Optional[datetime]:
+    try:
+        dt = datetime.fromisoformat(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+    return dt.replace(tzinfo=None) if dt.tzinfo is None else \
+        dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+_VALUES_SHOWN = 20
+
+
+def _variable_summary(rows, before, start_utc: datetime, now_utc: datetime) -> Dict[str, Any]:
+    """Changes, and each distinct value with how often it was set and how long
+    it held inside [start_utc, now_utc]. `rows` are (ts, value) oldest first;
+    `before` is the (ts, value) in force when the window opened, or None."""
+    held: Dict[Any, float] = {}
+    count: Dict[Any, int] = {}
+    points: List[Tuple[datetime, Any]] = []
+    if before is not None:
+        points.append((start_utc, before[1]))
+    for ts, value in rows:
+        dt = _parse_utc_text(ts)
+        if dt is None:
+            continue
+        points.append((dt, value))     # the query returns only rows inside the window
+        count[value] = count.get(value, 0) + 1
+    for i, (dt, value) in enumerate(points):
+        end = points[i + 1][0] if i + 1 < len(points) else now_utc
+        held[value] = held.get(value, 0.0) + max(0.0, (end - dt).total_seconds())
+    window = max(1.0, (now_utc - start_utc).total_seconds())
+    covered = sum(held.values())
+    ranked = sorted(set(held) | set(count), key=lambda v: (-held.get(v, 0.0), str(v)))
+    out: Dict[str, Any] = {
+        "changes": len(rows),
+        "distinct_values": len(ranked),
+        "first_change": _utc_text_to_local(rows[0][0]) if rows else None,
+        "last_change": _utc_text_to_local(rows[-1][0]) if rows else None,
+        "values": [{"value": v, "times_set": count.get(v, 0),
+                    "seconds_held": int(held.get(v, 0.0)),
+                    "share_of_window": round(held.get(v, 0.0) / window, 3)}
+                   for v in ranked[:_VALUES_SHOWN]],
+    }
+    if len(ranked) > _VALUES_SHOWN:
+        out["values_not_shown"] = len(ranked) - _VALUES_SHOWN
+    if covered < window - 1:
+        out["unknown_seconds"] = int(window - covered)
+        out["unknown_note"] = ("The SQL Logger holds nothing for this variable before the first "
+                               "change shown, so its value at the start of the window is unknown.")
+    numbers = []
+    for dt, value in points:
+        try:
+            numbers.append(float(str(value).strip()))
+        except (TypeError, ValueError):
+            numbers = None
+            break
+    if numbers:
+        weighted = sum(float(str(v).strip()) * secs for v, secs in held.items())
+        out["numeric"] = {"min": min(numbers), "max": max(numbers),
+                          "time_weighted_mean": round(weighted / covered, 4) if covered else None}
+    return out
+
 
 def _sql_logger_db() -> str:
     return os.path.join(_indigo_base(), "Logs", "indigo_history.sqlite")
@@ -1211,3 +1282,118 @@ class PluginDevToolsHandler(BaseToolHandler):
                 conn.close()
         except Exception as exc:
             return self.handle_exception(exc, "device_history")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # variable_history — the SQL Logger's record of one variable (3.5.0)
+    # ════════════════════════════════════════════════════════════════════════
+
+    def variable_history(self, variable_id, hours: int = 24, limit: int = 500,
+                         summary: bool = False, name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read one variable's history from the SQL Logger sqlite database.
+
+        The logger keeps each variable in its own table, variable_history_<id>,
+        with an id that only grows, the time (UTC) and the value as text. A row
+        is written only when the value changes, so the reply also gives
+        `value_before`: the value in force when the window opened, which the
+        rows alone cannot say. The table outlives the variable, so a deleted
+        variable's history can still be read by its old id.
+
+        Rows (newest first) carry `ts` in LOCAL time. With summary=True it
+        reports instead how many changes there were, each distinct value with
+        how often it was set and for how long it held within the window, and
+        min, max and time-weighted mean when every value is a number.
+        """
+        self.log_incoming_request("variable_history",
+                                  {"variable_id": variable_id, "hours": hours, "limit": limit})
+        try:
+            try:
+                vid = int(variable_id)
+            except (TypeError, ValueError):
+                return {"success": False, "error": f"Bad variable_id {variable_id!r}"}
+            try:
+                limit = max(1, min(int(limit or 500), 5000))
+            except (TypeError, ValueError):
+                limit = 500
+            try:
+                hours = max(1, int(hours or 24))
+            except (TypeError, ValueError):
+                hours = 24
+            hours_capped = hours > _HISTORY_MAX_HOURS
+            hours = min(hours, _HISTORY_MAX_HOURS)
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            start_utc = now_utc - timedelta(hours=hours)
+            cutoff = start_utc.isoformat(sep=" ")
+
+            db_path = _sql_logger_db()
+            if not os.path.isfile(db_path):
+                return {"success": False,
+                        "error": f"SQL Logger sqlite DB not found at {db_path}"}
+            table = f"variable_history_{vid}"
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            try:
+                cur = conn.cursor()
+                cur.execute("PRAGMA query_only = ON")
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                            (table,))
+                if not cur.fetchone():
+                    return {"success": False,
+                            "error": f"No SQL Logger table '{table}': the SQL Logger has "
+                                     f"never logged this variable, or the id is wrong"}
+                floor_id = self._rowid_floor_for_ts(cur, table, cutoff)
+
+                # The value in force when the window opened: the newest row
+                # before it, found on the primary key.
+                cur.execute(f"SELECT ts, value FROM {table} WHERE id < ? "
+                            f"ORDER BY id DESC LIMIT 1", (floor_id,))
+                before = cur.fetchone()
+
+                result: Dict[str, Any] = {
+                    "success": True, "table": table, "variable_id": vid,
+                    "hours": hours, "hours_capped": hours_capped, "ts_timezone": "local",
+                    "value_before": ({"ts": _utc_text_to_local(before[0]), "value": before[1]}
+                                     if before else None),
+                }
+                if name:
+                    result["name"] = name
+
+                if summary:
+                    cur.execute(f"SELECT ts, value FROM {table} WHERE id >= ? "
+                                f"ORDER BY id LIMIT ?", (floor_id, _SUMMARY_ROW_CAP + 1))
+                    rows = cur.fetchall()
+                    capped = len(rows) > _SUMMARY_ROW_CAP
+                    rows = rows[-_SUMMARY_ROW_CAP:] if capped else rows
+                    result.update(_variable_summary(rows, before, start_utc, now_utc))
+                    if capped:
+                        result["note"] = (f"More than {_SUMMARY_ROW_CAP:,} changes in the window; "
+                                          f"the newest {_SUMMARY_ROW_CAP:,} were counted.")
+                else:
+                    cur.execute(
+                        f"SELECT datetime(ts, 'localtime'), value FROM {table} "
+                        f"WHERE id >= ? ORDER BY id DESC LIMIT ?", (floor_id, limit))
+                    rows = [{"ts": r[0], "value": r[1]} for r in cur.fetchall()]
+                    truncated = len(rows) == limit
+                    result.update({
+                        "row_count": len(rows), "truncated": truncated,
+                        "ts_newest": rows[0]["ts"] if rows else None,
+                        "ts_oldest": rows[-1]["ts"] if rows else None,
+                        "rows": rows,
+                    })
+                    if truncated:
+                        result["note"] = (
+                            f"Hit the {limit}-row limit, so these are the NEWEST {limit} "
+                            f"changes only, from {result['ts_oldest']}; raise limit or "
+                            f"narrow hours for earlier ones.")
+                    elif not rows:
+                        result["note"] = (f"No change in the last {hours} hours"
+                                          + (f"; the value has been {before[1]!r} since "
+                                             f"{result['value_before']['ts']}"
+                                             if before else "") + ".")
+                if hours_capped:
+                    result["hours_note"] = (f"hours was capped to {_HISTORY_MAX_HOURS} "
+                                            f"({_HISTORY_MAX_HOURS // 24} days).")
+                return result
+            finally:
+                conn.close()
+        except Exception as exc:
+            return self.handle_exception(exc, "variable_history")

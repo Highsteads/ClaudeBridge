@@ -5,7 +5,7 @@ nav_order: 3
 
 # What it does
 
-Claude Bridge gives Claude Code **70 MCP tools**, enough to read and change
+Claude Bridge gives Claude Code **71 MCP tools**, enough to read and change
 anything on a running Indigo server. They fall into the groups below, and every
 tool is listed by name in the [Tool reference](tools.md).
 
@@ -14,6 +14,9 @@ tool is listed by name in the [Tool reference](tools.md).
   partial, capitals optional), by type (relay, dimmer, sensor, thermostat,
   speed control, sprinkler, …), or by current state, all through
   `list_devices`, `get_device_by_id`, `get_device_by_name` and `search_entities`.
+  Long lists come a page at a time, sorted by name: the devices, variables,
+  triggers, schedules and action groups lists each say how many there are and
+  where the next page starts.
 - **Search in plain English** across devices, variables, and action groups —
   asking for "light" finds your lamps and dimmers, "plug" finds your sockets.
   Results are kept brief by default so answers come back quickly, with the
@@ -125,6 +128,11 @@ Any Indigo plugin can add tools of its own to Claude Bridge by shipping one JSON
 - **`device_history`** — a device's recent history from the SQL Logger
   database, for trends and "when did this last change". SQLite SQL Logger
   only; an install that logs to PostgreSQL gets an error.
+- **`variable_history`** — the same for a variable, by id or name, with the
+  value it held when the window opened. Its summary says how long each value
+  held, which answers "how long was the heating on today", and gives a
+  time-weighted average for a number. A deleted variable's history can still
+  be read by its old id.
 
 ### Notifications
 - `send_email` via Indigo's first SMTP device (admin scope, because it can

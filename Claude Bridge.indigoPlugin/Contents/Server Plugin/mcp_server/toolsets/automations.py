@@ -4,12 +4,13 @@
 # Description: Trigger, schedule and action-group tools — listing, reading the
 #              full definition, firing, enabling, editing and deleting.
 # Author:      CliveS & Claude Opus 5.5
-# Date:        23-09-2026
-# Version:     1.0
+# Date:        25-09-2026
+# Version:     1.1 (3.5.0: the three automation lists page)
 
+from ..common.paging import paged_reply, paging_args
 from ..registry import tool
 from ._schema import (AUTOMATION_ID, AUTOMATION_KIND, AUTOMATION_KINDS, bad_choice, boolean,
-                      coerce_bool, enum, id_or_name, number, refuse, string)
+                      coerce_bool, enum, id_or_name, integer, number, refuse, string)
 from ..tools.schedule_control.schedule_control_handler import (_resolve_action_group,
                                                                 _resolve_schedule,
                                                                 _resolve_trigger)
@@ -23,9 +24,26 @@ def _check_kind(kind, allowed=AUTOMATION_KINDS):
 # ── Listing ──────────────────────────────────────────────────────────────────
 
 @tool("list_action_groups", scope="read", cacheable=True, reads={"action_group"},
-      description="List all action groups")
-def list_action_groups(ctx):
-    return ctx.list_handlers.list_all_action_groups()
+      description=("List action groups. Sorted by name, a page at a time: the reply says total, offset, count and next_offset, and offset=next_offset gets the next page until it is null."),
+      properties={
+          "limit": integer("Page size (default 200, most 1000)"),
+          "offset": integer("Where the page starts: 0 for the first, then the next_offset "
+                            "the previous page gave (default 0)"),
+      })
+def list_action_groups(ctx, limit=None, offset=None):
+    off, lim, problem = paging_args(offset, limit, 200)
+    if problem:
+        return refuse(problem)
+    return paged_reply(ctx.list_handlers.list_all_action_groups(), "action_groups", off, lim)
+
+
+def _page_listing(result, key, offset, limit):
+    """Page a handler's {"success", "count", key: [...]} reply; pass a
+    failure through untouched."""
+    if not isinstance(result, dict) or not isinstance(result.get(key), list) \
+            or result.get("success") is False:
+        return result
+    return paged_reply(result[key], key, offset, limit, base=result)
 
 
 # Neither list is cached. A trigger or schedule enabled, renamed or deleted in
@@ -35,17 +53,33 @@ def list_action_groups(ctx):
 # this codebase can confirm Indigo offers. A cached list served that for the
 # whole TTL; both lists are cheap to build.
 @tool("list_schedules", scope="read",
-      description=("List all Indigo schedules with their ID, name, enabled state, and next "
-                   "scheduled execution time."))
-def list_schedules(ctx):
-    return ctx.schedule_control_handler.list_schedules()
+      description=("List Indigo schedules with their ID, name, enabled state, and next "
+                   "scheduled execution time. Sorted by name, a page at a time: the reply says total, offset, count and next_offset, and offset=next_offset gets the next page until it is null."),
+      properties={
+          "limit": integer("Page size (default 200, most 1000)"),
+          "offset": integer("Where the page starts: 0 for the first, then the next_offset "
+                            "the previous page gave (default 0)"),
+      })
+def list_schedules(ctx, limit=None, offset=None):
+    off, lim, problem = paging_args(offset, limit, 200)
+    if problem:
+        return refuse(problem)
+    return _page_listing(ctx.schedule_control_handler.list_schedules(), "schedules", off, lim)
 
 
 @tool("list_triggers", scope="read",
-      description=("List all Indigo triggers with their ID, name, enabled state, and plugin "
-                   "type information."))
-def list_triggers(ctx):
-    return ctx.schedule_control_handler.list_triggers()
+      description=("List Indigo triggers with their ID, name, enabled state, and plugin "
+                   "type information. Sorted by name, a page at a time: the reply says total, offset, count and next_offset, and offset=next_offset gets the next page until it is null."),
+      properties={
+          "limit": integer("Page size (default 200, most 1000)"),
+          "offset": integer("Where the page starts: 0 for the first, then the next_offset "
+                            "the previous page gave (default 0)"),
+      })
+def list_triggers(ctx, limit=None, offset=None):
+    off, lim, problem = paging_args(offset, limit, 200)
+    if problem:
+        return refuse(problem)
+    return _page_listing(ctx.schedule_control_handler.list_triggers(), "triggers", off, lim)
 
 
 # ── Reading one automation ───────────────────────────────────────────────────
