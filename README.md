@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.5.0
+**Version:** 3.6.0
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,13 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.6.0 (2026-09-27)
+The descriptions Claude reads to learn each tool are written without semicolons now.
+
+- **Plainer tool descriptions.** The descriptions of twenty-one tools, `device_history`, `device_control`, `thermostat_control`, `restart_plugin` and `zwave` among them, had twenty-six semicolons between them. They are now full stops, commas or "and". Nothing about what a tool does or needs has changed, and the [Tool reference](https://highsteads.github.io/ClaudeBridge/tools.html), which is built from the same descriptions, reads the same way.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.5.0 (2026-09-25)
 Long lists now come a page at a time, and a new tool reads a variable's history.
 
@@ -69,9 +76,6 @@ Claude Bridge now keeps a permanent record of every change made through it: each
 - **Reading it.** Plugins > Claude Bridge > Print Recent Changes puts the last 20 in the event log as plain lines. The new `change_log` tool lets Claude search it by time, tool, key or outcome. It is a read tool, and a key without admin sees it with credential values blanked.
 
 The Security page describes it in full. 70 tools now, 29 of them read-only.
-
-### 3.3.1 (2026-09-25)
-Every new Claude session left an error in the Indigo log. Since 3.3.0 the plugin answers a notification with an empty 202 reply, as the MCP rules ask, but Indigo's web server refuses an empty reply from a plugin: it logged `internal server error` for `/mcp/` and sent the client a 500 instead. Nothing stopped working, because the go-between script ignores the answer to a notification. The reply now carries a single space, which the web server passes through and every MCP client ignores.
 
 ## Authors & licence
 

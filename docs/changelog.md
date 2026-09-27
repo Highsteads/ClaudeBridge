@@ -10,6 +10,13 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.6.0 (2026-09-27)
+The descriptions Claude reads to learn each tool are written without semicolons now.
+
+- **Plainer tool descriptions.** The descriptions of twenty-one tools, `device_history`, `device_control`, `thermostat_control`, `restart_plugin` and `zwave` among them, had twenty-six semicolons between them. They are now full stops, commas or "and". Nothing about what a tool does or needs has changed, and the [Tool reference](https://highsteads.github.io/ClaudeBridge/tools.html), which is built from the same descriptions, reads the same way.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.5.0 (2026-09-25)
 Long lists now come a page at a time, and a new tool reads a variable's history.
 

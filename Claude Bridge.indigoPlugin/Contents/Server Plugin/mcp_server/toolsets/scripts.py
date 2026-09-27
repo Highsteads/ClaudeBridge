@@ -18,7 +18,7 @@ _JOB_NOTE = (
     f" A run that takes longer than wait_seconds (default {exec_lock.DEFAULT_WAIT_SECONDS}) keeps "
     "going in the background: the reply is {status: 'running', job_id}, and calling again with "
     "that job_id waits a little longer and returns the finished result. Only one run of this "
-    "tool or its sibling can hold the output capture at a time; another is refused at once, "
+    "tool or its sibling can hold the output capture at a time, so another is refused at once, "
     f"naming the running job. Results are kept {exec_lock.RESULT_TTL_SECONDS // 60} minutes.")
 
 

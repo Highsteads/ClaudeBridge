@@ -28,10 +28,10 @@ _ACTIONS = {
       description=(
           "Manage the Z-Wave network. ADMIN. set_config_parameter: program a device "
           "(device_id, param_index, param_size = byte width 1, 2 or 4, param_value "
-          "that fits that width; wait_for_ack default false, since waiting holds the web "
+          "that fits that width, and wait_for_ack, which defaults to false since waiting holds the web "
           "server until the device answers) — tune motion sensitivity, report intervals and so on "
           "from the device manual's parameter numbers. start_optimize: heal the mesh, the whole "
-          "network or around device_id; stop_optimize ends it. enter_inclusion: put the "
+          "network or around device_id, and stop_optimize ends it. enter_inclusion: put the "
           "controller into inclusion mode to ADD hardware (use_encryption for S0), then the "
           "user presses the device's pairing button. enter_exclusion: REMOVE a device. "
           "exit_inclusion_exclusion: cancel either mode."),

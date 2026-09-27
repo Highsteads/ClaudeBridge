@@ -281,7 +281,7 @@ def search_entities(ctx, query, device_types=None, entity_types=None,
                    "[\"address\", \"batteryLevel\"]. Every reply says total, offset, count "
                    "and next_offset: call again with offset=next_offset for the next page, "
                    "until next_offset is null. limit sets the page size (default 50 with no "
-                   "filter, 200 with one; most 1000)."),
+                   "filter or 200 with one, and at most 1000)."),
       properties={
           "device_type": string("Optional device type. " + _DEVICE_TYPES_HELP),
           "plugin_id": string("Optional: only devices owned by this plugin bundle id"),
@@ -436,7 +436,7 @@ def get_device_by_name(ctx, name, detail=None):
       description=("Read recent SQL Logger history for one device, from the SQLite SQL Logger "
                    "database (a PostgreSQL SQL Logger is not read). Returns timestamp + "
                    "non-null state columns. Column names are stored LOWERCASE (batterysoc, not "
-                   "batterySoc); an unknown name is an error listing the valid columns. Rows are "
+                   "batterySoc). An unknown name is an error listing the valid columns. Rows are "
                    "sparse — only changed values are written, so forward-fill before deriving "
                    "trends. `limit` caps rows from the NEWEST end, so on a chatty device it can "
                    "cut the window far shorter than `hours` — check `truncated` and the "
@@ -483,7 +483,7 @@ _ACTION_ARGS = {
           "color (a 'color' hex code or CSS name such as 'dodgerblue', or red/green/blue "
           "0-255, plus optional white 0-100 and white_temperature in Kelvin), status_request (poll the "
           "device), beep (to find it physically), ping (reachability), reset_energy (zero "
-          "the kWh total; the old total is returned but cannot be restored). A name must "
+          "the kWh total — the old total is returned but cannot be restored). A name must "
           "match exactly or match one device confidently, otherwise nothing is switched and "
           "the candidates come back."),
       properties={
@@ -578,11 +578,11 @@ _HVAC_MODES = ["heat", "cool", "auto", "off", "programHeat", "programCool", "pro
       description=("Change a thermostat or TRV (e.g. RAMSES, Evohome). Give any combination "
                    "of heat_setpoint, cool_setpoint, heat_delta, cool_delta (step up with a "
                    "positive number, down with a negative one), hvac_mode and fan_mode. "
-                   "Temperatures are in the device's own unit, as Indigo shows it; a value "
+                   "Temperatures are in the device's own unit, as Indigo shows it, and a value "
                    "outside a sane band for that unit is refused, never clamped. They are "
                    "applied in that order and the reply lists what was done, with "
-                   "confirmed=false where the device has not reported the new value yet; "
-                   "the first failure stops the rest."),
+                   "confirmed=false where the device has not reported the new value yet. "
+                   "The first failure stops the rest."),
       properties={
           "device": DEVICE,
           "heat_setpoint": number("Target heat temperature, in the device's own unit"),
@@ -642,7 +642,7 @@ def thermostat_control(ctx, device, heat_setpoint=None, cool_setpoint=None, heat
 
 @tool("speed_control", scope="write", invalidates={"device"},
       description=("Set a fan or speed-control device. Give exactly one of level (0-100 "
-                   "percent), index (0 off, 1 low, 2 medium, 3 high on a four-speed device; the "
+                   "percent), index (0 off, 1 low, 2 medium, 3 high on a four-speed device, where the "
                    "top index is the device's speedIndexCount minus one) or step (+1 or -1 to "
                    "move one index up or down). The reply gives the speed the device reports "
                    "afterwards."),
@@ -714,7 +714,7 @@ _BROADCASTS = {"lights_on": "all_lights_on", "lights_off": "all_lights_off",
 @tool("all_devices", scope="write", invalidates={"device"},
       description=("Send one of Indigo's native broadcasts: lights_on, lights_off or all_off. "
                    "They reach native-protocol devices (Z-Wave/Insteon/X10) ONLY — devices owned "
-                   "by plugins (zigbee2mqtt, Shelly, Tasmota) are NOT affected; switch those "
+                   "by plugins (zigbee2mqtt, Shelly, Tasmota) are NOT affected, so switch those "
                    "individually or through an action group."),
       properties={"action": enum(list(_BROADCASTS), "Which broadcast")},
       required=["action"])

@@ -26,7 +26,7 @@ _HOME_SECTIONS = ("summary", "energy", "heating", "security", "report")
           "solar, grid import/export, tariff. 'heating': every thermostat/TRV with setpoints, "
           "temperatures and zone modes. 'security': open doors and windows, active motion, "
           "leak/smoke/CO alerts. 'report': a markdown prose report to show the user as it "
-          "stands; report_sections picks sections (energy, heating, security, devices, alerts, "
+          "stands. report_sections picks sections (energy, heating, security, devices, alerts, "
           "automation), default all."),
       properties={
           "section": enum(_HOME_SECTIONS, "Which view (default summary)"),
@@ -132,7 +132,7 @@ def system_health(ctx):
           "empty result is never ambiguous. An inverted range (after >= before) is rejected, "
           "not answered with an empty list. source, contains and level filter the entries "
           "(ignoring case, all must hold) before line_count trims, so you get the newest N "
-          "that match; with no after/before a filter searches the last 24 hours."),
+          "that match. With no after/before, a filter searches the last 24 hours."),
       properties={
           "line_count": number("Max entries to return (default: 20)"),
           "show_timestamp": boolean("Include timestamps in entries (default: true)"),
@@ -170,7 +170,7 @@ def control_pages(ctx, page_id=None):
 @tool("raw_server_request", scope="admin",
       description=("Send a READ-ONLY raw named request to the Indigo server "
                    "(indigo.rawServerRequest). Undocumented internal API — unsupported and may "
-                   "change between Indigo versions. Only 'Get*' request names are permitted; "
+                   "change between Indigo versions. Only 'Get*' request names are permitted, so "
                    "mutating raw commands are not reachable. Example: name='GetControlPage', "
                    "args={'ID': 12345, 'GetPageFlags': 65536}. Use 65536, NOT Indigo's own "
                    "FULL_PAGE_FLAGS (65538) — its second flag is ignore_actions, so 65538 "

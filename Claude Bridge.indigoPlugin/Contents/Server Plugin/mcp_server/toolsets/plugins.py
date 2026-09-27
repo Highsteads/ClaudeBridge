@@ -26,7 +26,7 @@ def list_plugins(ctx, include_disabled=False):
 
 @tool("get_plugin_status", scope="read",
       description=("One installed plugin by bundle id: enabled, running (enabled only says it "
-                   "SHOULD run — a plugin that died in startup() is still enabled; running "
+                   "SHOULD run — a plugin that died in startup() is still enabled, while running "
                    "answers 'did the restart work'), display name, version and bundle path. An "
                    "id that is not installed is an error, not a disabled plugin. "
                    "include_prefs=true adds the plugin's saved settings (its Configure "
@@ -60,7 +60,7 @@ _CHECKS = {
 
 @tool("plugin_check", scope="read",
       description=(
-          "Development checks on one plugin, keyed by check in the reply; a failing check does "
+          "Development checks on one plugin, keyed by check in the reply. A failing check does "
           "not stop the others. xml: parse Devices/Actions/Events/MenuItems/PluginConfig and "
           "apply Indigo's naming rules (camelCase ASCII state ids, no spaces in an Actions "
           "uiPath, batteryLevel reserved). html: `node --check` every inline <script> under "
@@ -118,10 +118,10 @@ def plugin_refresh_deps(ctx, plugin_name, restart=False):
                    "log 'Started plugin' and report started, running_version, error and "
                    "warning counts and the lines it logged while restarting — no separate "
                    "status check or log search needed. The wait holds Indigo's web server, so "
-                   "it stops as soon as the plugin is up; wait_seconds=0 returns at once. "
+                   "it stops as soon as the plugin is up, and wait_seconds=0 returns at once. "
                    "Errors a plugin logs later than a second after starting are not "
-                   "included. Refuses Claude Bridge itself — that kills the session asking; "
-                   "restart it from the Indigo Plugins menu."),
+                   "included. Refuses Claude Bridge itself — that kills the session asking. "
+                   "Restart it from the Indigo Plugins menu instead."),
       properties={"plugin_id": string("Plugin bundle identifier"),
                   "wait_seconds": number("Seconds to wait for the plugin to start "
                                          "(default 10, max 20, 0 = do not wait)")},
@@ -135,7 +135,7 @@ def restart_plugin(ctx, plugin_id, wait_seconds=None):
           "Run a plugin's own custom action from its Actions.xml — the actions that appear "
           "under Device -> Actions in the Indigo client, which no built-in tool can reach. Give "
           "device_id for a device action (Indigo marks those with deviceFilter) or plugin_id "
-          "alone for a plugin-level action; props carries the action's ConfigUI fields. The "
+          "alone for a plugin-level action. props carries the action's ConfigUI fields. The "
           "call is checked against the plugin's Actions.xml first, so an unknown action id, a "
           "device action with no device, or a stopped owning plugin come back as errors — "
           "Indigo itself returns cleanly and does nothing in all three cases. A plugin action "

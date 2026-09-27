@@ -142,7 +142,7 @@ def get_dependencies(ctx, kind, id):
                    "'script_reference', with line numbers) which getDependencies does not "
                    "cover. Also text-scans EMBEDDED scripts — scripted conditions, "
                    "trigger/schedule action scripts and action-group scripts — by numeric ID and "
-                   "by quoted name; those hits carry confidence 'heuristic'. Plugins that "
+                   "by quoted name, and those hits carry confidence 'heuristic'. Plugins that "
                    "hard-code an ID in their own source remain uncovered. Richer than "
                    "get_dependencies for automation debugging and safe-delete checks."),
       properties={
@@ -349,8 +349,8 @@ def delete_automation(ctx, kind, id):
 
 @tool("remove_delayed_actions", scope="admin", invalidates={"device", "schedule"},
       description=("Cancel pending delayed actions. kind='device' cancels them for ONE device "
-                   "(e.g. a queued auto-off from device_control duration), leaving others alone; "
-                   "kind='schedule' for one schedule; kind='trigger' for one trigger; "
+                   "(e.g. a queued auto-off from device_control duration), leaving others alone. "
+                   "kind='schedule' does the same for one schedule, and kind='trigger' for one trigger. "
                    "kind='all' removes every pending delayed action on the server — confirm "
                    "with the user first."),
       properties={

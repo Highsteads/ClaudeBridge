@@ -16,7 +16,7 @@ from ._schema import enum, string
 # data leaving the house is admin.
 @tool("send_notification", scope="write", sensitive=True,
       description=("Send a Pushover push notification to the user's own devices (the Pushover "
-                   "account set up in Indigo; the caller cannot choose another recipient). Use "
+                   "account set up in Indigo, and the caller cannot choose another recipient). Use "
                    "for important alerts, confirmations, or proactive updates."),
       properties={
           "title": string("Notification title"),

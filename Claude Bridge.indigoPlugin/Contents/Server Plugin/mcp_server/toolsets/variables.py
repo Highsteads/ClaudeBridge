@@ -12,7 +12,7 @@ from ._schema import boolean, coerce_bool, id_or_name, integer, number, refuse, 
 
 
 @tool("list_variables", scope="read", cacheable=True, reads={"variable"},
-      description=("List variables with id, name and folder (when not in root); "
+      description=("List variables with id, name and folder (when not in root). "
                    "get_variable_by_id gives the value."
                    " Sorted by name, a page at a time: the reply says total, offset, count and next_offset, and offset=next_offset gets the next page until it is null."),
       properties={
@@ -43,7 +43,7 @@ def get_variable_by_id(ctx, variable_id):
       description=("One variable's history from the SQLite SQL Logger (a PostgreSQL SQL "
                    "Logger is not read). The logger writes a row only when the value changes, "
                    "so the reply also gives value_before: the value in force when the window "
-                   "opened. Rows are newest first with ts in local time; limit caps them from "
+                   "opened. Rows are newest first with ts in local time, and limit caps them from "
                    "the newest end, so check truncated and ts_oldest. summary=true instead "
                    "gives the number of changes and, per distinct value, how often it was set "
                    "and how long it held in the window (share_of_window), plus min, max and a "
