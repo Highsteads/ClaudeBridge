@@ -1,12 +1,14 @@
 ---
 title: Version history
-nav_order: 11
+nav_order: 10
 ---
 
 # Version history
 
 Every release, newest first. The three most recent also appear under **What's new** in the
-[README](https://github.com/Highsteads/ClaudeBridge#whats-new); this page is the whole record.
+[README](https://github.com/Highsteads/ClaudeBridge#whats-new). This page is the whole record.
+
+The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
 ### 3.5.0 (2026-09-25)
 Long lists now come a page at a time, and a new tool reads a variable's history.
@@ -37,7 +39,7 @@ A security review of 3.2, and every finding it confirmed is fixed. The first fou
 - **Zeroing an energy total needs an admin key**, because the old figure cannot be put back. `device_control` itself is still a write tool.
 - **Z-Wave exclusion is behind the delete switch.** `zwave` with `enter_exclusion` removes the next device whose button is pressed from the network, so it now needs `confirm=true` and *Allow Claude to delete devices, variables and automations* switched on, like a delete.
 - **A plugin action cannot hold up the web server.** `execute_device_action` stops waiting after 20 seconds and says the action may still be running. It also refuses Claude Bridge's own actions.
-- **The rate limits shown are the ones applied.** Limits count per access key, and an admin key gets ten times the figures. Without a `scopes.json` every key is admin, so a stock install allows 1,200 calls a minute and 50,000 a day, not the 120 and 5,000 on show. The limits themselves have not changed; Configure and `/health` now say what they are, and `/health` shows each key its own.
+- **The rate limits shown are the ones applied.** Limits count per access key, and an admin key gets ten times the figures. Without a `scopes.json` every key is admin, so a stock install allows 1,200 calls a minute and 50,000 a day, not the 120 and 5,000 on show. The limits themselves have not changed. Configure and `/health` now say what they are, and `/health` shows each key its own.
 - **`/health` shows key names, scopes and recent calls to admin keys only.** Other keys get the basic status. Without a `scopes.json` every key is admin, so nothing changes there.
 - **The connection follows the MCP rules.** An unknown session gets HTTP 404, a missing one 400, and a notification 202 with no body, where all three got 200 before. The go-between script (now 1.8) copes with each of these and starts a fresh session by itself, including after a plugin restart. A request from a web page on another site is refused with 403.
 - **The go-between script finds the web server.** It used to assume `http://localhost:8176`. It now uses the address Indigo reports, so HTTPS and another port work.
@@ -67,7 +69,7 @@ Six tools learn the jobs Claude kept writing raw Python for. In past sessions ab
 ### 3.1.0 (2026-09-24)
 A second full review of the plugin, this time of the new 3.0 code, and every problem it found is fixed.
 
-- **Switching a device by name is safer.** A device whose name contained "one" or "single" could be mistaken for a longer name starting the same way, and a lone near-miss could be switched when you meant something else. Now only the exact name, or a name containing every word you gave, is acted on; anything less is refused with the candidates listed.
+- **Switching a device by name is safer.** A device whose name contained "one" or "single" could be mistaken for a longer name starting the same way, and a lone near-miss could be switched when you meant something else. Now only the exact name, or a name containing every word you gave, is acted on. Anything less is refused with the candidates listed.
 - **Colour changes work.** The colour command was sending Indigo settings it does not recognise, on the wrong scale, so no colour change ever reached a bulb.
 - **Thermostats in Fahrenheit are safe.** Nudging a setpoint used to squeeze the result into a Celsius range without saying so, which on a Fahrenheit thermostat meant a setpoint of 35. Values are now checked in the thermostat's own units and refused, never quietly changed.
 - **Passwords stay hidden.** Looking a device up used to return its settings in full, SMTP and router passwords included, even to a read-only key. Those values are now masked.
@@ -88,8 +90,8 @@ Sunrise and sunset now come from the same day.
 A spring clean: 69 tools where there were 169, nothing to install, and a long piece of Python no longer freezes the web server.
 
 - **Far fewer tools, nothing you could do has gone.** Most of the old list was families of near-identical tools, one per verb: seven for sprinklers, eight for thermostats, four for enabling and disabling. Each family is now one tool that takes an `action` or `kind`. The *Upgrading to 3.0* page of the documentation lists every old name against its new one, for anything you have written down that names a tool.
-- **Long Python runs go into the background.** A 10-second `execute_indigo_python` was measured holding up a dashboard request for 9.9 seconds, because Indigo's web server waits on it. A run that takes longer than `wait_seconds` (5 by default) now carries on by itself and hands back a `job_id` at once; ask again with the `job_id` to collect the answer.
-- **No API key, no extra packages.** The AI summaries in `analyze_historical_data` needed InfluxDB, an Anthropic key and four Python packages that made up 35 MB of a 39 MB plugin. That tool is gone and so are they; `device_history` reads the SQL Logger instead. Settings those features left behind, a stored API key included, are cleared the first time 3.0 starts.
+- **Long Python runs go into the background.** A 10-second `execute_indigo_python` was measured holding up a dashboard request for 9.9 seconds, because Indigo's web server waits on it. A run that takes longer than `wait_seconds` (5 by default) now carries on by itself and hands back a `job_id` at once. Ask again with the `job_id` to collect the answer.
+- **No API key, no extra packages.** The AI summaries in `analyze_historical_data` needed InfluxDB, an Anthropic key and four Python packages that made up 35 MB of a 39 MB plugin. That tool is gone and so are they. `device_history` reads the SQL Logger instead. Settings those features left behind, a stored API key included, are cleared the first time 3.0 starts.
 - **Search shows how things are now.** It still finds matches in its own index, but the state of each device and the value of each variable in the answer come straight from Indigo, and the index is brought up to date the moment you add, delete or rename something.
 - **Also gone:** the four `remember`/`recall` tools (Claude Code keeps its own memory) and the event queue, which no MCP client could read between messages. Outbound webhooks are unchanged.
 - **Behind the scenes:** each tool is now written in one place, where it used to take changes in up to nine, and the plugin sets Claude Code up itself, so `install.py` is gone.
@@ -153,9 +155,9 @@ Other plugins can now bring their own tools to Claude Bridge.
 
 A plugin that ships a small JSON file in its bundle, `Contents/Resources/mcp-manifest.json`, has its tools listed to Claude under its own prefix and every call forwarded to it — no configuration here, no configuration there, and a plugin picked up the moment it starts. The format is the provider-manifest contract mlamoure published for his Indigo MCP Server, followed here from the published specification, so a plugin written for either server works with both. The first provider is the Dashboards plugin (from its 3.12.0), which offers eight `dashboards_` tools: its status, its setup check as data, the room folders read and set, the cameras listed, added and removed, and the last lines of its own log.
 
-Tools a plugin marks as writes are governed by one new switch under Configure, *Allow plugin-provided tools to make changes*, on by default and honoured at once; read tools always work. Each provider tool is classified read or write for the per-token scopes as it is registered, and never admin — the plugin decided what it does. Two new menu items print the providers found and rescan them on demand; a provider that appears, changes or vanishes is also noticed at the next tool listing. A plugin's own stopping is reported as exactly that, a hung one as a timeout rather than a hang, and a reply that breaks the contract as a protocol violation naming the plugin.
+Tools a plugin marks as writes are governed by one new switch under Configure, *Allow plugin-provided tools to make changes*, on by default and honoured at once. Read tools always work. Each provider tool is classified read or write for the per-token scopes as it is registered, and never admin — the plugin decided what it does. Two new menu items print the providers found and rescan them on demand. A provider that appears, changes or vanishes is also noticed at the next tool listing. A plugin's own stopping is reported as exactly that, a hung one as a timeout rather than a hang, and a reply that breaks the contract as a protocol violation naming the plugin.
 
-The README's tool count read 167 in seven places while the generated table and the repo description said 168; it says 168 now. 54 tests for the new module; the built-in tool table is unchanged, because a plugin's tools are not built in.
+The README's tool count read 167 in seven places while the generated table and the repo description said 168. It says 168 now. 54 tests for the new module. The built-in tool table is unchanged, because a plugin's tools are not built in.
 
 ### 2.25.1 (2026-09-07)
 The settings dialog was stretched wider than its own window, so the help text beside each setting was cut off mid-sentence.
@@ -503,7 +505,7 @@ Alongside that, a handful of small correctness and safety fixes:
 - **Boolean values behave.** A device on/off-style flag passed as a real true/false is now handled properly rather than slipping through and being read as a device ID, the enable/disable-a-device tool no longer treats the word "false" as "on", and a variable set to a boolean is now stored Indigo's way (lowercase `true`/`false`) so your triggers and conditions compare it the way you'd expect.
 - **The read-only "resources" view now respects scopes.** It exposes the same read-only data as the read tools, so it now needs the same `read` permission rather than being reachable by a token with none.
 - **A couple of smaller niggles** — the cache now refreshes after a schedule is fired directly (a fired schedule can move devices), and a strong exact-match search no longer claims it "truncated" results when it didn't.
-- **Secrets in variables are treated more carefully.** If you keep a token or password in an Indigo variable, its full value is no longer written into the event log (the log line is shortened) — though do note the read tools still return variable values in full, so a read-only token can see them. There's a short note about this under [what a read-only key can see](security.md#what-a-read-only-key-can-see); the proper home for a real secret is `IndigoSecrets.py`.
+- **Secrets in variables are treated more carefully.** If you keep a token or password in an Indigo variable, its full value is no longer written into the event log (the log line is shortened) — though do note the read tools still return variable values in full, so a read-only token can see them. There's a short note about this under [what a read-only key can see](security.md#what-a-read-only-key-can-see). The proper home for a real secret is `IndigoSecrets.py`.
 
 171 tests now.
 
@@ -524,7 +526,7 @@ What the review did turn up was a genuine correctness bug in the housekeeping to
 Two findings were deliberately left for a later release rather than rushed — a re-check on duration-gated webhooks at the moment they fire, and a tightening of the no-token case — both written up so they're not forgotten. 165 tests now.
 
 ### 2.8.1 (2026-06-09)
-Hardening pass on the new Event Webhooks, off the back of a multi-agent adversarial review that tried hard to break it. The good news first — the egress firewall itself held: no way was found to make it POST to the LAN, loopback, the cloud-metadata address or the Indigo box itself, across sixteen different attack angles, and the signing and secret-handling stood up too. What the review did turn up was a handful of robustness foot-guns, all now fixed: `any_change` can no longer be quietly combined with a state condition (it would have ignored the condition); `max_fires` now counts only successful deliveries, so a flapping receiver can't make a subscription delete itself; the delivery queue is bounded so a storm of changes against a slow receiver can't grow memory without limit; the store is no longer rewritten on every dropped event; shutting down or disabling the feature now cleans up its timers properly (no orphaned worker on reload, no stale event after a disable/re-enable); and turning off TLS verification now logs a clear warning about the risk. None of these were security holes — the feature ships off by default and the tools are admin-only — but they're worth having right before anyone leans on it. 63 tests now, including the adversarial battery.
+Hardening pass on the new Event Webhooks, off the back of a multi-agent adversarial review that tried hard to break it. The good news first — the egress firewall itself held: no way was found to make it POST to the LAN, loopback, the cloud-metadata address or the Indigo box itself, across sixteen different attack angles, and the signing and secret-handling stood up too. What the review did turn up was a handful of robustness foot-guns, all now fixed: `any_change` can no longer be quietly combined with a state condition (it would have ignored the condition). `max_fires` now counts only successful deliveries, so a flapping receiver can't make a subscription delete itself. The delivery queue is bounded so a storm of changes against a slow receiver can't grow memory without limit. The store is no longer rewritten on every dropped event. Shutting down or disabling the feature now cleans up its timers properly (no orphaned worker on reload, no stale event after a disable/re-enable). And turning off TLS verification now logs a clear warning about the risk. None of these were security holes — the feature ships off by default and the tools are admin-only — but they're worth having right before anyone leans on it. 63 tests now, including the adversarial battery.
 
 ### 2.8.0 (2026-06-09)
 The big one — **Event Webhooks**, the feature that lets the home call out rather than only ever answering when you ask. You register a subscription ("the next time the front door opens", "if the battery drops below 20%", "when the garage stays open for ten minutes") and the plugin POSTs a signed JSON event to a web address you run, the instant the condition is met. That turns Claude Bridge from something you consult into something that can be wired into the loop — point the events at a little listener and have it act, notify, or hand the moment to Claude with the full context.
@@ -603,7 +605,7 @@ Released as part of 2.6.2. 43 new tools covering the parts of Indigo no tool rea
   and `scripting_shell_handler.py`), inheriting those credentials into every
   child process — a real leak.
 - New `mcp_server/runtime_config.py` in-process config store. `plugin.py`
-  populates it at startup and on every PluginConfig save; downstream modules
+  populates it at startup and on every PluginConfig save. Downstream modules
   (`influxdb/client.py`, `openai_client/main.py`, `tools/historical_analysis/main.py`,
   `mcp_handler.py`) read via `runtime_config.get(...)` instead of `os.environ`.
 - No behaviour change for users — the plugin starts, MCP tools work, etc.
@@ -620,7 +622,7 @@ Released as part of 2.6.2. 43 new tools covering the parts of Indigo no tool rea
     `indigo.variables.folder.create()`.
   - `execute_indigo_python` — run arbitrary Python in the plugin's Indigo
     context via in-process `exec()` (same pattern as `run_script` but for
-    ad-hoc code strings). `mode='exec'` returns captured stdout/stderr;
+    ad-hoc code strings). `mode='exec'` returns captured stdout/stderr.
     `mode='eval'` returns the expression's repr in `value`. **ADMIN scope.**
   - `execute_plugin_menu_item` — click a plugin's menu item under the
     Indigo client's **Plugins** menu via AppleScript GUI scripting.
@@ -630,7 +632,7 @@ Released as part of 2.6.2. 43 new tools covering the parts of Indigo no tool rea
     **ADMIN scope.**
 - New tool package `mcp_server/tools/scripting_shell/`.
 - `scope_manager`: `fire_trigger`, `create_device_folder`,
-  `create_variable_folder` classified WRITE; `execute_indigo_python` and
+  `create_variable_folder` classified WRITE. `execute_indigo_python` and
   `execute_plugin_menu_item` classified ADMIN.
 
 ### 2.3.3 (2026-05-18)
@@ -644,13 +646,13 @@ Released as part of 2.6.2. 43 new tools covering the parts of Indigo no tool rea
 ### 2.3.2 (2026-05-12)
 - **`ServerApiVersion` lowered 3.6 → 3.4.** Plugin uses `requirements.txt`
   auto-install (introduced API 3.4) but does NOT use the API 3.6 feature
-  (`dict(indigo.triggers[id])`-style iteration on Trigger/Schedule objects);
-  it serialises those by reading attributes one-by-one. Lowering the API
+  (`dict(indigo.triggers[id])`-style iteration on Trigger/Schedule objects).
+  It serialises those by reading attributes one-by-one. Lowering the API
   floor extends compatibility down to Indigo 2023.2 / Python 3.11
   (was Indigo 2024.2). Verified by grep — no `dict()` calls on
   trigger/schedule objects anywhere in the codebase.
 - README "Platform" / "Requirements" lines corrected: was overstated as
-  "Indigo 2025.2 / Python 3.13" (which is just the dev environment); now
+  "Indigo 2025.2 / Python 3.13" (which is just the dev environment). Now
   honestly reflects the API floor of 3.4 → Indigo 2023.2 / Python 3.11+.
 
 ### 2.3.1 (2026-05-12)
@@ -668,7 +670,7 @@ Released as part of 2.6.2. 43 new tools covering the parts of Indigo no tool rea
 - **Startup banner** via bundled `plugin_utils.py` — shows plugin name, version, ID, Indigo version, API version, architecture, Python version, macOS version
 - **Show Plugin Info** menu item — re-runs the banner on demand with extras (MCP URL, Anthropic key status, InfluxDB status, access mode)
 - **Trigger lifecycle fixed** — implemented `triggerStartProcessing` / `triggerStopProcessing` and rewrote `fire_claude_event()`. Previously called the non-existent `self.triggerEvent()` method which raised `AttributeError` silently, so `claudeEvent` triggers never actually fired
-- **`deviceUpdated` self-loop guard** — plugin both `subscribeToChanges()` and writes its own `mcpServer` device states; without the guard a future state write inside the callback could loop
+- **`deviceUpdated` self-loop guard** — plugin both `subscribeToChanges()` and writes its own `mcpServer` device states. Without the guard a future state write inside the callback could loop
 - **Bearer token rotated out of source** — `indigo_mcp_proxy.py` now ships with a deliberately invalid placeholder. Real value comes from Indigo's IWS `Preferences/secrets.json` first, with `CLAUDEBRIDGE_BEARER_TOKEN` in `IndigoSecrets.py` as a fallback. Plugin patches the deployed copy at install time
 - **Secrets handling rebuilt** using `importlib` pattern with `clives_secrets` module name to avoid shadowing Python's stdlib `secrets` module (used by `mcp_handler` for `token_urlsafe()`). Also now correctly sources `INFLUXDB_*` from `IndigoSecrets.py` (was PluginConfig-only)
 - **PluginConfig.xml policy banner** at the top — explicit explanation of IndigoSecrets.py vs PluginConfig precedence + the keys this plugin reads
@@ -687,7 +689,7 @@ Released as part of 2.6.2. 43 new tools covering the parts of Indigo no tool rea
 - Audit tools: `audit_home`, `find_devices_in_error`, `find_low_battery`, `find_stale_devices`, `audit_variables`, `dependency_map`, `find_conflicts`
 - Home intelligence: `home_status`, `energy_status`, `heating_status`, `security_status`, `home_status_report`
 - Energy intelligence: reads SigenEnergyManager daily log files (`energy_log_days`, `energy_daily_summary`, `energy_compare`)
-- `variableUpdated()` callback added; `deviceUpdated()` extended to queue all non-mcpServer state changes
+- `variableUpdated()` callback added. `deviceUpdated()` extended to queue all non-mcpServer state changes
 - Fixed `Scripts` folder resolution — prefers `Scripts` over legacy `Python Scripts`
 
 ### 1.2.0 (2026-04-02)
@@ -704,7 +706,7 @@ Released as part of 2.6.2. 43 new tools covering the parts of Indigo no tool rea
 
 ### 1.1.0 (2026-03-24)
 - Added `device_control` tool: find and control a device by name in a single MCP call (~1s vs ~5s)
-- Search results now slim by default (id, name, state, score only); use `detail="full"` for complete config
+- Search results now slim by default (id, name, state, score only). Use `detail="full"` for complete config
 - Fixed `get_device_by_id`, `get_variable_by_id`, `get_action_group_by_id` rejecting numeric IDs
 - Proxy: added `proxy_elapsed_ms` timing to all tool call responses
 - Reduced vector store sync log verbosity

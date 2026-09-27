@@ -3,79 +3,45 @@ title: Home
 nav_order: 1
 ---
 
-# Claude Bridge
+# Claude Bridge for Indigo
 
-**Claude Bridge** is an [Indigo](https://www.indigodomo.com) home automation plugin that lets [Claude](https://www.anthropic.com/claude) see and control your Indigo system — your own devices, your own variables, your own event log — from an ordinary conversation.
+This plugin lets [Claude](https://www.anthropic.com/claude), Anthropic's AI assistant, see and control your [Indigo](https://www.indigodomo.com) system from an ordinary conversation — your devices, your variables, your triggers and schedules, your scripts and your event log, as they are right now.
 
-Once it's installed you just ask. "Which lights are on?" "Turn the fan on for ten minutes." "Why didn't the bathroom light go off last night?" Claude looks at your system, does the thing, and checks its own work — no scripting, no copying device IDs about, no screenshots.
+Once it is installed you just ask. "Which lights are on?" "Turn the fan on for ten minutes." "Why didn't the bathroom light go off last night?" Claude looks at your system, does what you asked, and reads the result back to check it worked.
 
+Everything goes through Indigo's own web server, behind the access key Indigo already uses, so the plugin opens nothing new on your network. The plugin itself needs no API key and no extra software, and there is no second bill, because Claude runs on your own Claude account.
 
-*Developed and tested on Indigo 2025.2. Older Indigo releases back to 2023.2 should also work.*
+## What it does for you
 
+- **Answers questions about your house** from the real, live state of every device, variable, trigger, schedule and action group, and from the event log, including entries older than the Indigo window shows.
+- **Controls your devices** — on, off, brightness, colour, thermostats, fans, sprinklers and locks — by name or by id, and can switch something on for a set time and off again.
+- **Writes and fixes scripts and plugins with you**, saving a backup of a script before every change, then running it and reading the event log to see whether it worked.
+- **Finds what depends on what** — every trigger, schedule and action group that uses a device or variable — before you change or delete it.
+- **Checks the health of the whole system** — devices in error, low batteries, devices that have gone quiet, plugins with updates waiting.
+- **Keeps a record of every change** it makes, which you can print from the Plugins menu at any time.
+- **Keeps each client to what you allow** — every one of its **71 tools** is marked read, write or admin, and you can give a phone a read-only key.
 
-## How it works
+## Where to go next
 
-Claude Bridge runs quietly inside Indigo. When you use [Claude Code](https://claude.ai/download) (Anthropic's terminal app), a small go-between script — installed and wired up for you — passes Claude's requests to Indigo's own web server, where the plugin answers them. That gives Claude **71 tools** for reading and controlling your system.
-
-```
-┌─────────────────────┐         ┌──────────────────────┐         ┌──────────────┐
-│  Claude Code        │         │  go-between script   │         │  Indigo web  │
-│  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
-│                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (71 tools)  │
-└─────────────────────┘         └──────────────────────┘         └──────────────┘
-```
-
-None of that shows from where you sit — you open a Claude Code session and the Indigo tools are there. Everything stays on your own machine and goes through Indigo's existing web server, behind the same access key Indigo already uses.
-
-### Why this matters
-
-Before Claude Bridge, asking AI to help with Indigo meant pasting
-screenshots, copying device IDs by hand, and hoping the AI remembered
-what state your Hall PIR was in three messages ago. Claude was guessing.
-
-With Claude Bridge, Claude can:
-
-- **Read your actual Indigo state, live.** Not a description of it —
-  the real device states, plugin states, variable values, event log,
-  and trigger configurations as they are right now.
-- **Make changes and verify them.** Turn a device on, then read its
-  state back to confirm. Edit a script, restart the plugin that uses
-  it, query the log to see if it loaded cleanly — all in one
-  conversation.
-- **Reason about your home.** "Which sensors haven't reported in 24
-  hours?" "Does any script depend on variable ID 12345?" "What plugins
-  are disabled that shouldn't be?" Claude uses the audit and
-  diagnostic tools and answers.
-
----
-
-## Start here
-
-| | |
+| If you want to... | Read |
 |---|---|
-| **[Getting started](getting-started.md)** | What you need, what it costs, the one-command install, and connecting Claude Code |
-| **[What it does](what-it-does.md)** | The 71 tools by what they let Claude do — devices, heating, energy, scripts, the event log, webhooks, audits |
-| **[Working with Claude](working-with-claude.md)** | How a session goes: a script in one prompt, a plugin from a description, a bug found by reading the log. And the honest limits |
-| **[Tool reference](tools.md)** | Every tool by name, grouped by the permission it needs. Generated from the code, checked on every push |
-| **[Configuration](configuration.md)** | The Configure dialog, credentials, per-token scopes, the menu items |
-| **[Security](security.md)** | Read, write and admin; the delete switch; the webhook firewall; what a read-only key can see |
-| **[Letting your plugin add tools](providers.md)** | The manifest, the hidden action and the broadcast — three things and your plugin is a provider |
-| **[How it is built](architecture.md)** | The transport, the go-between script, the package layout, the tests |
-| **[Troubleshooting](troubleshooting.md)** | The errors people actually see, and what each one means |
-| **[Version history](changelog.md)** | Every release, newest first |
+| Install the plugin and connect Claude | [Getting started](getting-started.md) |
+| Know what Claude can see and do in your house | [What it does](what-it-does.md) |
+| See how a real session with Claude goes | [Working with Claude](working-with-claude.md) |
+| Understand what the plugin is doing behind the scenes | [How it works](how-it-works.md) |
+| Use the Claude Bridge device or run a trigger from Claude | [The device and the trigger](devices-and-triggers.md) |
+| Know what every setting does | [Settings](configuration.md) |
+| Know what each item in the Plugins menu does | [The plugin menu](plugin-menu.md) |
+| Sort out a problem | [When something goes wrong](troubleshooting.md) |
+| See what changed in each version | [Version history](changelog.md) |
+| Read the full tool list, the security detail or the developer notes | [Technical notes](technical-notes.md) |
 
-Download the plugin from the [Releases page](https://github.com/Highsteads/ClaudeBridge/releases);
-the source is on [GitHub](https://github.com/Highsteads/ClaudeBridge).
+## Built with the thing it describes
 
-## Built by the thing it describes
+Every version of Claude Bridge came out of a conversation with Claude — described in plain English, written by Claude, and tested by Claude against my own Indigo server, using the previous version of this plugin to see and act. The other plugins on the same GitHub account were built the same way.
 
-Every version of Claude Bridge came out of a conversation with Claude — described in plain English,
-written by Claude, and tested by Claude against a live Indigo server, using the previous version of
-this very plugin to see and act. The twenty-odd other plugins on the same GitHub account were built
-the same way, with Claude Bridge as the feedback loop. So nothing on this site is speculation about
-what you could do with it. It is a description of how the thing you are reading about came to exist.
+If you have never done anything like this, the Dashboards plugin's [Start with nothing but Claude](https://highsteads.github.io/Dashboards/no-coding-needed.html) takes a complete beginner from a bare Mac to a working setup, and Claude Bridge is one of the steps.
 
-If you have never done anything like this, the Dashboards plugin's
-[Start with nothing but Claude](https://highsteads.github.io/Dashboards/no-coding-needed.html) walks
-a complete beginner from a bare Mac to a working setup, and Claude Bridge is one of the steps.
+## Download
+
+The latest version is always on the [Releases page](https://github.com/Highsteads/ClaudeBridge/releases/latest).

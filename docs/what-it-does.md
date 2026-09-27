@@ -5,166 +5,90 @@ nav_order: 3
 
 # What it does
 
-Claude Bridge gives Claude Code **71 MCP tools**, enough to read and change
-anything on a running Indigo server. They fall into the groups below, and every
-tool is listed by name in the [Tool reference](tools.md).
+Claude Bridge gives Claude **71 tools**, enough to read and change almost anything on your Indigo server. This page goes through them by what they let Claude do. You never need to name a tool — you ask in your own words and Claude picks the right one. Every tool is listed by name in the [Tool reference](tools.md), and the [How it works](how-it-works.md#read-write-and-admin) page explains the read, write and admin permissions mentioned below.
 
-### Devices
-- **List, search, and inspect** every Indigo device — by ID, by name (exact or
-  partial, capitals optional), by type (relay, dimmer, sensor, thermostat,
-  speed control, sprinkler, …), or by current state, all through
-  `list_devices`, `get_device_by_id`, `get_device_by_name` and `search_entities`.
-  Long lists come a page at a time, sorted by name: the devices, variables,
-  triggers, schedules and action groups lists each say how many there are and
-  where the next page starts.
-- **Search in plain English** across devices, variables, and action groups —
-  asking for "light" finds your lamps and dimmers, "plug" finds your sockets.
-  Results are kept brief by default so answers come back quickly, with the
-  full detail available when you ask for it.
-- **Control devices with one tool** — `device_control` does on / off / toggle,
-  brightness, brighten and dim, colour and colour temperature, a status poll,
-  beep and ping. Give it a device id, or just the name: a name must match one
-  device exactly or confidently, and if it could mean two, nothing is switched
-  and Claude is shown the candidates instead.
-- **Timed actions** — "turn the fan on for ten minutes" or "switch that off in
-  half an hour" is a single request. Indigo's own delayed-action engine does the
-  timing, so it keeps working even if Claude has long since gone.
-  `remove_delayed_actions` cancels a pending one on one device without
-  disturbing anything else.
-- **Fans, sprinklers and locks** — `speed_control` (level, speed index or a
-  step), `sprinkler_control` (run, stop, pause, resume, zones) and
-  `lock_control`, which is admin-only because it is physical security.
+## Devices
 
-### Heating / HVAC
-- `home_status` with `section='heating'` gives the per-zone snapshot.
-  `thermostat_control` sets absolute setpoints, steps them up or down, and
-  switches HVAC and fan modes (off / heat / cool / auto / program*) on any
-  Indigo thermostat (Evohome, RAMSES, Z-Wave, etc.) — any combination in one
-  call, and the reply lists what was done.
+- **Find any device** by name (whole or part, capitals optional), by id, by type — relay, dimmer, sensor, thermostat, fan, sprinkler — by the plugin it belongs to, by folder, or by its current state. Asking for "light" finds your lamps and dimmers, and "plug" finds your sockets. Long lists come a page at a time, sorted by name.
+- **Read a device in full** — every state and setting, as it is right now.
+- **Switch devices** on, off or over, set brightness, brighten and dim, set a colour or colour temperature, ask a device for its status, and beep or ping it. Claude can use the device's name, and if a name could mean two devices, nothing is switched and Claude is shown both instead.
+- **Switch something for a set time** — "turn the fan on for ten minutes" or "switch that off in half an hour" is one request. Indigo's own timer does the timing, so it happens even after the conversation has ended, and Claude can cancel a waiting one on a single device without disturbing anything else.
+- **Fans, sprinklers and locks** — fan speeds, a sprinkler's programme and zones, and locking and unlocking. Locks need **admin**, because they are the security of the house.
+- **Turn a device's communication off and on**, rename it, copy it and move it to another folder.
+- **Zero the energy total** on a plug that measures energy, to start a fresh measurement. This needs **admin**, because the old figure cannot be put back.
+- **Run a plugin's own device actions**, the ones under **Device → Actions** in Indigo that belong to a particular plugin. This needs **admin**.
+- **Whole-house commands** — Indigo's own all-lights-on, all-lights-off and all-off. These reach only devices Indigo talks to directly, such as Z-Wave. Devices that belong to plugins, such as Zigbee2MQTT or Shelly ones, do not hear them, and Claude tells you so.
 
-### Energy intelligence
-- Live solar / battery / grid status (`home_status`, `section='energy'`), and
-  `energy_history` for day-by-day totals from SigenEnergyManager's own daily
-  record, or two periods compared side by side.
-- **Reset an energy total** — `device_control` with `action='reset_energy'`
-  zeroes the lifetime kWh count on an energy-metering plug when you want to
-  start a fresh measurement. The old total cannot be put back, so this one
-  action needs an admin key.
+## Heating
 
-### Variables & action groups
-- Create, read, update, and organise variables and their folders.
-- List, inspect, and run action groups.
+- **Every thermostat and radiator valve at a glance**, with setpoints, temperatures and modes.
+- **Change a thermostat** — set a temperature, step it up or down, and change the heating, cooling and fan modes, in any combination in one request. It works with any Indigo thermostat, including Evohome, RAMSES and Z-Wave ones.
 
-### Triggers & schedules
-- List any trigger or schedule, read its full definition with
-  `get_automation`, enable or disable it with `set_enabled` (optionally for a
-  set time), edit its name, description or a trigger's event with
-  `update_automation`.
-- **`fire_indigo_event`** — fires the Claude Bridge plugin's custom
-  `claudeEvent` channel with a JSON payload that Indigo Triggers can read via
-  `%%eventData:name%%`.
-- **`fire_trigger`** — executes an Indigo trigger directly by ID or name via
-  `indigo.trigger.execute()`.
+## The whole house
 
-### Plugins
-- Enumerate every installed plugin (version + enabled/running state), check one
-  with `get_plugin_status`, and restart. `plugin_check` runs the development
-  checks — XML naming rules, `node --check` on inline scripts, the lint, the
-  source-against-installed diff and the bundled library versions — in one call.
+- **A summary of the house** — every device grouped by type, key variables, alerts such as errors and low batteries, and how many automations you have.
+- **What is open and moving** — open doors and windows, active motion, and leak, smoke and carbon monoxide alarms.
+- **A written report** of the house, which Claude can show you as it stands, covering energy, heating, security, devices, alerts and automations.
+- **Energy**, if you use my Sigenergy Energy Manager plugin — the battery, solar and grid right now, day-by-day totals, and one period compared with another.
 
-### Scripts (auto-backed-up)
-- Read, write (with timestamped auto-backup, max 5 per script), create with
-  `write_script(create=true)`, archive ("delete" moves to
-  `_backups/_archived/`), and run scripts in Indigo's Python context. Covers
-  both the `Scripts` and `Python Scripts` folders automatically.
-  `list_python_scripts` lists them, or one script's backups.
-- **`run_script`** auto-injects `indigo` into the script's globals (matching
-  Indigo's GUI action runner) so ad-hoc scripts don't need their own
-  `import indigo`.
-- **Long runs don't hold anything up.** A script — or a block of Python — that
-  takes longer than a few seconds carries on in the background and Claude gets
-  a job id to collect the result with. Before 3.0 the whole web server waited
-  for it, so every dashboard froze until it finished.
+## Variables, action groups, triggers and schedules
 
-### Event log
-- Search the Indigo event log by keyword, device, plugin, or time — including
-  older entries beyond what the Indigo window shows, because it reads the log
-  files themselves.
+- **Variables** — list, read, create and change them, and organise them into folders.
+- **Action groups** — list them, read every step, and run them.
+- **Triggers and schedules** — list them, read every detail including conditions and steps, and switch them on or off, if you like for a set time ("silence the hall motion trigger for half an hour"). Claude can run a schedule or trigger straight away, and change an automation's name and description, and what a device or variable trigger watches.
+- **What uses what** — for any device, variable or action group, every trigger, schedule and action group that refers to it, so you know what you would break before you change or delete it.
+- **What caused that?** — for a device that changed, Claude looks at the event log and the automations that ran around that time and says which most likely did it, with the evidence.
 
-### Event webhooks — the home calls out (optional, off by default)
-- Have Indigo send a message to a web address you run the moment something
-  happens — "the next time a leak sensor trips", "if the battery drops below
-  20%", "when the garage has been open for ten minutes".
-- It is deliberately careful about where it will send: every destination has
-  to be on your approved list, anything pointing back inside your own network
-  is refused, and every message is signed so your receiver can be certain it
-  really came from your system. The whole feature ships switched off until
-  you turn it on. There's a small example receiver in `examples/` to get you
-  going in minutes.
-- A destination that fails five events in a row is switched off so it cannot
-  pile up retries. Once the receiver is back, *Plugins > Claude Bridge >
-  Re-enable Quarantined Event Webhooks* turns those subscriptions on again.
+## Scripts
 
-### Plugin-provided tools — other plugins bring their own
+- **Read, write, create and run** the Python scripts in both of Indigo's script folders, `Python Scripts` and `Scripts`. Writing and running scripts needs **admin**.
+- **A backup before every change.** Each time Claude changes a script, the old version is saved first, and the five most recent backups of each script are kept. Deleting a script only moves it to an `_archived` folder.
+- **Long runs carry on in the background.** A script that takes more than a few seconds keeps running while Claude collects the result later, so Indigo's web server — and your control pages and dashboards — never wait for it.
 
-Any Indigo plugin can add tools of its own to Claude Bridge by shipping one JSON file, `Contents/Resources/mcp-manifest.json`, in its bundle. Claude Bridge finds the file on its own, lists the tools to Claude under that plugin's prefix (the Dashboards plugin's come out as `dashboards_get_status`, `dashboards_set_camera` and so on), and forwards each call to the plugin, which does the work and answers. Nothing to configure on either side, and a plugin picked up the moment it starts. The format is the provider-manifest contract published by [mlamoure's Indigo MCP Server](https://github.com/mlamoure/indigo-mcp-server), so a plugin written for that server works here unchanged, and one written for Claude Bridge works there. Tools a plugin marks as writes are governed by one switch under Configure, *Allow plugin-provided tools to make changes*, on by default; read tools always work. How to make your own plugin a provider is on [its own page](providers.md).
+## Plugins
 
-### Audit, health, diagnostics
-- **`audit`** — one tool, one check at a time: the whole-system overview,
-  devices in error, low batteries, devices that have gone quiet, empty or
-  unused variables, naming or wiring conflicts, scripts that name deleted ids,
-  leftover data from uninstalled plugins, deprecated objects, oversized files,
-  and, after an Indigo upgrade, anything new in the API worth bridging.
-- **"What would break if I deleted this?"** — for any device or variable,
-  `find_automation_references` lists everything that refers to it before you
-  touch it; `get_dependencies` gives Indigo's own view for any kind of object.
-- `system_health` for the Mac itself, and `server_info` for the paths, web
-  server and Reflector addresses, location and today's sunrise and sunset.
+- **Every installed plugin** with its version and whether it is running, and which plugins have an update waiting.
+- **Restart a plugin** and report whether it came back, which version is running, and what it logged on the way. This needs **admin**.
+- **Check a plugin you are writing** — its XML files against Indigo's naming rules, its JavaScript, its Python, the differences between your working copy and the installed one, and the versions of the libraries it bundles, in one request.
+- **Click a plugin's menu item**, or any item in the Indigo client's own menus. This needs **admin**, and the Indigo client must be open on the Mac.
 
-### Reporting
-- **`home_status`** with `section='report'` — prose-markdown narrative of the
-  whole home, configurable by section (energy, heating, security, devices,
-  alerts, automation).
-- **`device_history`** — a device's recent history from the SQL Logger
-  database, for trends and "when did this last change". SQLite SQL Logger
-  only; an install that logs to PostgreSQL gets an error.
-- **`variable_history`** — the same for a variable, by id or name, with the
-  value it held when the window opened. Its summary says how long each value
-  held, which answers "how long was the heating on today", and gives a
-  time-weighted average for a number. A deleted variable's history can still
-  be read by its old id.
+## The event log and history
 
-### Notifications
-- `send_email` via Indigo's first SMTP device (admin scope, because it can
-  reach any address), `send_notification` via Pushover to your own devices
-  (priority, sound, title, body), and `log_message` for writing a line
-  straight to the Indigo event log.
+- **Search the event log** by words, by plugin, by errors or warnings, or by time — including entries older than the Indigo window shows, because it reads the log files themselves.
+- **A device's history**, and **a variable's history**, from Indigo's SQL Logger when it uses SQLite, its standard database. For a variable Claude can say how long each value held, which answers questions such as "how long was the heating on today".
 
-### Folders & server info
-- `create_folder` for device and variable folders (asking twice is harmless —
-  it just finds the existing one), and `delete_folder` to remove one again. A
-  folder with things still in it is politely refused unless you explicitly say
-  you mean the contents to go too.
-- `duplicate` a device, schedule or action group, and `move_to_folder` a
-  device, variable or trigger.
-- Whole-house broadcasts with `all_devices` — Indigo's native all-lights-on,
-  all-lights-off and all-devices-off commands. Worth knowing: these only
-  reach devices Indigo talks to directly (Z-Wave and the like) — devices
-  that belong to plugins such as zigbee2mqtt or Shelly don't hear
-  broadcasts, and Claude will tell you so rather than pretend.
-- Look up your Reflector remote-access address (`server_info`).
+## Checking the system
 
-### Scripting shell — ADMIN scope
-- **`execute_indigo_python`** — runs arbitrary Python in this plugin's
-  Indigo context via in-process `exec()`. `mode='exec'` returns captured
-  stdout/stderr, `mode='eval'` returns the expression's repr. Use it for
-  one-shot Indigo API calls no dedicated tool covers. Treat it as full
-  code execution on the Indigo server. Like `run_script`, a long run goes to
-  the background and hands back a job id.
-- **`execute_plugin_menu_item`** — clicks a plugin's `<MenuItem>` under the
-  Indigo client's Plugins menu via AppleScript GUI scripting — the only
-  known way to fire a third-party plugin's menu callback from outside.
-  Requires the Indigo GUI running plus System Events permission.
+- **Health checks** — devices in error, low batteries, devices that have not changed for days, variables no script uses, duplicate names, scripts that name deleted devices, settings left behind by removed plugins, very large files, and, after an Indigo upgrade, anything new in Indigo worth using.
+- **The Mac itself** — disk space, memory and how long it has been running.
+- **Your Indigo server** — its folders, web server and Reflector addresses, location and today's sunrise and sunset.
+- **Control pages** — every page and every control on it, with any control whose device or variable no longer exists picked out.
 
-For how the tools are kept from doing harm — read, write and admin, the delete switch, the webhook
-firewall — see [Security](security.md).
+## Messages
+
+- **Pushover notifications** to your own devices, through the Pushover account set up in Indigo, and **lines in the Indigo Event Log**.
+- **E-mail** through the e-mail account set up in Indigo. This needs **admin**, because it can go to any address.
+
+## Z-Wave
+
+With **admin**, Claude can set a Z-Wave device's configuration parameters from the numbers in its manual, heal the network, and start adding or removing a device. Removing needs the same two yeses as a delete, because a removed device has to be paired again.
+
+## Running Python
+
+With **admin**, Claude can run any Python inside Indigo, for the rare job no tool covers. That is full control of your Indigo server, so give an admin key only to a client you would trust with the Mac itself.
+
+## Event webhooks
+
+When you turn them on, event webhooks let Indigo send a signed message to a web address you run the moment something happens — "when a leak sensor trips", "if the battery drops below 20%", "when the garage has been open for ten minutes". They are off when you install the plugin, and can only reach the addresses you allow. Creating one needs **admin**. There are two small example receivers in the [examples folder](https://github.com/Highsteads/ClaudeBridge/tree/main/examples) on GitHub.
+
+## Tools from other plugins
+
+Any Indigo plugin can add tools of its own. The plugin finds them by itself and lists them to Claude under that plugin's name — the Dashboards plugin's appear as `dashboards_get_status`, `dashboards_set_camera` and so on. **Allow plugin-provided tools to make changes** in the [settings](configuration.md#tools-from-other-plugins) decides whether they may change anything.
+
+## What it cannot do
+
+- **Claude cannot create a trigger or a schedule**, or change the steps and conditions of an existing one. It can read them all, and change an automation's name and description and what a trigger watches. The rest you do in Indigo.
+- **It cannot see inside an action group to judge it.** A write key can run any action group, whatever that group does.
+- **It reads the SQL Logger only when that uses SQLite.**
+- **It deletes nothing unless you let it.** Deleting a device, variable, automation or folder needs **admin** and the delete setting switched on — see [How it works](how-it-works.md#deleting-needs-two-yeses).
+- **It checks, but you decide.** Read what Claude has written and try the change. The point of the plugin is that checking is one question away.

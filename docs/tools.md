@@ -1,6 +1,7 @@
 ---
 title: Tool reference
-nav_order: 5
+nav_order: 12
+parent: Technical notes
 ---
 
 # Tool reference

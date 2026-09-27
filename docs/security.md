@@ -1,9 +1,10 @@
 ---
-title: Security
-nav_order: 7
+title: Security in detail
+nav_order: 13
+parent: Technical notes
 ---
 
-# Security
+# Security in detail
 
 The short version: the work happens on your Mac, nothing new is opened to the internet, every tool
 is classed read, write or admin and a key gets only the class it was given, and the things that
@@ -39,8 +40,8 @@ lifecycle, physical security, data leaving the house). A tool that is in none of
 admin — locked down, not waved through — and the plugin checks that classification against its
 registry every time it starts. One action of a tool can need more than the tool itself:
 `device_control` is a write tool, but its `reset_energy` action, which zeroes a kWh total for good,
-needs admin. Which key has which scopes is `scopes.json` under Preferences; see
-[Configuration](configuration.md#per-token-scopes--scopesjson). **Without a `scopes.json`, every
+needs admin. Which key has which scopes is `scopes.json` under Preferences, described on the
+[Settings](configuration.md#giving-each-key-its-own-permissions) page. **Without a `scopes.json`, every
 key has every scope**, admin included. The full list is the [Tool reference](tools.md).
 
 ## What a write key can do
@@ -53,7 +54,7 @@ key runs it, although the lock tool and the script tools themselves need admin.
 
 So give a phone, a tablet or anything you would not trust with the front door a **read** key, or
 keep the automations that open the house out of its reach (a separate Indigo install is the only
-hard boundary; Claude Bridge cannot hide one action group from a key that may run action groups).
+hard boundary, because Claude Bridge cannot hide one action group from a key that may run action groups).
 
 ## Deletes
 
@@ -85,13 +86,13 @@ creation) always return that bare message on failure.
 From 3.4.0 Claude Bridge keeps a record of every call that needs the write or admin scope,
 whether it worked, failed or was refused. Nothing ever deletes it. Each entry says:
 
-- when, to the second;
+- when, to the second
 - which access key, by the name it has in `scopes.json` ("default" when there is no
-  `scopes.json`). The key itself is never written down;
-- the tool and its arguments, including the full Python or script it ran, up to 64 KB of each;
+  `scopes.json`). The key itself is never written down
+- the tool and its arguments, including the full Python or script it ran, up to 64 KB of each
 - the outcome: done, failed (with the first 500 characters of the error), refused (with the
   reason), or started in the background. A background run that outlives its call gets a second
-  entry when it finishes;
+  entry when it finishes
 - how long it took.
 
 It never keeps the tool's reply.
@@ -109,7 +110,7 @@ The folder and files can be read only by the Mac user that runs Indigo. To read 
 - **Plugins > Claude Bridge > Print Recent Changes** writes the last 20 to the event log in plain
   lines and says where the files are.
 - **The `change_log` tool** lets Claude search it by time, tool, key or outcome. It is a read
-  tool; a key without admin gets its text with the known credential values blanked, as it does
+  tool, and a key without admin gets its text with the known credential values blanked, as it does
   for scripts.
 
 The entries are written by a thread of their own, so a busy log never slows a reply. If changes
@@ -131,7 +132,7 @@ states:
   the event log, which can hold whatever a plugin or script chose to write to it.
 - **Device and variable history.** `device_history` and `variable_history` read the SQL
   Logger's history database, including the history of a variable that has since been deleted.
-  They work only with the SQLite SQL Logger; an install that logs to PostgreSQL gets an error
+  They work only with the SQLite SQL Logger, and an install that logs to PostgreSQL gets an error
   instead.
 
 For a key **without admin**, the script text, the embedded automation scripts and the event log
@@ -142,7 +143,7 @@ sent unredacted. An admin key sees the text as it is. A secret Claude Bridge doe
 typed straight into a script, is not caught, so keep secrets in `IndigoSecrets.py`.
 
 The `/health` address shows the configured key names, their scopes and recent tool calls to an
-admin key only; any other key gets the basic status and its own rate limits.
+admin key only. Any other key gets the basic status and its own rate limits.
 
 **A note on variable values.** The Read tools that return variables (`get_variable_by_id`,
 `list_variables`, `home_status` and the like) return each variable's value in full, so any
@@ -164,14 +165,14 @@ to open cannot drive your house through a browser that is already signed in. Req
 ## Event webhooks — the outbound firewall
 
 A webhook lets the home post a signed event to a URL you run. That is an outbound channel, so it
-is guarded like one: the feature is off by default; every destination has to be on an allow-list
-you write (blank means deny all); anything pointing back inside your own network — the Indigo
+is guarded like one. The feature is off by default. Every destination has to be on an allow-list
+you write (blank means deny all). Anything pointing back inside your own network — the Indigo
 server, the router, the cloud-metadata address — is refused unless you name it with an explicit
-CIDR; plain HTTP needs its own allow-list and is meant for LAN receivers only; every destination is
+CIDR. Plain HTTP needs its own allow-list and is meant for LAN receivers only. Every destination is
 checked twice, when the subscription is created and again at send time, because a name can
-re-resolve between the two; and every message carries an HMAC-SHA256 signature over a per-
+re-resolve between the two. And every message carries an HMAC-SHA256 signature over a per-
 subscription key, so your receiver can be certain it came from your system. The three webhook
-tools are admin scope. `examples/webhook_receiver.py` verifies the signature and prints each event;
+tools are admin scope. `examples/webhook_receiver.py` verifies the signature and prints each event, and
 `examples/webhook_pushover_relay.py` turns one into a Pushover alert that works even if Indigo's
 own notifications are stuck. A webhook host with several addresses is tried address by address,
 every one of them checked against the firewall.

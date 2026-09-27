@@ -1,88 +1,107 @@
 ---
-title: Configuration
-nav_order: 6
+title: Settings
+nav_order: 7
 ---
 
-# Configuration
+# Settings
 
-Most people never open the Configure dialog: the plugin sets up the connection itself, needs
-no API key and no extra Python packages, and the defaults are the safe ones. This page is what each setting does when
-you do.
+Most people never need to change anything here. The plugin sets up the connection to Claude Code by itself, needs no API key, and starts with the safe choice for every setting.
 
-## The Configure dialog
+## The plugin settings
 
-**Plugins → Claude Bridge → Configure.**
+Open **Plugins → Claude Bridge → Configure**. Every setting except **Auto-configure Claude Code** takes effect when you click **Save**, with no restart. That one takes effect the next time the plugin starts.
+
+### Limits and speed
 
 | Setting | What it does |
 |---|---|
-| Rate limit (per minute / per day) | How many tool calls each access key may make. Defaults 120 a minute, 5,000 a day. They count per access key, not per session, and a key with the admin scope gets ten times the figures. Without a `scopes.json` every key is admin, so on a stock install the limits in force are 1,200 a minute and 50,000 a day. The plugin's `/health` page shows the limits each key is held to |
-| Read-cache TTL (seconds) | How long a read answer is served from cache. Mutating tools invalidate the related cache buckets themselves, and a client can send `Cache-Control: no-cache` |
-| Allow plugin-provided tools to make changes | The one switch over other plugins' write tools (see [Letting your plugin add tools](providers.md)). On by default; read tools always work |
-| Enable Event Webhooks, egress allow-list, plain-HTTP allow-list | The "home calls out" feature, off by default, and the only destinations it may ever post to. See [Security](security.md) |
-| Event Logging Level | How much the plugin says in the Indigo event log |
-| Allow Claude to delete devices, variables and automations | Off by default. While off, every delete is refused whatever token is in use |
-| Auto-configure Claude Code | On by default: at startup the plugin copies the go-between script into Indigo's `Scripts` folder, patches the access key into it, and keeps `~/.mcp.json` and `~/.claude/settings.json` current |
+| **Rate limit (per minute)** | How many requests each access key may make in a minute. The default is 120, and it can be anything from 1 to 100,000. |
+| **Rate limit (per day)** | How many requests each access key may make in a day. The default is 5,000, and it can be anything from 1 to 10,000,000. |
+| **Read-cache TTL (seconds)** | How long the plugin keeps the answer to a question that only reads, so the same question asked again comes back at once. The default is 60 seconds, 0 turns it off, and the most is 300. Anything that changes — through Claude or in Indigo — clears the answers it affects straight away. |
 
-## Per-token scopes — `scopes.json`
+Both limits count each access key separately, not each conversation. A key with the **admin** permission gets ten times both figures, and until you create a `scopes.json` (below) every key has admin, so on a new install the limits in force are 1,200 a minute and 50,000 a day. **Plugins → Claude Bridge → Print Plugin Health** shows the limits each key is held to.
 
-Indigo's web server already checks the access key before a request reaches the plugin. Scopes are
-a second layer on top: which tools each key may use. They live in `scopes.json` under the plugin's
-Preferences folder, and **Plugins → Claude Bridge → Create Starter scopes.json** writes one for you.
+### Tools from other plugins
 
-```json
-{
-    "default_scopes": ["read"],
-    "tokens": {
-        "<bearer-token>": {"name": "claude-code", "scopes": ["read", "write", "admin"]},
-        "<other-token>": {"name": "phone-app",   "scopes": ["read"]}
-    }
-}
-```
-
-Without a `scopes.json`, every authenticated key gets every scope. Once the file exists it fails
-closed: a key it does not name gets `default_scopes` only. Edit it and use **Reload scopes.json**;
-no restart needed. Which tools sit in which scope is the [Tool reference](tools.md).
-
-## Credentials — `IndigoSecrets.py` and `IndigoSecrets_example.py`
-
-This plugin, like every CliveS Indigo plugin, reads sensitive values from one
-shared master file:
-
-`/Library/Application Support/Perceptive Automation/IndigoSecrets.py`
-
-| File | Purpose | Real data? | Committed to GitHub? |
-|------|---------|------------|----------------------|
-| `IndigoSecrets.py` | Working file the plugin reads at runtime. Keep a backup in a password manager. | YES | **NO** — listed in `.gitignore` |
-| `IndigoSecrets_example.py` | Template only — empty placeholders. Shipped in the plugin bundle. | NO | YES |
-
-If you don't have `IndigoSecrets.py`, copy `IndigoSecrets_example.py` out of
-the plugin bundle into `/Library/Application Support/Perceptive Automation/`,
-rename it to `IndigoSecrets.py`, and fill in your values. Or skip the file
-altogether and type the values into the plugin's configuration dialog — where
-both are set, `IndigoSecrets.py` wins.
-
-If neither source supplies a value the plugin needs, it logs an ERROR naming
-the key and telling you to either fill in the matching field or add the key to
-`IndigoSecrets.py`.
-
-**Keys read by this plugin**: `CLAUDEBRIDGE_BEARER_TOKEN` (fallback for the
-web-server access key — first preference is Indigo's own
-`Preferences/secrets.json`) and the optional `WEBHOOK_ALLOWLIST`, which is
-added to the webhook allow-list typed into the dialog. No Anthropic API key is
-read or needed.
-
----
-
-## The menu items
-
-| Item | What it does |
+| Setting | What it does |
 |---|---|
-| Print MCP Client Connection Information | The endpoint URLs, local and on the network |
-| Print Plugin Health | Uptime, sessions, per-tool latencies and the rate limits each key is held to. The same snapshot at the `/health` address needs an admin key; any other key gets the basic status and its own limits |
-| Print Tool Explorer URL | A page listing every tool with its schema |
-| Create Starter scopes.json / Reload scopes.json | Per-token scopes, above |
-| Clear Read-Cache | Forget every cached read answer |
-| Print / Clear All Event Webhook Subscriptions | What the home has been told to call out about |
-| Print / Rescan Plugin-Provided MCP Tools | The providers found, and a rescan on demand |
-| Toggle Timestamps in Log | The millisecond prefix on the plugin's log lines |
-| Show Plugin Info | The environment banner — versions, architecture, Python — for a support post |
+| **Allow plugin-provided tools to make changes** | Ticked when you install the plugin. Untick it to stop any tool that another plugin adds from changing anything. Their tools that only read always work. |
+
+### Event webhooks
+
+| Setting | What it does |
+|---|---|
+| **Enable Event Webhooks** | Off when you install the plugin. Tick it to let Claude set up event webhooks, which send a message to a web address you run when something happens in the house. |
+| **Egress allow-list** | The only places a webhook may send to, separated by commas or on separate lines. You can give a name such as `hooks.example.com`, every name under one with `*.example.com`, or an address such as `203.0.113.5`. Left blank, nothing is allowed. A receiver on your own home network is refused unless you write its address with `/32` on the end, such as `192.168.1.50/32`. |
+| **Plain-HTTP allow-list** | Places that may be sent to over plain `http`, which is not encrypted. It is meant for a receiver on your own home network. Every place on the allow-list above may always be reached over `https`. |
+
+Only a key with **admin** can create, list or delete webhooks. The [Security](security.md#event-webhooks--the-outbound-firewall) page describes the safeguards in full.
+
+### Logging
+
+| Setting | What it does |
+|---|---|
+| **Event Logging Level** | How much the plugin writes to the Indigo Event Log: **Extra Debugging Messages**, **Debugging Messages**, **Informational Messages** (the default), **Warning Messages**, **Error Messages** or **Critical Errors Only**. |
+
+### Deleting
+
+| Setting | What it does |
+|---|---|
+| **Allow Claude to delete devices, variables and automations** | Off when you install the plugin. While it is off, Claude cannot delete a device, variable, trigger, schedule, action group or folder, whatever key it has, and the refusal goes in the Event Log. Turning it on is not enough by itself — each delete must also be confirmed in the request. Leave it off unless you are tidying up, and turn it off again afterwards. Deleting a script is not covered, because that only moves the script to a `_backups/_archived` folder, where you can get it back. |
+
+### Claude Code
+
+| Setting | What it does |
+|---|---|
+| **Auto-configure Claude Code** | Ticked when you install the plugin. Each time the plugin starts, it copies the go-between script `indigo_mcp_proxy.py` into Indigo's `Scripts` folder, writes your access key into it, and adds an **indigo-mcp** entry to `.mcp.json` and `.claude/settings.json` in your home folder, so Claude Code can connect without you setting anything up. Untick it if you would rather look after those files yourself — [Getting started](getting-started.md#setting-claude-code-up-by-hand) shows how. |
+
+## Giving each key its own permissions
+
+Indigo's web server checks the access key before a request reaches the plugin. On top of that, the plugin can give each key its own set of permissions — **read**, **write** and **admin**, explained on the [How it works](how-it-works.md#read-write-and-admin) page. Those live in a small file, `scopes.json`.
+
+1. Choose **Plugins → Claude Bridge → Create Starter scopes.json**. The plugin writes a starter file and puts its location in the Event Log. It is in the `Preferences/Plugins/com.clives.indigoplugin.claudebridge` folder inside your Indigo folder, and **Show Plugin Info** also prints the path.
+2. Open it in a text editor. It looks like this:
+
+   ```json
+   {
+     "default_scopes": ["read"],
+     "tokens": {
+       "REPLACE_WITH_FULL_BEARER_TOKEN_FOR_CLAUDE_CODE": {
+         "name": "claude-code",
+         "scopes": ["read", "write", "admin"]
+       },
+       "REPLACE_WITH_BEARER_FOR_PHONE_OR_OTHER_CLIENT": {
+         "name": "phone-readonly",
+         "scopes": ["read"]
+       }
+     }
+   }
+   ```
+
+3. Replace each placeholder with a real access key, the same one that client uses. Give each key a **name** you will recognise — it is what the change record shows, never the key itself. Add or remove entries as you need.
+4. Save the file and choose **Plugins → Claude Bridge → Reload scopes.json**. No restart is needed.
+
+Until the file exists, every key has every permission. Once it exists, a key the file does not name gets only what `default_scopes` says, which is read-only in the starter file. The [Tool reference](tools.md) lists which tools need which permission.
+
+## The credentials file
+
+Every one of my Indigo plugins can read private values from one shared file, `IndigoSecrets.py`, so you keep them in one place. Claude Bridge has no password fields of its own and reads just two values from that file, both optional:
+
+| Name in the file | What it is for |
+|---|---|
+| `CLAUDEBRIDGE_BEARER_TOKEN` | The access key to write into the go-between script. The plugin uses it only when Indigo's own `secrets.json` has no key in it, because that file is read first. |
+| `WEBHOOK_ALLOWLIST` | Extra places event webhooks may send to, as a list such as `["hooks.example.com"]`. They are added to the **Egress allow-list** in the settings, not used instead of it. |
+
+If you do not have the file yet:
+
+1. Right-click `Claude Bridge.indigoPlugin`, choose **Show Package Contents**, and open `Contents/Server Plugin`.
+2. Copy `IndigoSecrets_example.py` into `/Library/Application Support/Perceptive Automation/`.
+3. Rename the copy to `IndigoSecrets.py`.
+4. Open it in a text editor, fill in the names you need, and leave the rest empty.
+5. Restart the plugin with **Plugins → Claude Bridge → Reload**, because it reads the file only when it starts.
+
+Keep a copy of the file somewhere safe, such as a password manager, and never share it — it holds your keys.
+
+## The Claude Bridge device
+
+The device the plugin creates has one setting, **Server Name**, which is a label and changes nothing. The [device page](devices-and-triggers.md) explains what the device shows.

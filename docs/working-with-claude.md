@@ -55,7 +55,7 @@ You read the result, hit Enter to commit, done. No Googling
 Claude Code:
 1. Reads your existing Zigbee2MQTTBridge plugin's device list to find
    the thermostat and discover its state names
-2. Inspects similar plugins in your `Indigo 2025.2/Plugins/` folder
+2. Inspects similar plugins in your Indigo `Plugins` folder
    for the conventions you use (Devices.xml structure, log format,
    header style)
 3. Scaffolds the new plugin bundle with `Info.plist`, `Devices.xml`,
@@ -105,16 +105,16 @@ it in a couple of round-trips.
 
 ### Honest limits
 
-- **Claude can't create Triggers, and can't enable or disable a
-  plugin** — Indigo keeps those to the UI. You get a scaffolded
-  `.indigoPlugin` bundle and instructions, then you do the enable
-  click yourself.
+- **Claude can't create a trigger or a schedule** — Indigo keeps
+  that to its own window. For a new plugin you get a scaffolded
+  `.indigoPlugin` bundle and instructions, then you install and
+  enable it yourself.
 - **Claude reads your automations, it doesn't rewrite them blind.**
   Trigger conditions and Action Group steps used to be invisible.
   They aren't any more — `get_automation` and `find_automation_references`
   read them straight out of Indigo's own database, embedded scripts
   included. Editing them still goes through `update_automation`, which
-  covers names, descriptions and a trigger's event rather than every step.
+  covers names, descriptions and what a trigger watches rather than every step.
 - **Vibe coding speeds you up, it doesn't think for you.** Read what
   has been written. Test the changes. The point of Claude Bridge is
   that checking is one tool call away — so use it.
@@ -166,6 +166,6 @@ The chat version of Claude — claude.ai or the Chat tab of the desktop app — 
 too, through the desktop app's local-connector setting, and connectors are on every Claude plan,
 the free one included. What it cannot do is act on the Mac: it will not install anything, edit a
 file, or run a command. So chat plus Claude Bridge answers questions about the house and controls
-devices; Claude Code plus Claude Bridge also writes the scripts and plugins, and checks its own
+devices. Claude Code plus Claude Bridge also writes the scripts and plugins, and checks its own
 work. The comparison is laid out on the Dashboards site's
 [beginner's page](https://highsteads.github.io/Dashboards/no-coding-needed.html#can-i-use-claude-chat-instead-of-claude-code).

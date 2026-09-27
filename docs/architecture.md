@@ -1,6 +1,7 @@
 ---
 title: How it is built
-nav_order: 9
+nav_order: 15
+parent: Technical notes
 ---
 
 # How it is built
@@ -8,20 +9,21 @@ nav_order: 9
 ## The transport
 
 Claude Code speaks MCP over stdio to the go-between script, `indigo_mcp_proxy.py`. The script
-turns each request into an HTTPS call to Indigo's own web server, at
+turns each request into a web request to Indigo's own web server, at
 `/message/com.clives.indigoplugin.claudebridge/mcp/`, with your Indigo access key as a Bearer
-token; the plugin answers there. So there is no port of its own, no second door: Indigo's web
+token, and the plugin answers there. The script uses the address Indigo reports for its web
+server, so HTTPS and a port other than 8176 work too. So there is no port of its own, no second door: Indigo's web
 server authenticates every request before the plugin sees it, and the Reflector carries the same
 endpoint for remote use. Every reply is a single JSON body.
 
-Claude Code and Indigo's web server expect slightly different things of each other, so a small script sits between them and translates. It answers Claude Code in the form it expects, attaches your Indigo access key to every request so you never have to think about it, holds the connection open and rebuilds it quietly if Indigo restarts, and irons out the formatting differences between the two sides. It is installed and configured for you, and the only time you would ever open it is if something in Troubleshooting below sends you there.
+Claude Code and Indigo's web server expect slightly different things of each other, so a small script sits between them and translates. It answers Claude Code in the form it expects, attaches your Indigo access key to every request so you never have to think about it, holds the connection open and rebuilds it quietly if Indigo restarts, and irons out the formatting differences between the two sides. It is installed and configured for you, and you only open it if you [set Claude Code up by hand](getting-started.md#setting-claude-code-up-by-hand).
 
 ---
 
 Three things the script does that you would otherwise meet as errors: it reconnects quietly
-after an idle gap or an Indigo restart rather than surfacing a broken pipe; it re-does the
-session handshake when the web server has forgotten the session; and at boot it waits for the web
-server to start listening, because after a reboot Claude Code can be up seconds before Indigo is.
+after an idle gap or an Indigo restart rather than surfacing a broken pipe, it re-does the
+session handshake when the web server has forgotten the session, and at boot it waits up to 45
+seconds for the web server to start listening, because after a reboot Claude Code can be up seconds before Indigo is.
 
 ## Project structure
 
@@ -56,11 +58,11 @@ Claude Bridge.indigoPlugin/
 `registry.py` holds what the decorator declares — the schema, the scope, what the tool caches and
 what it invalidates, whether it is a gated delete, how its failures are scrubbed — so every other
 part reads it from there rather than keeping its own copy. `mcp_handler.py` builds the tool list
-from the registry and dispatches calls; `tools/` holds the handler classes that do the work;
-`security/` is the scope manager,
-the rate limiter, the delete gate, the webhook egress guard and the secret redactor; `external_tools/` reads other plugins' manifests;
+from the registry and dispatches calls. `tools/` holds the handler classes that do the work.
+`security/` is the scope manager, the rate limiter, the delete gate, the webhook egress guard,
+the secret redactor and the change log. `external_tools/` reads other plugins' manifests.
 `adapters/` reads Indigo's own database file for the trigger and action-group detail the API does
-not expose; `handlers/`, `common/` and `webhooks/` are the plumbing.
+not expose. `handlers/`, `common/` and `webhooks/` are the plumbing.
 
 ## Keeping search current
 
