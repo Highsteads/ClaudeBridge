@@ -10,6 +10,17 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.7.0 (2026-09-29)
+Claude Bridge now speaks the newest version of the protocol Claude uses to talk to it, as well as the one before.
+
+- **MCP 2026-07-28.** The newest version has no opening handshake and no session: every request says which version it speaks and what the client can do. Claude Bridge answers those requests as the new version requires, and still answers the older kind exactly as before, so every existing setup carries on unchanged. A client asks first with `server/discover` and is told both versions, what Claude Bridge offers, and its name and version.
+- **Tested with Claude Code itself.** Pointed at Claude Bridge over HTTP, Claude Code 2.1.284 chose the new version and used tools, prompts and resources with it. Through the go-between script it still chose the older one on the day, which is Claude Code's decision. The script is ready for the day that changes.
+- **What a new-version client is told when something is wrong.** A version Claude Bridge does not speak comes back with the versions it does, a request missing what the new version requires says so, and a tool call refused by the rate limit, the access key or the delete gate comes back as a tool result marked as an error, so Claude can read why. The [technical notes](https://highsteads.github.io/ClaudeBridge/architecture.html#two-versions-of-the-protocol) list every case.
+- **Plugin Health** now lists the protocol versions and, because new-version clients have no session to count, each one by the name it gives.
+- **The go-between script is version 1.9.** It adds the headers the new version needs, sends no session with it, and hands Claude Code the real error codes rather than a general one.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.6.1 (2026-09-29)
 One fewer warning in the Indigo event log every time a Claude session starts.
 

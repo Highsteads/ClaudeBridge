@@ -4,7 +4,7 @@
 # Description: Claude Bridge - exposes Indigo to Claude over the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5.5
 # Date:        29-09-2026
-# Version:     3.6.1
+# Version:     3.7.0
 
 try:
     import indigo

@@ -25,6 +25,46 @@ after an idle gap or an Indigo restart rather than surfacing a broken pipe, it r
 session handshake when the web server has forgotten the session, and at boot it waits up to 45
 seconds for the web server to start listening, because after a reboot Claude Code can be up seconds before Indigo is.
 
+## Two versions of the protocol
+
+From 3.7.0 Claude Bridge speaks both the 2025-06-18 version of MCP and the 2026-07-28 one, on the
+same endpoint, and a client gets whichever it asks for.
+
+- **2025-06-18** starts with an `initialize` handshake and gives the client a session, carried in
+  the `Mcp-Session-Id` header. Everything before 3.7.0 worked this way, and it still does.
+- **2026-07-28** has no handshake and no session. Every request names its protocol version and
+  the client's capabilities in `params._meta`, and carries the same version in an
+  `MCP-Protocol-Version` header, the method in `Mcp-Method`, and for `tools/call`,
+  `resources/read` and `prompts/get` the tool, resource or prompt in `Mcp-Name`. A client can
+  first ask `server/discover`, which answers with both versions, the same capabilities
+  `initialize` offers, and the server's name and version.
+
+A request is 2026-07-28 when its `_meta` names a protocol version, and 2025-06-18 otherwise. The
+2026-07-28 rules Claude Bridge follows:
+
+| Case | Reply |
+|---|---|
+| A version it does not speak in `_meta` | HTTP 400, error -32022, with the versions it does speak |
+| No `clientCapabilities` in `_meta` | HTTP 400, error -32602 |
+| A header missing, or not matching the body | HTTP 400, error -32020 |
+| A method 2026-07-28 does not have here, `ping` and `initialize` among them | HTTP 404, error -32601 |
+| A tool call refused for the rate limit, the access key's scope or the delete gate | a tool result marked as an error, so Claude reads why |
+| A resource that does not exist | error -32602 (2025-06-18 clients still get -32002) |
+
+Every 2026-07-28 result carries `resultType: "complete"` and the server's name and version in
+`_meta`. Lists and `server/discover` say how long a client may keep them (`ttlMs`: five minutes
+for the lists, none for a resource read, which is live house data) and that no shared cache may
+serve them to anybody else (`cacheScope: "private"`).
+
+The go-between script follows the same split. It adds the three headers to a 2026-07-28 request,
+sends no session, and passes Claude Bridge's error codes to Claude Code unchanged, because
+-32022 carries the versions to retry with.
+
+Whether Claude Code uses 2026-07-28 is Claude Code's choice, and it turns it on one kind of
+connection at a time. On 29 September 2026 it used it for a server reached over HTTP but not yet
+for one reached through a script like the go-between, so a normal setup still connects the older
+way, and moves over by itself the day Claude Code does.
+
 ## Project structure
 
 ```
@@ -39,6 +79,7 @@ Claude Bridge.indigoPlugin/
         ├── Actions.xml  Devices.xml  Events.xml  MenuItems.xml  PluginConfig.xml
         └── mcp_server/
             ├── mcp_handler.py              # MCP protocol and dispatch
+            ├── protocol_era.py             # the rules of MCP 2026-07-28 beside 2025-06-18
             ├── registry.py                 # the @tool decorator; all tool metadata
             ├── toolsets/                   # every built-in tool (71 tools), by domain
             ├── tools/                      # handler classes the tools call

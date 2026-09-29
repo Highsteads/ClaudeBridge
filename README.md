@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.6.1
+**Version:** 3.7.0
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,17 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.7.0 (2026-09-29)
+Claude Bridge now speaks the newest version of the protocol Claude uses to talk to it, as well as the one before.
+
+- **MCP 2026-07-28.** The newest version has no opening handshake and no session: every request says which version it speaks and what the client can do. Claude Bridge answers those requests as the new version requires, and still answers the older kind exactly as before, so every existing setup carries on unchanged. A client asks first with `server/discover` and is told both versions, what Claude Bridge offers, and its name and version.
+- **Tested with Claude Code itself.** Pointed at Claude Bridge over HTTP, Claude Code 2.1.284 chose the new version and used tools, prompts and resources with it. Through the go-between script it still chose the older one on the day, which is Claude Code's decision. The script is ready for the day that changes.
+- **What a new-version client is told when something is wrong.** A version Claude Bridge does not speak comes back with the versions it does, a request missing what the new version requires says so, and a tool call refused by the rate limit, the access key or the delete gate comes back as a tool result marked as an error, so Claude can read why. The [technical notes](https://highsteads.github.io/ClaudeBridge/architecture.html#two-versions-of-the-protocol) list every case.
+- **Plugin Health** now lists the protocol versions and, because new-version clients have no session to count, each one by the name it gives.
+- **The go-between script is version 1.9.** It adds the headers the new version needs, sends no session with it, and hands Claude Code the real error codes rather than a general one.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.6.1 (2026-09-29)
 One fewer warning in the Indigo event log every time a Claude session starts.
 
@@ -65,14 +76,6 @@ The descriptions Claude reads to learn each tool are written without semicolons 
 - **Plainer tool descriptions.** The descriptions of twenty-one tools, `device_history`, `device_control`, `thermostat_control`, `restart_plugin` and `zwave` among them, had twenty-six semicolons between them. They are now full stops, commas or "and". Nothing about what a tool does or needs has changed, and the [Tool reference](https://highsteads.github.io/ClaudeBridge/tools.html), which is built from the same descriptions, reads the same way.
 
 Still 71 tools, 30 of them read-only.
-
-### 3.5.0 (2026-09-25)
-Long lists now come a page at a time, and a new tool reads a variable's history.
-
-- **Paging.** `list_devices` with no filter used to send every device in full, 245 KB on a house of 210 devices. It now sends 50 at a time. `list_devices`, `list_variables`, `list_triggers`, `list_schedules` and `list_action_groups` all sort by name, take `limit` and `offset`, and say how many there are in total and where the next page starts (`next_offset`, empty on the last page). With a filter, and for the other four lists, a page is 200, so on most houses they still arrive in one go. `list_devices` now also accepts `limit` without a filter, where it used to refuse it.
-- **`variable_history`.** A variable's history from the SQL Logger, by id or name. The logger writes a row only when the value changes, so the reply also says what the value was when the window opened. With `summary=true` it says how many times the value changed and how long each value held (the way to answer "how long was the heating on today"), with a time-weighted average for a number. A deleted variable's history can still be read by its old id. It reads the database the same careful way `device_history` does, by id range, never scanning a whole table.
-
-71 tools now, 30 of them read-only.
 
 ## Authors & licence
 

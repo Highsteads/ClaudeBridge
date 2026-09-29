@@ -2,9 +2,21 @@
 # -*- coding: utf-8 -*-
 # Filename:    indigo_mcp_proxy.py
 # Description: stdio-to-HTTP proxy for Indigo MCP Server plugin (no OAuth)
-# Author:      CliveS & Claude Opus 5; Claude Opus 5.5 (1.6, 1.7)
-# Date:        25-09-2026
-# Version:     1.8
+# Author:      CliveS & Claude Opus 5; Claude Opus 5.5 (1.6 - 1.9)
+# Date:        29-09-2026
+# Version:     1.9
+#
+# v1.9 (29-09-2026): speaks MCP 2026-07-28 as well as 2025-06-18. A message
+#   whose params._meta names a protocol version is MODERN: the proxy sends the
+#   headers that revision requires on every POST (MCP-Protocol-Version from
+#   the body, Mcp-Method, and Mcp-Name for tools/call, resources/read and
+#   prompts/get, Base64-wrapped when the value is not plain ASCII), sends no
+#   Mcp-Session-Id, and never re-handshakes, because there is no session.
+#   An error the server sends for a modern request (HTTP 400 or 404 with a
+#   JSON-RPC error for that id) goes to the client as it came, code and all:
+#   -32022 carries the versions to retry with, and a client told -32603
+#   would not know. server/discover, the first thing a modern client sends,
+#   waits out the boot race as initialize does. Everything legacy is as 1.8.
 #
 # v1.8 (25-09-2026): follows the plugin's MCP Streamable HTTP status codes
 #   (3.3.0+). A session the server does not know now comes back as HTTP 404,
@@ -68,6 +80,7 @@
 # intermittent "Connection error (not retried) [Errno 32] Broken pipe / [Errno 54]
 # reset" seen on the first MCP call after a long idle gap or a plugin reload.
 
+import base64
 import errno
 import ipaddress
 import sys
@@ -96,6 +109,11 @@ INDIGO_MCP_PATH        = "/message/com.clives.indigoplugin.claudebridge/mcp/"
 # chmod 600 by the plugin so the token is not group/world readable.
 BEARER_TOKEN           = "REPLACE_AT_INSTALL"
 INDIGO_PROTOCOL_VER    = "2025-06-18"
+
+# MCP 2026-07-28: the _meta key that makes a request modern, and the body field
+# each method's Mcp-Name header mirrors (basic/transports/streamable-http).
+META_PROTOCOL_VERSION  = "io.modelcontextprotocol/protocolVersion"
+_MCP_NAME_FIELD        = {"tools/call": "name", "prompts/get": "name", "resources/read": "uri"}
 
 # A persistent keep-alive that has sat idle longer than this is assumed dead
 # (IWS closes idle keep-alives), so we reconnect fresh before writing rather
@@ -218,21 +236,65 @@ def _drop_connection():
 # twice). The RemoteDisconnected case below is the exception — there the server
 # returned zero bytes, proving it never processed the request.
 _IDEMPOTENT_METHODS = {
-    "initialize", "ping", "tools/list",
+    "initialize", "server/discover", "ping", "tools/list",
     "resources/list", "resources/read", "prompts/list", "prompts/get",
 }
 
 
-def _build_headers() -> dict:
+def _modern_version(data):
+    """The protocol version a MODERN (2026-07-28) message names in its
+    params._meta, or None for a legacy one."""
+    params = data.get("params") if isinstance(data, dict) else None
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    if isinstance(meta, dict) and META_PROTOCOL_VERSION in meta:
+        return str(meta[META_PROTOCOL_VERSION])
+    return None
+
+
+def _header_value(text: str) -> str:
+    """A header-safe form of an Mcp-Name value: as it is when it is plain
+    visible ASCII with no space at either end, otherwise =?base64?...?= of its
+    UTF-8. A plain value that already looks like the wrapper is wrapped too,
+    so the server cannot misread it."""
+    plain = (all(ch == "\t" or 0x20 <= ord(ch) <= 0x7E for ch in text)
+             and text == text.strip()
+             and not (text.startswith("=?base64?") and text.endswith("?=")))
+    if plain:
+        return text
+    return "=?base64?" + base64.b64encode(text.encode("utf-8")).decode("ascii") + "?="
+
+
+def _build_headers(data=None) -> dict:
     headers = {
         "Content-Type":  "application/json",
         "Accept":        "application/json, text/event-stream",
         "Authorization": f"Bearer {BEARER_TOKEN}",
         "Connection":    "keep-alive",
     }
-    if session_id:
+    version = _modern_version(data) if data is not None else None
+    if version is not None:
+        # 2026-07-28 has no session: never send one, even if a legacy
+        # handshake in this same process left one behind.
+        method = str(data.get("method", ""))
+        headers["MCP-Protocol-Version"] = version
+        headers["Mcp-Method"] = method
+        field = _MCP_NAME_FIELD.get(method)
+        value = (data.get("params") or {}).get(field) if field else None
+        if value is not None:
+            headers["Mcp-Name"] = _header_value(str(value))
+    elif session_id:
         headers["Mcp-Session-Id"] = session_id
     return headers
+
+
+def _matching_error(messages, req_id):
+    """The JSON-RPC error response in an error body that answers this
+    request, or None."""
+    for m in messages or []:
+        if (isinstance(m, dict) and m.get("jsonrpc") == "2.0"
+                and isinstance(m.get("error"), dict) and m.get("id") == req_id):
+            return m
+    return None
 
 
 def _read_response(resp):
@@ -391,9 +453,10 @@ def _is_not_listening(exc) -> bool:
     return isinstance(exc, OSError) and exc.errno in _BOOT_ERRNOS
 
 
-def _attempt_initialize(body: bytes, headers: dict):
+def _attempt_initialize(body: bytes, headers: dict, method: str = "initialize"):
     """
-    _attempt() for the handshake, tolerant of a client that started before
+    _attempt() for the first message of a connection (initialize, or a modern
+    client's server/discover), tolerant of a client that started before
     Indigo's web server. Waits only while the failure is "nothing is listening
     yet" and only up to BOOT_RETRY_SECONDS; anything else (a bad token, an IWS
     500, a hang that exhausts the socket timeout) is raised straight away, so a
@@ -403,7 +466,7 @@ def _attempt_initialize(body: bytes, headers: dict):
     waited   = False
     while True:
         try:
-            result = _attempt(body, headers, "initialize", is_notification=False)
+            result = _attempt(body, headers, method, is_notification=False)
         except Exception as e:
             if not _is_not_listening(e) or time.monotonic() >= deadline:
                 raise
@@ -503,17 +566,20 @@ def post_message(data: dict):
         _last_init = json.loads(json.dumps(data))  # deep copy for later replay
 
     body = json.dumps(data).encode("utf-8")
+    modern = _modern_version(data) is not None
+    headers = _build_headers(data)
     # Transparent session recovery is for a request whose session the server
-    # no longer knows (the plugin restarted, or pruned an idle session).
-    can_recover = (not is_notification and method != "initialize"
+    # no longer knows (the plugin restarted, or pruned an idle session). A
+    # modern request has no session to lose.
+    can_recover = (not modern and not is_notification and method != "initialize"
                    and _last_init is not None)
 
     try:
-        if method == "initialize":
-            # The one method allowed to wait for IWS to come up (see v1.5).
-            messages, emit_lines = _attempt_initialize(body, _build_headers())
+        if method == "initialize" or (modern and method == "server/discover"):
+            # The first message of a connection may wait for IWS (see v1.5).
+            messages, emit_lines = _attempt_initialize(body, headers, method)
         else:
-            messages, emit_lines = _attempt(body, _build_headers(), method, is_notification)
+            messages, emit_lines = _attempt(body, headers, method, is_notification)
     except _SendFailed as e:
         if not is_notification:
             _write_error(data.get("id"), str(e))
@@ -524,6 +590,15 @@ def post_message(data: dict):
         if can_recover and _is_session_expired(e) and _rehandshake():
             _replay(data, body, method)
             return
+        # A modern server's 400 or 404 carries a real JSON-RPC error for this
+        # id (-32022 with the versions to retry, -32601, -32020). Pass it on
+        # as it is: the client acts on the code (v1.9).
+        if modern and not is_notification:
+            answer = _matching_error(e.messages, data.get("id"))
+            if answer is not None:
+                sys.stdout.write(json.dumps(answer) + "\n")
+                sys.stdout.flush()
+                return
         # Answered, but not with JSON-RPC. Report it against the request id
         # rather than as a connection fault — the connection was fine.
         if not is_notification:

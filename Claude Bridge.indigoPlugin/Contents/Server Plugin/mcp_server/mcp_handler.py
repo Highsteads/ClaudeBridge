@@ -49,6 +49,7 @@ from .security.scope_manager import (register_dynamic_scope, required_scope_for,
 from .security import change_log as change_log_mod
 from .security.origin_guard import OriginGuard
 from .security.secret_redactor import SecretRedactor
+from . import protocol_era as era
 
 
 class MCPHandler:
@@ -383,6 +384,16 @@ class MCPHandler:
             error_count = self._tool_error_count
         with self._sessions_lock:
             session_count = len(self._sessions)
+        # 2026-07-28 clients have no session, so they are counted by name.
+        modern_lock = getattr(self, "_modern_lock", None)
+        modern_clients: Dict[str, Any] = {}
+        if modern_lock is not None:
+            with modern_lock:
+                modern_clients = {
+                    name: {"version": e.get("version", ""), "requests": e["requests"],
+                           "last_seen_ago_seconds": round(now - e["last_seen"], 1)}
+                    for name, e in (getattr(self, "_modern_clients", None) or {}).items()
+                }
 
         # Per-tool latency + payload aggregates over the rolling window
         per_tool: Dict[str, Dict[str, Any]] = {}
@@ -429,9 +440,11 @@ class MCPHandler:
             "status":           "degraded" if exec_status["wedged"] else "ok",
             "plugin":           "Claude Bridge",
             "protocol_version": self.PROTOCOL_VERSION,
+            "protocol_versions": list(era.SUPPORTED_VERSIONS),
             "exec":             exec_status,
             "uptime_seconds":   round(now - plugin_start_time, 1) if plugin_start_time else None,
             "sessions":         session_count,
+            "modern_clients":   modern_clients,
             "tools":            len(self._tools),
             "resources":        len(self._resources),
             "tool_calls": {
@@ -558,7 +571,7 @@ class MCPHandler:
 </style></head>
 <body>
  <h1>🌉 Claude Bridge — Tool Explorer</h1>
- <p class='meta'>{len(self._tools)} tools • {len(self._resources)} resources • protocol {self.PROTOCOL_VERSION}</p>
+ <p class='meta'>{len(self._tools)} tools • {len(self._resources)} resources • protocol {' and '.join(era.SUPPORTED_VERSIONS)}</p>
  {endpoint_note}
  {''.join(rows)}
 </body></html>
@@ -764,6 +777,14 @@ class MCPHandler:
         # something that changed.
         self.logger.debug(f"📨 {log_method} | session: {session_short}")
         
+        # MCP 2026-07-28 (3.7.0): a request whose params._meta names its
+        # protocol version is MODERN. There is no handshake and no session;
+        # it is served on its own, statelessly. Everything below this branch
+        # is the 2025-06-18 path, unchanged.
+        meta = era.request_meta(params)
+        if meta is not None:
+            return self._dispatch_modern(msg, msg_id, method, params, meta, headers)
+
         # MCP 2025-06-18 requires MCP-Protocol-Version header for HTTP transport.
         # A PRESENT-but-mismatched version is always wrong, so enforce this
         # independently of the session-store state below. (Previously this was
@@ -774,6 +795,14 @@ class MCPHandler:
         if method != "initialize" and not method.startswith("notifications/"):
             if protocol_version_header and protocol_version_header != self.PROTOCOL_VERSION:
                 self.logger.debug(f"Invalid protocol version: {protocol_version_header}")
+                if protocol_version_header in era.MODERN_VERSIONS:
+                    # A modern header on a body without the modern _meta: the
+                    # request is missing a required field (basic/index: -32602,
+                    # HTTP 400).
+                    return self._http_error(
+                        400, msg_id, -32602,
+                        f"Invalid params: a {protocol_version_header} request must carry "
+                        f"{era.META_PROTOCOL_VERSION} in params._meta")
                 # 400 Bad Request, as the 2025-06-18 transport requires.
                 return self._http_error(400, msg_id, -32600,
                                         f"Unsupported protocol version: {protocol_version_header}")
@@ -791,14 +820,10 @@ class MCPHandler:
         # Bad Request for no session id at all. The JSON-RPC body still names
         # the session, so a client that reads only the body can recover too.
         #
-        # `server/discover` is exempt too (3.6.1). Claude Code 2.1.28x probes
-        # with it BEFORE initialize, from MCP 2026-07-28, where it replaces the
-        # handshake — so it can never carry a session. Checking it answered
-        # HTTP 400 "Missing Mcp-Session-Id" once per new session, which IWS
-        # logged as a warning (~12 a day). Letting it through reaches the
-        # unknown-method branch: a plain -32601 "Method not found", the reply
-        # that makes Claude Code fall back to initialize (claude-code #97391:
-        # an error that mentions the modern version can wrongly pick it).
+        # `server/discover` is exempt too (3.6.1). A modern one never reaches
+        # here (it carries _meta, see above); one WITHOUT the modern _meta is
+        # not a request either era defines, so it gets a plain -32601 from the
+        # unknown-method branch rather than a session error.
         session_id = headers.get("mcp-session-id")
         if (method not in ("initialize", "server/discover")
                 and not method.startswith("notifications/") and self._sessions):
@@ -824,52 +849,188 @@ class MCPHandler:
             return None
         elif method == "notifications/initialized":
             return None
-        
-        # Tool methods
-        elif method == "tools/list":
+
+        # Tools, resources and prompts: the same in both eras.
+        resp = self._route_shared(msg_id, method, params, headers)
+        if resp is not None:
+            return resp
+
+        # Unknown method
+        if method.startswith("notifications/"):
+            # Unknown notifications ignored gracefully
+            return None
+        self.logger.debug(f"Unknown method: {method}")
+        return self._json_error(msg_id, -32601, "Method not found")
+
+    def _route_shared(self, msg_id: Any, method: str, params: Dict[str, Any],
+                      headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """The methods both protocol eras serve the same way. None for any
+        other method, so each era decides what an unknown one gets."""
+        if method == "tools/list":
             return self._handle_tools_list(msg_id, params)
-        elif method == "tools/call":
+        if method == "tools/call":
             return self._handle_tools_call(msg_id, params, headers)
-        
-        # Resource methods
-        elif method == "resources/list":
+        if method == "resources/list":
             return self._handle_resources_list(msg_id, params, headers)
-        elif method == "resources/read":
+        if method == "resources/read":
             return self._handle_resources_read(msg_id, params, headers)
-        elif method == "resources/templates/list":
+        if method == "resources/templates/list":
             return self._handle_resource_templates_list(msg_id, params, headers)
-        
-        # Prompt methods (stubs for now)
-        elif method == "prompts/list":
+        if method == "prompts/list":
             from .prompts import list_prompts
-            return {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {"prompts": list_prompts()}
-            }
-        elif method == "prompts/get":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"prompts": list_prompts()}}
+        if method == "prompts/get":
             from .prompts import MissingPromptArguments, get_prompt
-            p = (params or {})
-            p_args = p.get("arguments") or {}
+            p_args = params.get("arguments") or {}
             if not isinstance(p_args, dict):
                 return self._json_error(msg_id, -32602, "Invalid params: arguments must be a JSON object")
             try:
-                result = get_prompt(str(p.get("name") or ""), p_args)
+                result = get_prompt(str(params.get("name") or ""), p_args)
             except MissingPromptArguments as exc:
                 return self._json_error(msg_id, -32602, str(exc))
             if result is None:
-                return self._json_error(msg_id, -32602, f"Unknown prompt: {p.get('name')!r}")
+                return self._json_error(msg_id, -32602, f"Unknown prompt: {params.get('name')!r}")
             return {"jsonrpc": "2.0", "id": msg_id, "result": result}
-        
-        # Unknown method
+        return None
+
+    def _dispatch_modern(self, msg: Dict[str, Any], msg_id: Any, method: str,
+                         params: Dict[str, Any], meta: Dict[str, Any],
+                         headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """Serve one MCP 2026-07-28 message. No session is read, checked or
+        minted. The checks run in the order the failures are most useful to
+        a client: a version it can retry with first, then a malformed
+        request, then headers that disagree with the body."""
+        if "id" not in msg:
+            # The only client notification the revision defines is
+            # notifications/cancelled, and it sets no header rules for a
+            # notification POST. Accept, and act on a cancellation.
+            if method == "notifications/cancelled":
+                self._handle_cancelled(params)
+            return None
+
+        version = meta.get(era.META_PROTOCOL_VERSION)
+        if not isinstance(version, str) or version not in era.MODERN_VERSIONS:
+            self.logger.debug(f"Modern request for unsupported protocol {version!r}")
+            return self._http_error(
+                400, msg_id, era.UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version",
+                data={"supported": list(era.SUPPORTED_VERSIONS), "requested": version})
+
+        if not isinstance(meta.get(era.META_CLIENT_CAPABILITIES), dict):
+            return self._http_error(
+                400, msg_id, -32602,
+                f"Invalid params: {era.META_CLIENT_CAPABILITIES} is required in params._meta")
+
+        problem = era.header_problem(method, params, version, headers)
+        if problem:
+            self.logger.debug(f"Header mismatch on {method}: {problem}")
+            return self._http_error(400, msg_id, era.HEADER_MISMATCH, f"Header mismatch: {problem}")
+
+        self._note_modern_client(meta, method)
+
+        if method == "server/discover":
+            resp = {"jsonrpc": "2.0", "id": msg_id, "result": {
+                "supportedVersions": list(era.SUPPORTED_VERSIONS),
+                "capabilities":      self._server_capabilities(),
+            }}
+        elif method in era.MODERN_METHODS:
+            resp = self._route_shared(msg_id, method, params, headers)
         else:
-            if method.startswith("notifications/"):
-                # Unknown notifications ignored gracefully
-                return None
+            resp = None
+        if resp is None:
+            # Streamable HTTP 2026-07-28: an RPC the server does not implement
+            # is 404 with -32601. That includes initialize and ping, which the
+            # revision removed.
+            self.logger.debug(f"Unknown method for MCP {version}: {method}")
+            return self._http_error(404, msg_id, -32601, "Method not found")
+        return self._modernise_reply(method, params, resp)
+
+    def _modernise_reply(self, method: str, params: Dict[str, Any],
+                         resp: Dict[str, Any]) -> Dict[str, Any]:
+        """Turn a reply from the shared handlers into a 2026-07-28 one."""
+        err = resp.get("error")
+        if isinstance(err, dict):
+            code = err.get("code")
+            if era.is_reserved_refusal(code) and method == "tools/call":
+                # Claude Bridge's own refusals (rate limit, access key scope,
+                # delete gate) use -32099, inside the range the revision
+                # reserves for itself. On a tool call the refusal becomes a
+                # tool result marked as an error, so the model reads why and
+                # can act on it (pass confirm=true, say it needs admin).
+                tool = params.get("name")
+                resp = self._tool_result(resp.get("id"), tool if isinstance(tool, str) else "",
+                                         str(err.get("message", "")), is_error=True)
             else:
-                self.logger.debug(f"Unknown method: {method}")
-                return self._json_error(msg_id, -32601, "Method not found")
-    
+                err["code"] = era.modern_error_code(code)
+                return resp
+        if isinstance(resp.get("result"), dict):
+            era.decorate_result(method, resp["result"], self._server_info())
+        return resp
+
+    def _note_modern_client(self, meta: Dict[str, Any], method: str) -> None:
+        """Remember who speaks 2026-07-28 to this server, for Plugin Health.
+        There is no session to count, so a client is known by the name it
+        gives. Lazily created: tests build the handler without __init__."""
+        info = meta.get(era.META_CLIENT_INFO)
+        if not isinstance(info, dict):
+            info = {}
+        name = str(info.get("name") or "unknown")[:80]
+        now_ts = time.time()
+        lock = getattr(self, "_modern_lock", None)
+        if lock is None:
+            lock = self._modern_lock = threading.Lock()
+        with lock:
+            clients = getattr(self, "_modern_clients", None)
+            if clients is None:
+                clients = self._modern_clients = {}
+            entry = clients.get(name)
+            if entry is None:
+                if len(clients) >= 50:          # a client cannot grow this without bound
+                    oldest = min(clients, key=lambda k: clients[k]["last_seen"])
+                    del clients[oldest]
+                entry = clients[name] = {"first_seen": now_ts, "requests": 0}
+            entry["last_seen"] = now_ts
+            entry["requests"] += 1
+            entry["version"] = str(info.get("version") or "")[:40]
+        if method == "server/discover":
+            self.logger.debug(f"server/discover from {name} (MCP 2026-07-28)")
+
+    def _server_capabilities(self) -> Dict[str, Any]:
+        """What this server offers, the same in both eras.
+
+        ONLY what this server can actually honour. There is no push channel
+        to a client: IWS answers one request with one plain JSON response,
+        never an open stream. So a `listChanged` notification can never be
+        sent, and `logging` (server-initiated notifications/message, plus a
+        logging/setLevel this server does not implement) can never be
+        honoured either.
+
+        Advertising them was not harmless. A client told it will be notified
+        when the tool list changes has no reason to re-read it — which is
+        exactly why a session connected before v2.24.0 went on stripping the
+        new `confirm` argument for hours while the plugin refused calls that
+        were correctly made (29-08-2026). The honest declaration makes a
+        client re-read on its own terms instead of waiting for a message that
+        will never arrive.
+
+        `subscribe: False` STAYS: that is an accurate statement that resource
+        subscription is unsupported. If a real push channel is ever added,
+        the claims can come back with it.
+        """
+        return {
+            "prompts": {},
+            "resources": {"subscribe": False},
+            "tools": {},
+        }
+
+    def _server_info(self) -> Dict[str, str]:
+        """Name and version, as initialize and every modern result give them."""
+        return {
+            "name": "Indigo Claude Bridge",
+            "version": (self.plugin.pluginVersion
+                        if self.plugin and hasattr(self.plugin, "pluginVersion")
+                        else "unknown"),
+        }
+
     def _handle_initialize(
         self,
         msg_id: Any,
@@ -909,37 +1070,8 @@ class MCPHandler:
             "id": msg_id,
             "result": {
                 "protocolVersion": self.PROTOCOL_VERSION,
-                # ONLY what this server can actually honour. There is no
-                # push channel to a client: IWS answers one request with
-                # one plain JSON response, never an open stream. So a
-                # `listChanged` notification can never be sent, and
-                # `logging` (server-initiated notifications/message, plus a
-                # logging/setLevel this server does not implement) can
-                # never be honoured either.
-                #
-                # Advertising them was not harmless. A client told it will
-                # be notified when the tool list changes has no reason to
-                # re-read it — which is exactly why a session connected
-                # before v2.24.0 went on stripping the new `confirm`
-                # argument for hours while the plugin refused calls that
-                # were correctly made (29-08-2026). The honest declaration
-                # makes a client re-read on its own terms instead of
-                # waiting for a message that will never arrive.
-                #
-                # `subscribe: False` STAYS: that is an accurate statement
-                # that resource subscription is unsupported. If a real push
-                # channel is ever added, the claims can come back with it.
-                "capabilities": {
-                    "prompts": {},
-                    "resources": {"subscribe": False},
-                    "tools": {}
-                },
-                "serverInfo": {
-                    "name": "Indigo Claude Bridge",
-                    "version": (self.plugin.pluginVersion
-                                if self.plugin and hasattr(self.plugin, "pluginVersion")
-                                else "unknown")
-                }
+                "capabilities": self._server_capabilities(),
+                "serverInfo": self._server_info(),
             }
         }
 
@@ -1881,9 +2013,9 @@ class MCPHandler:
         }
     
     def _http_error(self, http_status: int, msg_id: Any, code: int,
-                    message: str) -> Dict[str, Any]:
+                    message: str, data: Any = None) -> Dict[str, Any]:
         """A JSON-RPC error that handle_request sends with this HTTP status."""
-        error = self._json_error(msg_id, code, message)
+        error = self._json_error(msg_id, code, message, data)
         error["_http_status"] = http_status
         return error
 
