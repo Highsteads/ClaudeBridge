@@ -121,4 +121,14 @@ No Anthropic API key is needed: Claude Code uses your own Claude account.</Label
     <Field id="label_auto_configure_claude_code_info" type="label">
         <Label>When enabled (default), the plugin copies indigo_mcp_proxy.py to /Library/Application Support/Perceptive Automation/Scripts/ on startup, patches the Bearer token, and edits ~/.mcp.json and ~/.claude/settings.json so Claude Code can connect without manual setup. Disable if you manage these files yourself.</Label>
     </Field>
+    <Field id="claude_code_transport" type="menu" defaultValue="script">
+        <Label>Connect Claude Code:</Label>
+        <List>
+            <Option value="script">Through the go-between script</Option>
+            <Option value="http">Straight to Indigo over HTTP</Option>
+        </List>
+    </Field>
+    <Field id="label_claude_code_transport_info" type="label" fontSize="small" alignWithControl="false">
+        <Label>The go-between script works with every Claude Code and waits for Indigo after a reboot. Over HTTP, Claude Code uses the newest version of the protocol, but if it starts before Indigo's web server it shows Indigo as failed until you reconnect it with /mcp. Either way your access key stays in the script, which only your account can read. Plugins > Claude Bridge > Print MCP Client Connection Information shows the Terminal line for Claude Code's own settings.</Label>
+    </Field>
 </PluginConfig>

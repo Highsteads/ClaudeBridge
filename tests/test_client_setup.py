@@ -338,3 +338,101 @@ def test_startup_passes_the_web_server_url(monkeypatch, tmp_path):
         getInstallFolderPath=lambda: str(tmp_path / "Indigo 2025.2"), getWebServerURL=_raises))
     p._configure_claude_code()
     assert setup.call_args.kwargs["web_server_url"] == ""
+
+
+# ── 1.3: Claude Code straight to Indigo over HTTP (3.8.0) ────────────────────
+
+def _run_http(env, url=None):
+    return client_setup.setup_claude_code_integration(
+        env.log, bundle_dir=str(env.bundle), install_folder=str(env.install),
+        home=str(env.home), transport="http", web_server_url=url)
+
+
+def test_http_transport_writes_an_http_entry_with_no_key_in_it(env):
+    _write_secrets(env, ["iws-token-123"])
+    _run_http(env, "http://localhost:8176")
+    raw = (env.home / ".mcp.json").read_text()
+    entry = json.loads(raw)["mcpServers"]["indigo-mcp"]
+    assert entry["type"] == "http"
+    assert entry["url"] == "http://localhost:8176/message/com.clives.indigoplugin.claudebridge/mcp/"
+    assert "iws-token-123" not in raw and "Authorization" not in raw
+    # The proxy is still deployed, with the key: it is what hands it over.
+    assert _token_in(env.proxy) == "iws-token-123"
+
+
+def test_the_headers_helper_command_runs_and_prints_the_header(env):
+    """Run the helper exactly as Claude Code would: split the command string
+    as a shell does (the path has spaces in it) and execute it."""
+    import shlex
+    import subprocess
+    _write_secrets(env, ["iws-token-123"])
+    _run_http(env)
+    helper = json.loads((env.home / ".mcp.json").read_text())["mcpServers"]["indigo-mcp"]["headersHelper"]
+    argv = shlex.split(helper)
+    assert argv[1] == str(env.proxy) and argv[2] == "--headers"
+    argv[0] = sys.executable
+    out = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=True).stdout
+    assert json.loads(out) == {"Authorization": "Bearer iws-token-123"}
+
+
+def test_an_unpatched_proxy_refuses_to_print_headers(env):
+    import subprocess
+    r = subprocess.run([sys.executable, str(env.bundle / "indigo_mcp_proxy.py"), "--headers"],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 1 and r.stdout == "" and "no access key" in r.stderr
+
+
+def test_switching_back_to_the_script_restores_the_old_entry(env):
+    _write_secrets(env, ["iws-token-123"])
+    _run_http(env)
+    changed = _run(env)
+    assert "~/.mcp.json" in changed and "~/.claude/settings.json" not in changed
+    entry = json.loads((env.home / ".mcp.json").read_text())["mcpServers"]["indigo-mcp"]
+    assert entry == {"command": "python3", "args": [str(env.proxy)]}
+
+
+@pytest.mark.parametrize("stored,expected", [
+    (None, "script"), ("", "script"), ("script", "script"), ("http", "http"),
+    ("HTTP ", "http"), ("stdio", "script"), (True, "script")])
+def test_an_unknown_transport_is_the_script(stored, expected):
+    assert client_setup.normalise_transport(stored) == expected
+
+
+def test_the_user_scope_command_round_trips_through_a_shell(tmp_path):
+    import shlex
+    entry = client_setup.mcp_entry(tmp_path / "Perceptive Automation" / "Scripts" / "p.py", "http")
+    argv = shlex.split(client_setup.user_scope_command(entry))
+    assert argv[:6] == ["claude", "mcp", "add-json", "-s", "user", "indigo-mcp"]
+    assert json.loads(argv[6]) == entry
+
+
+def test_startup_passes_the_transport(monkeypatch, tmp_path):
+    mod = load_plugin_module()
+    p = object.__new__(mod.Plugin)
+    p.logger = logging.getLogger("test-client-setup-transport")
+    ind = sys.modules["indigo"]
+    monkeypatch.setattr(ind, "server", SimpleNamespace(
+        getInstallFolderPath=lambda: str(tmp_path / "Indigo 2025.2"),
+        getWebServerURL=lambda: "http://localhost:8176"))
+    setup = MagicMock(return_value=[])
+    monkeypatch.setattr(mod.client_setup, "setup_claude_code_integration", setup)
+    p.pluginPrefs = {"claude_code_transport": "http"}
+    p._configure_claude_code()
+    assert setup.call_args.kwargs["transport"] == "http"
+    p.pluginPrefs = {}
+    p._configure_claude_code()
+    assert setup.call_args.kwargs["transport"] == "script"
+
+
+def test_the_claude_code_setting_tells_a_transport_change(monkeypatch, tmp_path):
+    mod = load_plugin_module()
+    p = object.__new__(mod.Plugin)
+    p.pluginPrefs = {"claude_code_transport": "script"}
+    calls = []
+    monkeypatch.setattr(p, "_configure_claude_code",
+                        lambda prefs=None: calls.append(dict(prefs or {})), raising=False)
+    p._applied_claude_code = p._claude_code_setting(p.pluginPrefs)
+    same = {"claude_code_transport": "script"}
+    assert p._claude_code_setting(same) == p._applied_claude_code
+    changed = {"claude_code_transport": "http"}
+    assert p._claude_code_setting(changed) != p._applied_claude_code

@@ -4,7 +4,7 @@
 # Description: Claude Bridge - exposes Indigo to Claude over the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5.5
 # Date:        29-09-2026
-# Version:     3.7.0
+# Version:     3.8.0
 
 try:
     import indigo
@@ -366,14 +366,20 @@ class Plugin(indigo.PluginBase):
         # no change subscriptions, and the handler thrown away.
         self._configure_claude_code()
 
-    def _configure_claude_code(self) -> None:
+    def _configure_claude_code(self, prefs=None) -> None:
         """Deploy the proxy and register it with Claude Code, if the user has
         not turned that off. A failure is a WARNING: the MCP server itself is
-        up and every other client still works."""
+        up and every other client still works. `prefs` is the dialog's values
+        when called from closedPrefsConfigUi, else the stored prefs."""
+        prefs = self.pluginPrefs if prefs is None else prefs
+        # What this call applies, so closedPrefsConfigUi can tell a change
+        # without relying on whether Indigo has already saved the dialog into
+        # pluginPrefs when it calls that method (undocumented).
+        self._applied_claude_code = self._claude_code_setting(prefs)
         # as_bool, not raw truthiness: a saved dialog stores this as the string
         # "false", which is truthy — so a user who unticked it would still get
         # their ~/.mcp.json / settings.json rewritten on every startup.
-        if not as_bool(self.pluginPrefs.get("auto_configure_claude_code"), True):
+        if not as_bool(prefs.get("auto_configure_claude_code"), True):
             self.logger.info("Claude Code auto-configure disabled in PluginConfig — skipping "
                              "~/.mcp.json and ~/.claude/settings.json updates")
             return
@@ -385,11 +391,20 @@ class Plugin(indigo.PluginBase):
                 home           = os.path.expanduser("~"),
                 fallback_token = CLAUDEBRIDGE_BEARER_TOKEN,
                 web_server_url = self._web_server_url(),
+                transport      = client_setup.normalise_transport(
+                    prefs.get("claude_code_transport")),
             )
         except Exception as exc:
             self.logger.warning(f"\t⚠️  Claude Code auto-configure failed ({type(exc).__name__}: "
                                 f"{exc}). The MCP server is running; set Claude Code up by hand "
                                 f"or fix the permissions and restart the plugin.")
+
+    @staticmethod
+    def _claude_code_setting(prefs) -> tuple:
+        """(auto-configure on, transport), the two settings that decide what
+        is written for Claude Code."""
+        return (as_bool(prefs.get("auto_configure_claude_code"), True),
+                client_setup.normalise_transport(prefs.get("claude_code_transport")))
 
     def _web_server_url(self) -> str:
         """Indigo's own web server URL, for the proxy to talk to, or "" when
@@ -1075,8 +1090,39 @@ class Plugin(indigo.PluginBase):
             config_lines.append(json.dumps(scenario3_config, indent=2))
             config_lines.extend(["", "Setup:", "  1. Create a local secret (see documentation link above)", "  2. Replace YOUR_LOCAL_SECRET_KEY with your generated local secret", "  3. Replace your-local-hostname-or-ip with your server IP/hostname for LAN access", "  4. Replace port 8176 if you are not using the default Indigo Web Server port", ""])
         config_lines.extend(["", ""])
+        config_lines.extend(self._claude_code_connection_lines())
 
         indigo.server.log("\n".join(config_lines))
+
+    def _claude_code_connection_lines(self) -> list:
+        """How Claude Code on this Mac reaches the plugin, and the Terminal
+        line that sets the user-level entry to match (3.8.0). The user-level
+        entry lives in ~/.claude.json, Claude Code's own file, so the plugin
+        prints the command rather than editing it."""
+        transport = client_setup.normalise_transport(self.pluginPrefs.get("claude_code_transport"))
+        try:
+            proxy_path = (client_setup.scripts_dir_for(indigo.server.getInstallFolderPath())
+                          / client_setup.PROXY_NAME)
+        except Exception:
+            proxy_path = client_setup.PROXY_NAME
+        entry = client_setup.mcp_entry(proxy_path, transport, self._web_server_url())
+        how = ("straight to Indigo's web server over HTTP (MCP 2026-07-28)"
+               if transport == client_setup.TRANSPORT_HTTP
+               else "through the go-between script (MCP 2025-06-18)")
+        return [
+            "=" * 80,
+            "",
+            f"💻 CLAUDE CODE ON THIS MAC: set to connect {how}.",
+            "   Change it under Plugins > Claude Bridge > Configure > Connect Claude Code.",
+            "   The plugin keeps ~/.mcp.json to match. Claude Code's user-level entry, which every",
+            "   folder but your home folder uses, is Claude Code's own file, so set it in Terminal:",
+            "",
+            f"   claude mcp remove -s user {client_setup.SERVER_KEY}",
+            f"   {client_setup.user_scope_command(entry)}",
+            "",
+            "   Neither line contains your access key. Then start a new Claude Code session.",
+            "",
+        ]
 
     ########################################
     # Configuration UI Validation
@@ -1486,6 +1532,13 @@ class Plugin(indigo.PluginBase):
             except Exception as _e:
                 self.logger.warning(f"\t⚠️  Could not apply Phase 2 settings to the "
                                     f"running handler: {_e}")
+
+            # Claude Code's connection (3.8.0): rewrite ~/.mcp.json at once when
+            # the transport or the auto-configure box changed, rather than at
+            # the next plugin start.
+            if (self._claude_code_setting(values_dict)
+                    != getattr(self, "_applied_claude_code", None)):
+                self._configure_claude_code(values_dict)
 
             # Apply webhook config live (enable/disable + allow-list) — no restart needed
             try:

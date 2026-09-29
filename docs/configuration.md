@@ -9,7 +9,7 @@ Most people never need to change anything here. The plugin sets up the connectio
 
 ## The plugin settings
 
-Open **Plugins → Claude Bridge → Configure**. Every setting except **Auto-configure Claude Code** takes effect when you click **Save**, with no restart. That one takes effect the next time the plugin starts.
+Open **Plugins → Claude Bridge → Configure**. Every setting takes effect when you click **Save**, with no restart.
 
 ### Limits and speed
 
@@ -54,6 +54,7 @@ Only a key with **admin** can create, list or delete webhooks. The [Security](se
 | Setting | What it does |
 |---|---|
 | **Auto-configure Claude Code** | Ticked when you install the plugin. Each time the plugin starts, it copies the go-between script `indigo_mcp_proxy.py` into Indigo's `Scripts` folder, writes your access key into it, and adds an **indigo-mcp** entry to `.mcp.json` and `.claude/settings.json` in your home folder, so Claude Code can connect without you setting anything up. Untick it if you would rather look after those files yourself — [Getting started](getting-started.md#setting-claude-code-up-by-hand) shows how. |
+| **Connect Claude Code** | **Through the go-between script** (the default) or **Straight to Indigo over HTTP**. The script works with every Claude Code and waits for Indigo after the Mac restarts. Over HTTP, Claude Code uses the newest version of the protocol, but if it starts before Indigo's web server it shows **indigo-mcp** as failed until you reconnect it with `/mcp`. Either way your access key stays in the script, which only your account can read: over HTTP, Claude Code asks the script for it each time it connects. This setting changes `.mcp.json` in your home folder. Claude Code's own list, which every other folder uses, is Claude Code's file, so the plugin does not edit it: **Plugins → Claude Bridge → Print MCP Client Connection Information** prints the two Terminal lines that change it to match. |
 
 ## Giving each key its own permissions
 

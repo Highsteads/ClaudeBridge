@@ -5,8 +5,8 @@
 #              with the bearer token patched in, and registers it in ~/.mcp.json
 #              and ~/.claude/settings.json
 # Author:      CliveS & Claude Opus 5.5
-# Date:        25-09-2026
-# Version:     1.2
+# Date:        29-09-2026
+# Version:     1.3
 #
 # Moved out of plugin.py in the 3.0 spring clean so it can be tested against
 # temporary folders. Every path comes in as an argument; nothing here imports
@@ -25,11 +25,22 @@
 #   localhost:8176, so an HTTPS-only or moved web server was unreachable. The
 #   host stays "localhost" when the URL names this Mac; with no usable URL the
 #   old defaults stand.
+#
+# 1.3 (29-09-2026): the ~/.mcp.json entry can point Claude Code straight at
+#   Indigo's web server over HTTP instead of at the proxy (the Configure
+#   setting claude_code_transport). Over HTTP Claude Code speaks MCP
+#   2026-07-28 today; through the proxy it still chooses 2025-06-18. The
+#   HTTP entry carries no access key: its headersHelper runs the deployed
+#   proxy with --headers, so the key stays in that one owner-only file.
+#   user_scope_command() gives the matching `claude mcp add-json -s user`
+#   line, because the user-level entry in ~/.claude.json is Claude Code's own
+#   file, rewritten by every running session, and is not edited from here.
 
 import ipaddress
 import json
 import os
 import re
+import shlex
 import socket
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -37,6 +48,12 @@ from urllib.parse import urlsplit
 
 SERVER_KEY = "indigo-mcp"
 PROXY_NAME = "indigo_mcp_proxy.py"
+MCP_PATH   = "/message/com.clives.indigoplugin.claudebridge/mcp/"
+
+# How Claude Code reaches the plugin: through the proxy script (every Claude
+# Code, and the one that waits out a reboot) or straight over HTTP.
+TRANSPORT_SCRIPT = "script"
+TRANSPORT_HTTP   = "http"
 
 # The line the token is written into. A rename of that line in the proxy would
 # otherwise turn the patch into a silent no-op (see patch_bearer_token). The
@@ -257,11 +274,38 @@ def deploy_proxy(bundle_dir, install_folder, fallback_token: str, logger,
     return patched
 
 
-def update_mcp_json(home, proxy_path: Path, logger) -> bool:
-    """Point the indigo-mcp entry in ~/.mcp.json at the deployed proxy. True
-    when the file changed; other servers in it are left alone."""
+def normalise_transport(value) -> str:
+    """The stored setting as one of the two transports. Anything unknown is
+    the script, which works with every Claude Code."""
+    return TRANSPORT_HTTP if str(value or "").strip().lower() == TRANSPORT_HTTP else TRANSPORT_SCRIPT
+
+
+def mcp_entry(proxy_path: Path, transport: str = TRANSPORT_SCRIPT,
+              web_server_url: Optional[str] = None) -> dict:
+    """The indigo-mcp server entry Claude Code reads, for either transport."""
+    if normalise_transport(transport) == TRANSPORT_HTTP:
+        scheme, host, port = web_server_target(web_server_url)
+        return {
+            "type": "http",
+            "url": f"{scheme}://{host}:{port}{MCP_PATH}",
+            # Quoted: the path has spaces in it (Application Support).
+            "headersHelper": f"python3 {shlex.quote(str(proxy_path))} --headers",
+        }
+    return {"command": "python3", "args": [str(proxy_path)]}
+
+
+def user_scope_command(entry: dict) -> str:
+    """The Terminal line that makes the user-level indigo-mcp entry match."""
+    return f"claude mcp add-json -s user {SERVER_KEY} {shlex.quote(json.dumps(entry))}"
+
+
+def update_mcp_json(home, proxy_path: Path, logger, entry: Optional[dict] = None) -> bool:
+    """Point the indigo-mcp entry in ~/.mcp.json at the deployed proxy, or at
+    the web server over HTTP. True when the file changed; other servers in it
+    are left alone."""
     mcp_json_path = Path(home) / ".mcp.json"
-    entry = {"command": "python3", "args": [str(proxy_path)]}
+    if entry is None:
+        entry = mcp_entry(proxy_path)
     try:
         data = (json.loads(mcp_json_path.read_text(encoding="utf-8"))
                 if mcp_json_path.exists() else {})
@@ -297,7 +341,8 @@ def update_claude_settings(home, logger) -> bool:
 
 def setup_claude_code_integration(logger, *, bundle_dir, install_folder, home,
                                   fallback_token: str = "",
-                                  web_server_url: Optional[str] = None) -> List[str]:
+                                  web_server_url: Optional[str] = None,
+                                  transport: str = TRANSPORT_SCRIPT) -> List[str]:
     """Everything Claude Code needs to connect, with no Terminal steps: the
     proxy in Indigo's Scripts folder with the token and the web server's
     address in it, and the two dotfile entries. Returns the list of things it
@@ -309,8 +354,11 @@ def setup_claude_code_integration(logger, *, bundle_dir, install_folder, home,
     if deploy_proxy(bundle_dir, install_folder, fallback_token, logger,
                     web_server_url=web_server_url):
         changed.append("proxy script")
+    # The proxy is deployed for either transport: over HTTP it is what hands
+    # Claude Code the access key.
     proxy_path = scripts_dir_for(install_folder) / PROXY_NAME
-    if update_mcp_json(home, proxy_path, logger):
+    entry = mcp_entry(proxy_path, transport, web_server_url)
+    if update_mcp_json(home, proxy_path, logger, entry):
         changed.append("~/.mcp.json")
     if update_claude_settings(home, logger):
         changed.append("~/.claude/settings.json")

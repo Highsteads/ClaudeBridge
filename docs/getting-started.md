@@ -100,3 +100,14 @@ You only need this if you unticked **Auto-configure Claude Code**, or you run Cl
    ```
 
 4. Start Claude Code again and check with `/mcp`, as in step 4 above.
+
+### Connecting over HTTP instead
+
+Claude Code can also reach the plugin straight through Indigo's web server, without the go-between script carrying each request. It then uses the newest version of the protocol. The script is still needed, for one small job: Claude Code runs it with `--headers` to fetch your access key, so the key never has to go into Claude Code's settings. On the Indigo Mac, after step 2 above:
+
+```
+claude mcp remove --scope user indigo-mcp
+claude mcp add-json --scope user indigo-mcp '{"type": "http", "url": "http://localhost:8176/message/com.clives.indigoplugin.claudebridge/mcp/", "headersHelper": "python3 '"'"'/Library/Application Support/Perceptive Automation/Scripts/indigo_mcp_proxy.py'"'"' --headers"}'
+```
+
+**Plugins → Claude Bridge → Print MCP Client Connection Information** prints these two lines for your own setup, so you can copy them rather than type them. Choose **Straight to Indigo over HTTP** under **Connect Claude Code** in the plugin's settings as well, so the plugin keeps `.mcp.json` the same way. One thing to know: after the Mac restarts, Claude Code may start before Indigo's web server and show **indigo-mcp** as failed. Type `/mcp` and reconnect it.

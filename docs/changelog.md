@@ -10,6 +10,16 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.8.0 (2026-09-29)
+Claude Code can now connect straight to Indigo over HTTP, and so use the newest version of the protocol today.
+
+- **A new setting, Connect Claude Code.** Through the go-between script, as before, or straight to Indigo over HTTP. Claude Code only uses the newest protocol over HTTP for now, so this is the way to have it. The script stays the default because it works with every Claude Code and waits for Indigo after the Mac restarts. Over HTTP, a Claude Code that starts first shows Indigo as failed until you reconnect it with `/mcp`.
+- **Your access key stays out of Claude Code's settings.** Over HTTP, Claude Code runs the go-between script with `--headers` each time it connects, and the script hands it the key. The key stays in that one file, which only your account can read.
+- **The setting applies when you click Save.** The plugin rewrites `.mcp.json` in your home folder at once, rather than at its next start. **Print MCP Client Connection Information** now ends with the two Terminal lines that change Claude Code's own list, which every other folder uses, to match.
+- **The go-between script is version 1.10.**
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.7.0 (2026-09-29)
 Claude Bridge now speaks the newest version of the protocol Claude uses to talk to it, as well as the one before.
 

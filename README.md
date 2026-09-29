@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.7.0
+**Version:** 3.8.0
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,16 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.8.0 (2026-09-29)
+Claude Code can now connect straight to Indigo over HTTP, and so use the newest version of the protocol today.
+
+- **A new setting, Connect Claude Code.** Through the go-between script, as before, or straight to Indigo over HTTP. Claude Code only uses the newest protocol over HTTP for now, so this is the way to have it. The script stays the default because it works with every Claude Code and waits for Indigo after the Mac restarts. Over HTTP, a Claude Code that starts first shows Indigo as failed until you reconnect it with `/mcp`.
+- **Your access key stays out of Claude Code's settings.** Over HTTP, Claude Code runs the go-between script with `--headers` each time it connects, and the script hands it the key. The key stays in that one file, which only your account can read.
+- **The setting applies when you click Save.** The plugin rewrites `.mcp.json` in your home folder at once, rather than at its next start. **Print MCP Client Connection Information** now ends with the two Terminal lines that change Claude Code's own list, which every other folder uses, to match.
+- **The go-between script is version 1.10.**
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.7.0 (2026-09-29)
 Claude Bridge now speaks the newest version of the protocol Claude uses to talk to it, as well as the one before.
 
@@ -67,13 +77,6 @@ Still 71 tools, 30 of them read-only.
 One fewer warning in the Indigo event log every time a Claude session starts.
 
 - **Claude Code's new first question gets a plain answer.** Newer Claude Code asks every server `server/discover` before it does anything else, a question from the next version of the protocol that Claude Bridge does not speak yet. Claude Bridge turned it away as a request with no session, and Indigo's web server logged `HTTP 400 error for request /message/com.clives.indigoplugin.claudebridge/mcp/` for it, about a dozen times a day here. It now answers "Method not found", the reply that tells Claude Code to carry on the usual way. Nothing else changes: Claude connected fine before and connects the same way now.
-
-Still 71 tools, 30 of them read-only.
-
-### 3.6.0 (2026-09-27)
-The descriptions Claude reads to learn each tool are written without semicolons now.
-
-- **Plainer tool descriptions.** The descriptions of twenty-one tools, `device_history`, `device_control`, `thermostat_control`, `restart_plugin` and `zwave` among them, had twenty-six semicolons between them. They are now full stops, commas or "and". Nothing about what a tool does or needs has changed, and the [Tool reference](https://highsteads.github.io/ClaudeBridge/tools.html), which is built from the same descriptions, reads the same way.
 
 Still 71 tools, 30 of them read-only.
 

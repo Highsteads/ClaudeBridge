@@ -62,8 +62,11 @@ sends no session, and passes Claude Bridge's error codes to Claude Code unchange
 
 Whether Claude Code uses 2026-07-28 is Claude Code's choice, and it turns it on one kind of
 connection at a time. On 29 September 2026 it used it for a server reached over HTTP but not yet
-for one reached through a script like the go-between, so a normal setup still connects the older
-way, and moves over by itself the day Claude Code does.
+for one reached through a script like the go-between. So from 3.8.0 Claude Code can be pointed
+straight at the web server (the **Connect Claude Code** setting). It then sends each request
+itself, and runs the go-between script only as a `headersHelper`, `indigo_mcp_proxy.py --headers`,
+which prints the Authorization header and exits. The access key stays in that one owner-only
+file rather than in `~/.claude.json` or `~/.mcp.json`, which any account on the Mac can read.
 
 ## Project structure
 

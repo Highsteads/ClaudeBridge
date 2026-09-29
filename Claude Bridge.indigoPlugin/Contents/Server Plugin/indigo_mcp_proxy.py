@@ -2,9 +2,16 @@
 # -*- coding: utf-8 -*-
 # Filename:    indigo_mcp_proxy.py
 # Description: stdio-to-HTTP proxy for Indigo MCP Server plugin (no OAuth)
-# Author:      CliveS & Claude Opus 5; Claude Opus 5.5 (1.6 - 1.9)
+# Author:      CliveS & Claude Opus 5; Claude Opus 5.5 (1.6 - 1.10)
 # Date:        29-09-2026
-# Version:     1.9
+# Version:     1.10
+#
+# v1.10 (29-09-2026): `--headers` prints the Authorization header as JSON and
+#   exits, for a Claude Code that connects straight to Indigo over HTTP. Its
+#   headersHelper runs `python3 indigo_mcp_proxy.py --headers`, so the access
+#   key stays in this one owner-only file and never goes into ~/.claude.json
+#   or ~/.mcp.json, which any account on the Mac can read. With no key patched
+#   in it says so on stderr and exits 1, and Claude Code reports the helper.
 #
 # v1.9 (29-09-2026): speaks MCP 2026-07-28 as well as 2025-06-18. A message
 #   whose params._meta names a protocol version is MODERN: the proxy sends the
@@ -653,7 +660,21 @@ def _write_error(req_id, message: str):
     sys.stdout.flush()
 
 
+def print_headers() -> int:
+    """The headers Claude Code's headersHelper needs, as one JSON object."""
+    if not BEARER_TOKEN or BEARER_TOKEN == "REPLACE_AT_INSTALL":
+        sys.stderr.write("indigo_mcp_proxy: no access key has been written into this copy. "
+                         "Claude Bridge does that when it starts; run the copy in Indigo's "
+                         "Scripts folder, not the one inside the plugin.\n")
+        return 1
+    sys.stdout.write(json.dumps({"Authorization": f"Bearer {BEARER_TOKEN}"}) + "\n")
+    sys.stdout.flush()
+    return 0
+
+
 def main():
+    if "--headers" in sys.argv[1:]:
+        sys.exit(print_headers())
     for line in sys.stdin:
         line = line.strip()
         if not line:
