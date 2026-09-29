@@ -10,6 +10,13 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.6.1 (2026-09-29)
+One fewer warning in the Indigo event log every time a Claude session starts.
+
+- **Claude Code's new first question gets a plain answer.** Newer Claude Code asks every server `server/discover` before it does anything else, a question from the next version of the protocol that Claude Bridge does not speak yet. Claude Bridge turned it away as a request with no session, and Indigo's web server logged `HTTP 400 error for request /message/com.clives.indigoplugin.claudebridge/mcp/` for it, about a dozen times a day here. It now answers "Method not found", the reply that tells Claude Code to carry on the usual way. Nothing else changes: Claude connected fine before and connects the same way now.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.6.0 (2026-09-27)
 The descriptions Claude reads to learn each tool are written without semicolons now.
 

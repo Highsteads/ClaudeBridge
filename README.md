@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.6.0
+**Version:** 3.6.1
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,13 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.6.1 (2026-09-29)
+One fewer warning in the Indigo event log every time a Claude session starts.
+
+- **Claude Code's new first question gets a plain answer.** Newer Claude Code asks every server `server/discover` before it does anything else, a question from the next version of the protocol that Claude Bridge does not speak yet. Claude Bridge turned it away as a request with no session, and Indigo's web server logged `HTTP 400 error for request /message/com.clives.indigoplugin.claudebridge/mcp/` for it, about a dozen times a day here. It now answers "Method not found", the reply that tells Claude Code to carry on the usual way. Nothing else changes: Claude connected fine before and connects the same way now.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.6.0 (2026-09-27)
 The descriptions Claude reads to learn each tool are written without semicolons now.
 
@@ -66,16 +73,6 @@ Long lists now come a page at a time, and a new tool reads a variable's history.
 - **`variable_history`.** A variable's history from the SQL Logger, by id or name. The logger writes a row only when the value changes, so the reply also says what the value was when the window opened. With `summary=true` it says how many times the value changed and how long each value held (the way to answer "how long was the heating on today"), with a time-weighted average for a number. A deleted variable's history can still be read by its old id. It reads the database the same careful way `device_history` does, by id range, never scanning a whole table.
 
 71 tools now, 30 of them read-only.
-
-### 3.4.0 (2026-09-25)
-Claude Bridge now keeps a permanent record of every change made through it: each call that needs the write or admin scope, whether it worked, failed or was refused.
-
-- **What each entry says.** When, which access key (by its name from `scopes.json`, never the key itself), the tool, its arguments including the full Python or script it ran, what happened, and how long it took. A background run that outlives its call gets a second entry when it finishes. The tool's reply is never kept.
-- **Secrets are blanked first.** An argument named like a credential, such as a lock's `pin`, is replaced outright, and every credential value Claude Bridge knows about is blanked wherever it appears, inside Python too. If those values cannot be read, the entry leaves the arguments out rather than write them unredacted.
-- **Where it lives.** One file a month in the plugin's folder under Indigo's `Preferences/Plugins`, readable only by the Mac user that runs Indigo. Nothing deletes it. Writing happens on a thread of its own, so it never slows a reply.
-- **Reading it.** Plugins > Claude Bridge > Print Recent Changes puts the last 20 in the event log as plain lines. The new `change_log` tool lets Claude search it by time, tool, key or outcome. It is a read tool, and a key without admin sees it with credential values blanked.
-
-The Security page describes it in full. 70 tools now, 29 of them read-only.
 
 ## Authors & licence
 

@@ -790,8 +790,18 @@ class MCPHandler:
         # this server does not know (the client must initialize again) and 400
         # Bad Request for no session id at all. The JSON-RPC body still names
         # the session, so a client that reads only the body can recover too.
+        #
+        # `server/discover` is exempt too (3.6.1). Claude Code 2.1.28x probes
+        # with it BEFORE initialize, from MCP 2026-07-28, where it replaces the
+        # handshake — so it can never carry a session. Checking it answered
+        # HTTP 400 "Missing Mcp-Session-Id" once per new session, which IWS
+        # logged as a warning (~12 a day). Letting it through reaches the
+        # unknown-method branch: a plain -32601 "Method not found", the reply
+        # that makes Claude Code fall back to initialize (claude-code #97391:
+        # an error that mentions the modern version can wrongly pick it).
         session_id = headers.get("mcp-session-id")
-        if method != "initialize" and not method.startswith("notifications/") and self._sessions:
+        if (method not in ("initialize", "server/discover")
+                and not method.startswith("notifications/") and self._sessions):
             with self._sessions_lock:
                 known = bool(session_id) and session_id in self._sessions
                 if known:

@@ -224,3 +224,23 @@ def test_tools_list_reflects_registry(tmp_path):
     tools = json.loads(resp["content"])["result"]["tools"]
     assert tools == [{"name": "demo_tool", "description": "demo",
                       "inputSchema": {"type": "object"}}]
+
+
+def test_server_discover_probe_is_method_not_found_not_400(tmp_path):
+    # Claude Code 2.1.28x sends server/discover (MCP 2026-07-28) before
+    # initialize, so it never has a session. Measured 29-09-2026: this got
+    # HTTP 400 "Missing Mcp-Session-Id" and a Web Server warning per session.
+    # A 2025-era server should answer a plain -32601, which makes the client
+    # fall back to initialize, and must not mention a protocol version
+    # (claude-code #97391).
+    h = _make_handler(tmp_path)
+    _initialize(h)                                      # sessions exist, as live
+    resp = _post(h, {"jsonrpc": "2.0", "id": "server-discover-probe-1",
+                     "method": "server/discover",
+                     "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}})
+    assert resp["status"] == 200
+    body = json.loads(resp["content"])
+    assert body["id"] == "server-discover-probe-1"
+    assert body["error"]["code"] == -32601
+    assert body["error"]["message"] == "Method not found"
+    assert "2026" not in resp["content"]

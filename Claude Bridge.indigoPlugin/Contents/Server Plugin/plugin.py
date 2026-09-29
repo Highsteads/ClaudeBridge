@@ -3,8 +3,8 @@
 # Filename:    plugin.py
 # Description: Claude Bridge - exposes Indigo to Claude over the Model Context Protocol (MCP)
 # Author:      CliveS & Claude Opus 5.5
-# Date:        27-09-2026
-# Version:     3.6.0
+# Date:        29-09-2026
+# Version:     3.6.1
 
 try:
     import indigo
