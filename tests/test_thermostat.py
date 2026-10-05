@@ -142,3 +142,66 @@ def test_no_readings_means_the_widest_band(rig):
     provider, ns = rig(_Thermostat(heat=None, temps=[]))
     assert provider.set_heat_setpoint(11, 70)["success"] is True
     assert provider.set_heat_setpoint(11, 120)["success"] is False
+
+
+# ── The mode map only names kHvacMode members that exist (3.8.1) ──────────────
+# 3.0 to 3.8.0 built the map from indigo.kHvacMode.ProgramAuto, which Indigo does
+# not have, so EVERY set_hvac_mode call raised AttributeError. The shared stub
+# makes kHvacMode a MagicMock that invents any attribute, which is why nothing
+# noticed. This one has only the members the live Indigo 2025.2 reports.
+
+import pytest
+
+
+class _LiveHvacModes:
+    Off = 0
+    Heat = 1
+    Cool = 2
+    HeatCool = 3
+    ProgramHeat = 4
+    ProgramCool = 5
+    ProgramHeatCool = 6
+
+
+class _FakeThermostat:
+    def __init__(self):
+        self.calls = []
+
+    def setHvacMode(self, device_id, value=None):
+        self.calls.append((device_id, value))
+
+
+@pytest.fixture
+def hvac(monkeypatch):
+    from mcp_server.adapters import indigo_data_provider as idp
+
+    thermostat = _FakeThermostat()
+    monkeypatch.setattr(idp.indigo, "kHvacMode", _LiveHvacModes, raising=False)
+    monkeypatch.setattr(idp.indigo, "thermostat", thermostat, raising=False)
+    monkeypatch.setattr(idp.indigo, "devices", {7: type("D", (), {"name": "Lounge"})()},
+                        raising=False)
+    provider = object.__new__(idp.IndigoDataProvider)
+    provider.logger = type("L", (), {"info": lambda *a, **k: None,
+                                     "error": lambda *a, **k: None})()
+    return provider, thermostat
+
+
+@pytest.mark.parametrize("mode, expected", [
+    ("off", 0), ("heat", 1), ("cool", 2), ("auto", 3), ("heatcool", 3),
+    ("programHeat", 4), ("programCool", 5),
+    ("programHeatCool", 6), ("programAuto", 6), ("program heat cool", 6),
+])
+def test_every_advertised_hvac_mode_reaches_indigo(hvac, mode, expected):
+    provider, thermostat = hvac
+    result = provider.set_hvac_mode(7, mode)
+    assert result["success"] is True, result
+    assert thermostat.calls == [(7, expected)]
+
+
+def test_the_tool_schema_modes_are_all_accepted(hvac):
+    from mcp_server.toolsets.devices import _HVAC_MODES
+
+    provider, thermostat = hvac
+    for mode in _HVAC_MODES:
+        assert provider.set_hvac_mode(7, mode)["success"] is True, mode
+    assert len(thermostat.calls) == len(_HVAC_MODES)

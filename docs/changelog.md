@@ -10,6 +10,14 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.8.1 (2026-10-05)
+Setting a thermostat's mode works again.
+
+- **`thermostat_control` with `hvac_mode` never worked.** Every call failed, whatever mode you asked for, because the list of modes named `ProgramAuto`, which Indigo does not have. Indigo's mode for a programme that both heats and cools is `ProgramHeatCool`. Claude Bridge now sends that. You can ask for it as `programHeatCool`, and `programAuto` still works as another name for it.
+- **A new check for this whole kind of slip.** A test now reads every `indigo.` name the plugin uses and fails if Indigo 2025.2 does not have it. It found this one, and nothing else.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.8.0 (2026-09-29)
 Claude Code can now connect straight to Indigo over HTTP, and so use the newest version of the protocol today.
 

@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.8.0
+**Version:** 3.8.1
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,14 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.8.1 (2026-10-05)
+Setting a thermostat's mode works again.
+
+- **`thermostat_control` with `hvac_mode` never worked.** Every call failed, whatever mode you asked for, because the list of modes named `ProgramAuto`, which Indigo does not have. Indigo's mode for a programme that both heats and cools is `ProgramHeatCool`. Claude Bridge now sends that. You can ask for it as `programHeatCool`, and `programAuto` still works as another name for it.
+- **A new check for this whole kind of slip.** A test now reads every `indigo.` name the plugin uses and fails if Indigo 2025.2 does not have it. It found this one, and nothing else.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.8.0 (2026-09-29)
 Claude Code can now connect straight to Indigo over HTTP, and so use the newest version of the protocol today.
 
@@ -70,13 +78,6 @@ Claude Bridge now speaks the newest version of the protocol Claude uses to talk 
 - **What a new-version client is told when something is wrong.** A version Claude Bridge does not speak comes back with the versions it does, a request missing what the new version requires says so, and a tool call refused by the rate limit, the access key or the delete gate comes back as a tool result marked as an error, so Claude can read why. The [technical notes](https://highsteads.github.io/ClaudeBridge/architecture.html#two-versions-of-the-protocol) list every case.
 - **Plugin Health** now lists the protocol versions and, because new-version clients have no session to count, each one by the name it gives.
 - **The go-between script is version 1.9.** It adds the headers the new version needs, sends no session with it, and hands Claude Code the real error codes rather than a general one.
-
-Still 71 tools, 30 of them read-only.
-
-### 3.6.1 (2026-09-29)
-One fewer warning in the Indigo event log every time a Claude session starts.
-
-- **Claude Code's new first question gets a plain answer.** Newer Claude Code asks every server `server/discover` before it does anything else, a question from the next version of the protocol that Claude Bridge does not speak yet. Claude Bridge turned it away as a request with no session, and Indigo's web server logged `HTTP 400 error for request /message/com.clives.indigoplugin.claudebridge/mcp/` for it, about a dozen times a day here. It now answers "Method not found", the reply that tells Claude Code to carry on the usual way. Nothing else changes: Claude connected fine before and connects the same way now.
 
 Still 71 tools, 30 of them read-only.
 

@@ -571,7 +571,8 @@ def device_control(ctx, device, action, value=None, color=None, red=None, green=
     return result
 
 
-_HVAC_MODES = ["heat", "cool", "auto", "off", "programHeat", "programCool", "programAuto"]
+_HVAC_MODES = ["heat", "cool", "auto", "off", "programHeat", "programCool", "programHeatCool",
+               "programAuto"]
 
 
 @tool("thermostat_control", scope="write", invalidates={"device"},

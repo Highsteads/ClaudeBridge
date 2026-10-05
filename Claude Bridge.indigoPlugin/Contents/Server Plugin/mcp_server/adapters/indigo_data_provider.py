@@ -870,7 +870,11 @@ class IndigoDataProvider:
             "heatcool":    indigo.kHvacMode.HeatCool,
             "programheat": indigo.kHvacMode.ProgramHeat,
             "programcool": indigo.kHvacMode.ProgramCool,
-            "programauto": indigo.kHvacMode.ProgramAuto,
+            # Indigo has no kHvacMode.ProgramAuto (live 2025.2: Off, Heat, Cool,
+            # HeatCool, ProgramHeat, ProgramCool, ProgramHeatCool). "programauto"
+            # stays as the older spelling of the same mode.
+            "programheatcool": indigo.kHvacMode.ProgramHeatCool,
+            "programauto": indigo.kHvacMode.ProgramHeatCool,
         }
         # str() first: this runs OUTSIDE the try below, so a non-string mode
         # (a number, None) raised AttributeError out of the handler instead of
