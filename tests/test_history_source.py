@@ -148,3 +148,65 @@ def test_an_error_reply_is_left_alone(env):
     reply = env.handler.device_history(12345)   # no such table
     assert reply["success"] is False
     assert "db_last_written" not in reply
+
+
+# ── Which SQLite file: the logger's own file setting (3.9.1) ────────────────
+
+@pytest.fixture()
+def where(tmp_path, monkeypatch):
+    """An Indigo-shaped folder with a Logs folder and a SQL Logger preferences file."""
+    from mcp_server.tools.plugin_dev_tools import plugin_dev_tools_handler as mod
+    base = tmp_path / "Indigo 2025.2"
+    (base / "Logs").mkdir(parents=True)
+    prefs = base / "Preferences" / "Plugins"
+    prefs.mkdir(parents=True)
+    monkeypatch.setattr(mod, "_indigo_base", lambda: str(base))
+    monkeypatch.setattr(mod.indigo.server, "getLogsFolderPath", lambda: str(base / "Logs"), raising=False)
+
+    def write_prefs(body):
+        (prefs / mod._SQL_LOGGER_PREFS).write_text(f"<Prefs>{body}</Prefs>", encoding="utf-8")
+
+    class Where:
+        pass
+
+    w = Where()
+    w.mod, w.base, w.write_prefs = mod, base, write_prefs
+    return w
+
+
+def test_a_file_name_is_a_file_in_the_logs_folder(where):
+    where.write_prefs('<sqliteFilePath2 type="string">custom_history.sqlite</sqliteFilePath2>')
+    assert where.mod._sql_logger_db() == str(where.base / "Logs" / "custom_history.sqlite")
+
+
+def test_an_absolute_path_is_used_as_it_stands(where):
+    where.write_prefs('<sqliteFilePath2 type="string">/Volumes/Big/hist &amp; more.sqlite</sqliteFilePath2>')
+    assert where.mod._sql_logger_db() == "/Volumes/Big/hist & more.sqlite"
+
+
+def test_the_old_absolute_setting_is_the_fallback_then_the_standard_name(where):
+    where.write_prefs('<sqliteFilePath type="string">/old/place/hist.sqlite</sqliteFilePath>'
+                      '<sqliteFilePath2 type="string"></sqliteFilePath2>')
+    assert where.mod._sql_logger_db() == "/old/place/hist.sqlite"
+    where.write_prefs('<databaseType type="string">sqlite</databaseType>')
+    assert where.mod._sql_logger_db() == str(where.base / "Logs" / "indigo_history.sqlite")
+
+
+def test_no_preferences_file_means_the_standard_file(where):
+    assert where.mod._sql_logger_db() == str(where.base / "Logs" / "indigo_history.sqlite")
+
+
+def test_device_history_reads_the_custom_file_not_the_standard_one(where):
+    where.write_prefs('<databaseType type="string">sqlite</databaseType>'
+                      '<sqliteFilePath2 type="string">custom_history.sqlite</sqliteFilePath2>')
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
+    for name, watts in (("indigo_history.sqlite", 1.0), ("custom_history.sqlite", 2.0)):
+        conn = sqlite3.connect(str(where.base / "Logs" / name))
+        conn.execute("CREATE TABLE device_history_9 (id INTEGER PRIMARY KEY, ts TIMESTAMP, watts REAL)")
+        conn.execute("INSERT INTO device_history_9 VALUES (1, ?, ?)", (now, watts))
+        conn.commit()
+        conn.close()
+    reply = where.mod.PluginDevToolsHandler(data_provider=None).device_history(9)
+    assert reply["success"] is True
+    assert reply["rows"][0]["watts"] == 2.0

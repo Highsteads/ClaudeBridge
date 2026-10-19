@@ -153,8 +153,37 @@ def _variable_summary(rows, before, start_utc: datetime, now_utc: datetime) -> D
     return out
 
 
+_DEFAULT_SQLITE_FILE = "indigo_history.sqlite"
+
+
+def _sql_logger_pref(key: str) -> Optional[str]:
+    """One value from the SQL Logger's preferences file, or None when the file
+    or the key is missing. Only the key asked for is returned."""
+    try:
+        path = os.path.join(_indigo_base(), "Preferences", "Plugins", _SQL_LOGGER_PREFS)
+        for el in ET.parse(path).getroot().iter():
+            if el.tag == key:
+                return (el.text or "").strip()
+    except Exception:
+        pass
+    return None
+
+
 def _sql_logger_db() -> str:
-    return os.path.join(_indigo_base(), "Logs", "indigo_history.sqlite")
+    """The SQLite file the SQL Logger writes to, resolved as the logger does:
+    its SQLite file setting is used as given when it starts with '/', and is
+    otherwise a name inside the Logs folder. The old absolute-path setting from
+    Indigo 7.1 and earlier is the fallback, and the standard file name the last."""
+    logs = os.path.join(_indigo_base(), "Logs")
+    try:
+        from_indigo = indigo.server.getLogsFolderPath()
+        if isinstance(from_indigo, str) and from_indigo:
+            logs = from_indigo
+    except Exception:
+        pass
+    chosen = _sql_logger_pref("sqliteFilePath2") or _sql_logger_pref("sqliteFilePath") \
+        or _DEFAULT_SQLITE_FILE
+    return chosen if chosen.startswith("/") else os.path.join(logs, chosen)
 
 
 # The SQL Logger's own preferences. Only the databaseType key is read from this
@@ -170,14 +199,8 @@ def _sql_logger_type() -> Optional[str]:
     """The SQL Logger's database type, lower-case ('sqlite', 'postgresql'),
     or None when it cannot be read. Unknown is not a refusal: the caller only
     refuses on a type it can positively see is not SQLite."""
-    try:
-        path = os.path.join(_indigo_base(), "Preferences", "Plugins", _SQL_LOGGER_PREFS)
-        with open(path, encoding="utf-8") as fh:
-            match = re.search(r"<databaseType[^>]*>([^<]*)<", fh.read())
-        value = match.group(1).strip().lower() if match else ""
-        return value or None
-    except Exception:
-        return None
+    value = (_sql_logger_pref("databaseType") or "").lower()
+    return value or None
 
 
 def _db_last_written(db_path: str) -> Optional[datetime]:

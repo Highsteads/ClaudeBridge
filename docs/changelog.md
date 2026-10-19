@@ -10,6 +10,13 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.9.1 (2026-10-19)
+`device_history` and `variable_history` now read the SQLite file you chose.
+
+- **A custom SQLite file is followed.** If you set the SQL Logger's **SQLite file** to another name, or to a full path, the tools still read `Logs/indigo_history.sqlite`. They now work out the file the way the logger does: a name is a file in the Logs folder, and a path that starts with `/` is used as it stands. Thanks to Jon for spotting it.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.9.0 (2026-10-19)
 `device_history` and `variable_history` now read a PostgreSQL SQL Logger.
 

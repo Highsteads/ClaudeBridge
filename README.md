@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.9.0
+**Version:** 3.9.1
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,13 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.9.1 (2026-10-19)
+`device_history` and `variable_history` now read the SQLite file you chose.
+
+- **A custom SQLite file is followed.** If you set the SQL Logger's **SQLite file** to another name, or to a full path, the tools still read `Logs/indigo_history.sqlite`. They now work out the file the way the logger does: a name is a file in the Logs folder, and a path that starts with `/` is used as it stands. Thanks to Jon for spotting it.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.9.0 (2026-10-19)
 `device_history` and `variable_history` now read a PostgreSQL SQL Logger.
 
@@ -69,14 +76,6 @@ Still 71 tools, 30 of them read-only.
 
 - **A PostgreSQL SQL Logger now gets an error, not an empty answer.** The two tools read only the SQLite database. After a switch to PostgreSQL the old `indigo_history.sqlite` stays in the Logs folder, and the tools read that: they said "success" with no rows, so Claude took a device that had been changing for days to be still. The plugin now reads the SQL Logger's database type first, and when it is not SQLite it says so and reads nothing. The PostgreSQL password in those settings is never read or shown.
 - **Every answer now says when the history file was last written** (`db_last_written`), and warns (`db_stale`) when that was more than an hour ago, so an empty window cannot pass for "nothing changed".
-
-Still 71 tools, 30 of them read-only.
-
-### 3.8.1 (2026-10-05)
-Setting a thermostat's mode works again.
-
-- **`thermostat_control` with `hvac_mode` never worked.** Every call failed, whatever mode you asked for, because the list of modes named `ProgramAuto`, which Indigo does not have. Indigo's mode for a programme that both heats and cools is `ProgramHeatCool`. Claude Bridge now sends that. You can ask for it as `programHeatCool`, and `programAuto` still works as another name for it.
-- **A new check for this whole kind of slip.** A test now reads every `indigo.` name the plugin uses and fails if Indigo 2025.2 does not have it. It found this one, and nothing else.
 
 Still 71 tools, 30 of them read-only.
 
