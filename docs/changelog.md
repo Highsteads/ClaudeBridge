@@ -10,6 +10,14 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.8.2 (2026-10-19)
+`device_history` and `variable_history` no longer give a wrong answer when the SQL Logger uses PostgreSQL.
+
+- **A PostgreSQL SQL Logger now gets an error, not an empty answer.** The two tools read only the SQLite database. After a switch to PostgreSQL the old `indigo_history.sqlite` stays in the Logs folder, and the tools read that: they said "success" with no rows, so Claude took a device that had been changing for days to be still. The plugin now reads the SQL Logger's database type first, and when it is not SQLite it says so and reads nothing. The PostgreSQL password in those settings is never read or shown.
+- **Every answer now says when the history file was last written** (`db_last_written`), and warns (`db_stale`) when that was more than an hour ago, so an empty window cannot pass for "nothing changed".
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.8.1 (2026-10-05)
 Setting a thermostat's mode works again.
 

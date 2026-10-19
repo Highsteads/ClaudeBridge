@@ -9,7 +9,7 @@
 #              the plugin bundle and Indigo SQL Logger sqlite database.
 # Author:      CliveS & Claude Opus 4.7
 # Date:        25-09-2026
-# Version:     1.1 (3.5.0: variable_history)
+# Version:     1.2 (3.8.2: refuse a non-SQLite SQL Logger, report db_last_written)
 #
 # All filesystem paths are derived at call time:
 #   - installed plugin:  indigo.server.getInstallFolderPath() / Plugins / <name>.indigoPlugin
@@ -154,6 +154,77 @@ def _variable_summary(rows, before, start_utc: datetime, now_utc: datetime) -> D
 
 def _sql_logger_db() -> str:
     return os.path.join(_indigo_base(), "Logs", "indigo_history.sqlite")
+
+
+# The SQL Logger's own preferences. Only the databaseType key is read from this
+# file: it also holds the PostgreSQL password, which must never reach a reply.
+_SQL_LOGGER_PREFS = "com.perceptiveautomation.indigoplugin.sql-logger.indiPref"
+
+# A busy house writes to the history database every few seconds. One that has
+# not been written for this long is not the database the logger is using.
+_DB_STALE_SECONDS = 3600
+
+
+def _sql_logger_type() -> Optional[str]:
+    """The SQL Logger's database type, lower-case ('sqlite', 'postgresql'),
+    or None when it cannot be read. Unknown is not a refusal: the caller only
+    refuses on a type it can positively see is not SQLite."""
+    try:
+        path = os.path.join(_indigo_base(), "Preferences", "Plugins", _SQL_LOGGER_PREFS)
+        with open(path, encoding="utf-8") as fh:
+            match = re.search(r"<databaseType[^>]*>([^<]*)<", fh.read())
+        value = match.group(1).strip().lower() if match else ""
+        return value or None
+    except Exception:
+        return None
+
+
+def _db_last_written(db_path: str) -> Optional[datetime]:
+    """When the history database was last written (UTC): the newer of the file
+    and its write-ahead log, which takes the writes first."""
+    newest = None
+    for candidate in (db_path, db_path + "-wal"):
+        try:
+            mtime = os.path.getmtime(candidate)
+        except OSError:
+            continue
+        newest = mtime if newest is None else max(newest, mtime)
+    if newest is None:
+        return None
+    return datetime.fromtimestamp(newest, tz=timezone.utc).replace(tzinfo=None)
+
+
+def _history_source_refusal(db_type: Optional[str]) -> Optional[Dict[str, Any]]:
+    """An error reply when the SQL Logger is positively not using SQLite."""
+    if db_type is None or db_type == "sqlite":
+        return None
+    shown = "PostgreSQL" if db_type.startswith("postgres") else f"'{db_type}'"
+    return {"success": False,
+            "sql_logger_type": db_type,
+            "error": (f"The SQL Logger is set to {shown}, and this tool reads only the "
+                      f"SQLite database. Any indigo_history.sqlite left in the Logs folder "
+                      f"is old and no longer written to, so reading it would give wrong "
+                      f"answers. Query {shown} directly for this history.")}
+
+
+def _note_db_freshness(result: Dict[str, Any], db_path: str) -> Dict[str, Any]:
+    """Say when the database was last written, and warn when it looks abandoned,
+    so an empty window can never pass for 'nothing changed'."""
+    if not isinstance(result, dict) or not result.get("success"):
+        return result
+    written = _db_last_written(db_path)
+    if written is None:
+        return result
+    result["db_last_written"] = _utc_text_to_local(written.isoformat(sep=" "))
+    age = (datetime.now(timezone.utc).replace(tzinfo=None) - written).total_seconds()
+    if age > _DB_STALE_SECONDS:
+        result["db_stale"] = True
+        result["warning"] = (
+            f"The history database was last written {result['db_last_written']} "
+            f"(local), about {int(age // 3600)} hours ago. If the SQL Logger has been "
+            f"switched to another database, this file is out of date and an empty "
+            f"result does not mean nothing changed.")
+    return result
 
 def _github_root() -> str:
     """Best-effort: the user's GitHub clone root.
@@ -1098,6 +1169,18 @@ class PluginDevToolsHandler(BaseToolHandler):
                        limit: int = 500,
                        columns: Optional[List[str]] = None,
                        summary: bool = False) -> Dict[str, Any]:
+        """Device history from the SQLite SQL Logger. Refuses when the logger
+        is set to another database, and says when the file was last written."""
+        refusal = _history_source_refusal(_sql_logger_type())
+        if refusal:
+            return refusal
+        result = self._device_history_impl(device_id, hours, limit, columns, summary)
+        return _note_db_freshness(result, _sql_logger_db())
+
+    def _device_history_impl(self, device_id, hours: int = 24,
+                       limit: int = 500,
+                       columns: Optional[List[str]] = None,
+                       summary: bool = False) -> Dict[str, Any]:
         """
         Read recent history rows for a single device from the SQL Logger
         sqlite database. Returns timestamp + non-null state columns.
@@ -1288,6 +1371,16 @@ class PluginDevToolsHandler(BaseToolHandler):
     # ════════════════════════════════════════════════════════════════════════
 
     def variable_history(self, variable_id, hours: int = 24, limit: int = 500,
+                         summary: bool = False, name: Optional[str] = None) -> Dict[str, Any]:
+        """Variable history from the SQLite SQL Logger. Refuses when the logger
+        is set to another database, and says when the file was last written."""
+        refusal = _history_source_refusal(_sql_logger_type())
+        if refusal:
+            return refusal
+        result = self._variable_history_impl(variable_id, hours, limit, summary, name)
+        return _note_db_freshness(result, _sql_logger_db())
+
+    def _variable_history_impl(self, variable_id, hours: int = 24, limit: int = 500,
                          summary: bool = False, name: Optional[str] = None) -> Dict[str, Any]:
         """
         Read one variable's history from the SQL Logger sqlite database.

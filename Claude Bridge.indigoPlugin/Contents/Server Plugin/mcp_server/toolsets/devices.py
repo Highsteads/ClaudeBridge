@@ -434,14 +434,14 @@ def get_device_by_name(ctx, name, detail=None):
 
 @tool("device_history", scope="read",
       description=("Read recent SQL Logger history for one device, from the SQLite SQL Logger "
-                   "database (a PostgreSQL SQL Logger is not read). Returns timestamp + "
+                   "database (a PostgreSQL SQL Logger gets an error). Returns timestamp + "
                    "non-null state columns. Column names are stored LOWERCASE (batterysoc, not "
                    "batterySoc). An unknown name is an error listing the valid columns. Rows are "
                    "sparse — only changed values are written, so forward-fill before deriving "
                    "trends. `limit` caps rows from the NEWEST end, so on a chatty device it can "
                    "cut the window far shorter than `hours` — check `truncated` and the "
                    "`ts_oldest`/`ts_newest` span before concluding anything about earlier "
-                   "events."),
+                   "events. The reply gives `db_last_written`, and `db_stale` with a warning when the file has not been written for an hour."),
       properties={
           "device_id": id_or_name("The device ID"),
           "hours": number("Lookback in hours (default 24)"),

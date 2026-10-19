@@ -41,7 +41,7 @@ def get_variable_by_id(ctx, variable_id):
 
 @tool("variable_history", scope="read",
       description=("One variable's history from the SQLite SQL Logger (a PostgreSQL SQL "
-                   "Logger is not read). The logger writes a row only when the value changes, "
+                   "Logger gets an error). The logger writes a row only when the value changes, "
                    "so the reply also gives value_before: the value in force when the window "
                    "opened. Rows are newest first with ts in local time, and limit caps them from "
                    "the newest end, so check truncated and ts_oldest. summary=true instead "
@@ -49,7 +49,8 @@ def get_variable_by_id(ctx, variable_id):
                    "and how long it held in the window (share_of_window), plus min, max and a "
                    "time-weighted mean when every value is a number — the way to answer 'how "
                    "long was it true today'. A deleted variable's history can still be read by "
-                   "its old id."),
+                   "its old id. The reply gives `db_last_written`, and `db_stale` with a warning "
+                   "when the file has not been written for an hour."),
       properties={
           "variable": id_or_name("The variable: its id, or its exact name (a name is matched "
                                  "ignoring case if there is no exact match)"),

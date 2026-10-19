@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.8.1
+**Version:** 3.8.2
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,14 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.8.2 (2026-10-19)
+`device_history` and `variable_history` no longer give a wrong answer when the SQL Logger uses PostgreSQL.
+
+- **A PostgreSQL SQL Logger now gets an error, not an empty answer.** The two tools read only the SQLite database. After a switch to PostgreSQL the old `indigo_history.sqlite` stays in the Logs folder, and the tools read that: they said "success" with no rows, so Claude took a device that had been changing for days to be still. The plugin now reads the SQL Logger's database type first, and when it is not SQLite it says so and reads nothing. The PostgreSQL password in those settings is never read or shown.
+- **Every answer now says when the history file was last written** (`db_last_written`), and warns (`db_stale`) when that was more than an hour ago, so an empty window cannot pass for "nothing changed".
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.8.1 (2026-10-05)
 Setting a thermostat's mode works again.
 
@@ -67,17 +75,6 @@ Claude Code can now connect straight to Indigo over HTTP, and so use the newest 
 - **Your access key stays out of Claude Code's settings.** Over HTTP, Claude Code runs the go-between script with `--headers` each time it connects, and the script hands it the key. The key stays in that one file, which only your account can read.
 - **The setting applies when you click Save.** The plugin rewrites `.mcp.json` in your home folder at once, rather than at its next start. **Print MCP Client Connection Information** now ends with the two Terminal lines that change Claude Code's own list, which every other folder uses, to match.
 - **The go-between script is version 1.10.**
-
-Still 71 tools, 30 of them read-only.
-
-### 3.7.0 (2026-09-29)
-Claude Bridge now speaks the newest version of the protocol Claude uses to talk to it, as well as the one before.
-
-- **MCP 2026-07-28.** The newest version has no opening handshake and no session: every request says which version it speaks and what the client can do. Claude Bridge answers those requests as the new version requires, and still answers the older kind exactly as before, so every existing setup carries on unchanged. A client asks first with `server/discover` and is told both versions, what Claude Bridge offers, and its name and version.
-- **Tested with Claude Code itself.** Pointed at Claude Bridge over HTTP, Claude Code 2.1.284 chose the new version and used tools, prompts and resources with it. Through the go-between script it still chose the older one on the day, which is Claude Code's decision. The script is ready for the day that changes.
-- **What a new-version client is told when something is wrong.** A version Claude Bridge does not speak comes back with the versions it does, a request missing what the new version requires says so, and a tool call refused by the rate limit, the access key or the delete gate comes back as a tool result marked as an error, so Claude can read why. The [technical notes](https://highsteads.github.io/ClaudeBridge/architecture.html#two-versions-of-the-protocol) list every case.
-- **Plugin Health** now lists the protocol versions and, because new-version clients have no session to count, each one by the name it gives.
-- **The go-between script is version 1.9.** It adds the headers the new version needs, sends no session with it, and hands Claude Code the real error codes rather than a general one.
 
 Still 71 tools, 30 of them read-only.
 
