@@ -55,7 +55,7 @@ Claude Bridge gives Claude **71 tools**, enough to read and change almost anythi
 ## The event log and history
 
 - **Search the event log** by words, by plugin, by errors or warnings, or by time — including entries older than the Indigo window shows, because it reads the log files themselves.
-- **A device's history**, and **a variable's history**, from Indigo's SQL Logger when it uses SQLite, its standard database. For a variable Claude can say how long each value held, which answers questions such as "how long was the heating on today".
+- **A device's history**, and **a variable's history**, from Indigo's SQL Logger, whether it uses SQLite (its standard database) or PostgreSQL. For a variable Claude can say how long each value held, which answers questions such as "how long was the heating on today".
 
 ## Checking the system
 
@@ -89,6 +89,6 @@ Any Indigo plugin can add tools of its own. The plugin finds them by itself and 
 
 - **Claude cannot create a trigger or a schedule**, or change the steps and conditions of an existing one. It can read them all, and change an automation's name and description and what a trigger watches. The rest you do in Indigo.
 - **It cannot see inside an action group to judge it.** A write key can run any action group, whatever that group does.
-- **It reads the SQL Logger only when that uses SQLite.**
+- **It reads the SQL Logger when that uses SQLite or PostgreSQL**, and nothing else. For PostgreSQL it needs the SQL Logger plugin installed, because it uses that plugin's driver.
 - **It deletes nothing unless you let it.** Deleting a device, variable, automation or folder needs **admin** and the delete setting switched on — see [How it works](how-it-works.md#deleting-needs-two-yeses).
 - **It checks, but you decide.** Read what Claude has written and try the change. The point of the plugin is that checking is one question away.

@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.8.2
+**Version:** 3.9.0
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,18 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.9.0 (2026-10-19)
+`device_history` and `variable_history` now read a PostgreSQL SQL Logger.
+
+- **PostgreSQL history works.** Before, the two tools read only the SQLite database, and 3.8.2 made a PostgreSQL logger give an error. Now they read the PostgreSQL database itself, with the same answers as for SQLite: rows, a summary, and for a variable the value before the window and how long each value held.
+- **No extra package.** The tools use the PostgreSQL driver the SQL Logger plugin already carries, so Claude Bridge adds nothing to your Mac. The driver is the one the logger writes with, so a server the logger can log to is one the tools can read. It needs the SQL Logger plugin installed, which it must be for the history to exist.
+- **The login comes from the SQL Logger's own settings.** If those are missing, or the server refuses them, Claude Bridge tries its own: the `CLAUDEBRIDGE_PG_` keys in `IndigoSecrets.py`, then four new **History database** fields in the plugin's settings. A reply says which one it used. The password is never shown, in a reply or in an error.
+- **Times are right whatever zone the server runs in.** The logger's PostgreSQL table stores each time in the server's own zone with no zone label, where SQLite stores UTC. The tools convert in the database, then to your local time, and the tests check three different server zones.
+- **Read-only, and bounded.** The connection refuses any write, a statement that runs past 15 seconds is cancelled, and a summary is cancelled after 5.
+- **Tested on a real PostgreSQL 16**, not only a stand-in. `tests/test_history_postgres_live.py` repeats that test on any server you point it at.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.8.2 (2026-10-19)
 `device_history` and `variable_history` no longer give a wrong answer when the SQL Logger uses PostgreSQL.
 
@@ -65,16 +77,6 @@ Setting a thermostat's mode works again.
 
 - **`thermostat_control` with `hvac_mode` never worked.** Every call failed, whatever mode you asked for, because the list of modes named `ProgramAuto`, which Indigo does not have. Indigo's mode for a programme that both heats and cools is `ProgramHeatCool`. Claude Bridge now sends that. You can ask for it as `programHeatCool`, and `programAuto` still works as another name for it.
 - **A new check for this whole kind of slip.** A test now reads every `indigo.` name the plugin uses and fails if Indigo 2025.2 does not have it. It found this one, and nothing else.
-
-Still 71 tools, 30 of them read-only.
-
-### 3.8.0 (2026-09-29)
-Claude Code can now connect straight to Indigo over HTTP, and so use the newest version of the protocol today.
-
-- **A new setting, Connect Claude Code.** Through the go-between script, as before, or straight to Indigo over HTTP. Claude Code only uses the newest protocol over HTTP for now, so this is the way to have it. The script stays the default because it works with every Claude Code and waits for Indigo after the Mac restarts. Over HTTP, a Claude Code that starts first shows Indigo as failed until you reconnect it with `/mcp`.
-- **Your access key stays out of Claude Code's settings.** Over HTTP, Claude Code runs the go-between script with `--headers` each time it connects, and the script hands it the key. The key stays in that one file, which only your account can read.
-- **The setting applies when you click Save.** The plugin rewrites `.mcp.json` in your home folder at once, rather than at its next start. **Print MCP Client Connection Information** now ends with the two Terminal lines that change Claude Code's own list, which every other folder uses, to match.
-- **The go-between script is version 1.10.**
 
 Still 71 tools, 30 of them read-only.
 

@@ -204,6 +204,15 @@ AXLE_SUPPORT_EMAIL = ""
 # ============================
 CLAUDEBRIDGE_BEARER_TOKEN = ""
 
+# Claude Bridge - PostgreSQL history login (optional)
+# Used only when the SQL Logger is set to PostgreSQL AND its own settings are
+# missing or refuse the login. The SQL Logger's settings are tried first.
+# CLAUDEBRIDGE_PG_HOST - "host" or "host:port" (port 5432 when left off)
+CLAUDEBRIDGE_PG_HOST     = ""
+CLAUDEBRIDGE_PG_DATABASE = ""
+CLAUDEBRIDGE_PG_USER     = ""
+CLAUDEBRIDGE_PG_PASSWORD = ""
+
 # ============================
 # Indigo REST API client config
 # Required by: Dashboards plugin (HTML pages served from IWS).

@@ -5,15 +5,23 @@
         <Label>CREDENTIALS &amp; PRIVATE VALUES</Label>
     </Field>
     <Field id="secrets_policy_help" type="label" fontSize="small" alignWithControl="false" alignText="left">
-        <Label>This plugin has no credential fields. The two private values it can use
-are read from the master IndigoSecrets.py at
-/Library/Application Support/Perceptive Automation/IndigoSecrets.py:
+        <Label>The private values this plugin can use are read from the master
+IndigoSecrets.py at
+/Library/Application Support/Perceptive Automation/IndigoSecrets.py.
+The History database fields below are the fallback for the CLAUDEBRIDGE_PG_
+keys, and are needed only for a PostgreSQL SQL Logger:
 
   CLAUDEBRIDGE_BEARER_TOKEN - the IWS bearer token patched into the MCP proxy,
                               used only when Indigo's own Preferences/secrets.json
                               has no local secret (that file is read first)
   WEBHOOK_ALLOWLIST         - extra webhook hosts, added to the
                               Egress allow-list field below (optional)
+  CLAUDEBRIDGE_PG_HOST,
+  CLAUDEBRIDGE_PG_DATABASE,
+  CLAUDEBRIDGE_PG_USER,
+  CLAUDEBRIDGE_PG_PASSWORD  - a PostgreSQL login for the history tools, used
+                              only when the SQL Logger's own settings are
+                              missing or refuse it (optional)
 
 No Anthropic API key is needed: Claude Code uses your own Claude account.</Label>
     </Field>
@@ -95,6 +103,31 @@ No Anthropic API key is needed: Claude Code uses your own Claude account.</Label
             <Option value="40">Error Messages</Option>
             <Option value="50">Critical Errors Only</Option>
         </List>
+    </Field>
+
+    <Field id="separator_history_pg" type="separator"/>
+
+    <!-- PostgreSQL history login: fallback only -->
+    <Field id="history_pg_label" type="label" fontSize="regular" alignWithControl="false" alignText="left">
+        <Label>HISTORY DATABASE (POSTGRESQL ONLY)</Label>
+    </Field>
+    <Field id="history_pg_help" type="label" fontSize="small" alignWithControl="false">
+        <Label>Only for a SQL Logger set to PostgreSQL. device_history and variable_history use the SQL Logger's own PostgreSQL settings first. Fill these in only if those are missing or refuse the login. Leave them blank otherwise.</Label>
+    </Field>
+    <Field id="history_pg_host" type="textfield" defaultValue="">
+        <Label>Host:</Label>
+    </Field>
+    <Field id="history_pg_host_help" type="label" fontSize="small" alignWithControl="false">
+        <Label>A host name or address, or host:port. The port is 5432 if you leave it off.</Label>
+    </Field>
+    <Field id="history_pg_database" type="textfield" defaultValue="">
+        <Label>Database:</Label>
+    </Field>
+    <Field id="history_pg_user" type="textfield" defaultValue="">
+        <Label>User:</Label>
+    </Field>
+    <Field id="history_pg_password" type="textfield" defaultValue="" secure="true">
+        <Label>Password:</Label>
     </Field>
 
     <Field id="separator_deletes" type="separator"/>

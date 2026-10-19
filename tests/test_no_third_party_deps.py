@@ -23,6 +23,10 @@ _ALLOWED = {
     "indigo",
     "mcp_server", "plugin_utils", "indigo_mcp_proxy",
     "IndigoSecrets", "conftest",
+    # The SQL Logger's own PostgreSQL driver, imported from the installed SQL
+    # Logger bundle (history_postgres.load_driver), so nothing is bundled here.
+    # Allowed in that one file only: see the test at the end of this module.
+    "indigologger",
 }
 
 # The packages the old requirements.txt installed, plus the two transitive ones
@@ -91,3 +95,12 @@ def test_the_scan_can_fail():
         os.unlink(tmp)
     assert {"anthropic", "pydantic"} <= names
     assert not ({"anthropic", "pydantic"} & set(sys.stdlib_module_names))
+
+
+def test_the_sql_logger_driver_is_imported_by_one_file_only():
+    users = []
+    for path in _bundle_sources():
+        for name, _line in _top_level_imports(path):
+            if name == "indigologger":
+                users.append(os.path.basename(path))
+    assert users == ["history_postgres.py"], users

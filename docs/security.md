@@ -132,8 +132,12 @@ states:
   the event log, which can hold whatever a plugin or script chose to write to it.
 - **Device and variable history.** `device_history` and `variable_history` read the SQL
   Logger's history database, including the history of a variable that has since been deleted.
-  They work only with the SQLite SQL Logger, and an install that logs to PostgreSQL gets an error
-  instead.
+  With a PostgreSQL SQL Logger they log in to that database. They take the login from the SQL
+  Logger's own settings first, then from the `CLAUDEBRIDGE_PG_` keys in `IndigoSecrets.py`, then from
+  the plugin's History database settings. Only the four PostgreSQL values are read from the logger's
+  settings file, and the password is never put in a reply, an error or the Event Log. The connection
+  refuses any write, cancels a statement that runs past 15 seconds, and each reply says which source
+  gave the login. The login needs only permission to read the history tables.
 
 For a key **without admin**, the script text, the embedded automation scripts and the event log
 lines have every credential value Claude Bridge knows about replaced with a marker such as

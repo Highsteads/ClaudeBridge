@@ -49,6 +49,17 @@ Only a key with **admin** can create, list or delete webhooks. The [Security](se
 |---|---|
 | **Allow Claude to delete devices, variables and automations** | Off when you install the plugin. While it is off, Claude cannot delete a device, variable, trigger, schedule, action group or folder, whatever key it has, and the refusal goes in the Event Log. Turning it on is not enough by itself — each delete must also be confirmed in the request. Leave it off unless you are tidying up, and turn it off again afterwards. Deleting a script is not covered, because that only moves the script to a `_backups/_archived` folder, where you can get it back. |
 
+### History database (PostgreSQL only)
+
+Leave these blank unless your SQL Logger uses PostgreSQL **and** `device_history` and `variable_history` cannot log in with the SQL Logger's own settings, which they try first.
+
+| Setting | What it does |
+|---|---|
+| **Host** | The PostgreSQL server, as a name or address, or `host:port`. The port is 5432 if you leave it off. |
+| **Database** | The database the SQL Logger writes to, `indigo_history` unless you changed it. |
+| **User** | The PostgreSQL user. |
+| **Password** | That user's password. It is kept in this plugin's settings, which Indigo stores in plain text, so a better place is `IndigoSecrets.py` (below), which is read first. |
+
 ### Claude Code
 
 | Setting | What it does |
@@ -86,11 +97,12 @@ Until the file exists, every key has every permission. Once it exists, a key the
 
 ## The credentials file
 
-Every one of my Indigo plugins can read private values from one shared file, `IndigoSecrets.py`, so you keep them in one place. Claude Bridge has no password fields of its own and reads just two values from that file, both optional:
+Every one of my Indigo plugins can read private values from one shared file, `IndigoSecrets.py`, so you keep them in one place. Claude Bridge reads these values from that file, all optional. Its one password field, in the History database settings, is only the fallback for the `CLAUDEBRIDGE_PG_` values:
 
 | Name in the file | What it is for |
 |---|---|
 | `CLAUDEBRIDGE_BEARER_TOKEN` | The access key to write into the go-between script. The plugin uses it only when Indigo's own `secrets.json` has no key in it, because that file is read first. |
+| `CLAUDEBRIDGE_PG_HOST`, `CLAUDEBRIDGE_PG_DATABASE`, `CLAUDEBRIDGE_PG_USER`, `CLAUDEBRIDGE_PG_PASSWORD` | A PostgreSQL login for the history tools, used only when the SQL Logger is set to PostgreSQL and its own settings are missing or refuse the login. `CLAUDEBRIDGE_PG_HOST` may carry a port as `host:port`. They take priority over the **History database** settings. |
 | `WEBHOOK_ALLOWLIST` | Extra places event webhooks may send to, as a list such as `["hooks.example.com"]`. They are added to the **Egress allow-list** in the settings, not used instead of it. |
 
 If you do not have the file yet:

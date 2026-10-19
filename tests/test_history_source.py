@@ -1,12 +1,13 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 # Filename:    test_history_source.py
-# Description: device_history and variable_history read only the SQLite SQL
-#              Logger. When the logger is set to PostgreSQL they must refuse
-#              (an old indigo_history.sqlite left behind used to answer with
-#              success and no rows), say when the file was last written, and
-#              warn when it looks abandoned. The PostgreSQL password sits in
-#              the same preferences file and must never reach a reply.
+# Description: device_history and variable_history read SQLite or PostgreSQL,
+#              whichever the SQL Logger uses. They must never answer a
+#              PostgreSQL logger from the old indigo_history.sqlite left behind
+#              (it used to say success with no rows), must refuse any other
+#              database, say when the SQLite file was last written, and warn
+#              when it looks abandoned. The PostgreSQL password sits in the
+#              same preferences file and must never reach a reply.
 # Author:      CliveS & Claude Sonnet 5.5
 # Date:        19-10-2026
 # Version:     1.0
@@ -74,20 +75,37 @@ def test_missing_preferences_are_unknown_not_a_refusal(env):
     lambda h: h.variable_history(5),
     lambda h: h.variable_history(5, summary=True),
 ])
-def test_postgresql_is_refused_without_opening_the_sqlite_file(env, monkeypatch, call):
-    env.set_type("postgresql")
+def test_a_database_that_is_neither_sqlite_nor_postgresql_is_refused_unread(env, monkeypatch, call):
+    env.set_type("mysql")
     _never_open(monkeypatch, env.mod)
     reply = call(env.handler)
     assert reply["success"] is False
-    assert reply["sql_logger_type"] == "postgresql"
-    assert "PostgreSQL" in reply["error"]
+    assert reply["sql_logger_type"] == "mysql"
     assert "rows" not in reply and "row_count" not in reply
 
 
 def test_the_refusal_never_carries_the_password(env):
-    env.set_type("postgresql")
+    env.set_type("mysql")
     reply = env.handler.device_history(9)
     assert PASSWORD not in repr(reply)
+
+
+@pytest.mark.parametrize("call", [
+    lambda h: h.device_history(9),
+    lambda h: h.variable_history(5),
+])
+def test_postgresql_never_falls_back_to_the_stale_sqlite_file(env, monkeypatch, call):
+    """The 3.8.1 fault: a PostgreSQL logger was answered from a leftover file."""
+    env.set_type("postgresql")
+    _never_open(monkeypatch, env.mod)
+
+    def down():
+        raise env.mod._pgh.HistoryDbUnavailable("no PostgreSQL settings")
+    monkeypatch.setattr(env.mod, "_pg_connect", down)
+    reply = call(env.handler)
+    assert reply["success"] is False
+    assert reply["sql_logger_type"] == "postgresql"
+    assert "rows" not in reply and "row_count" not in reply
 
 
 def test_sqlite_is_read_as_before_and_reports_when_it_was_written(env):

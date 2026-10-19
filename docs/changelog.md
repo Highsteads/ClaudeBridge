@@ -10,6 +10,18 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.9.0 (2026-10-19)
+`device_history` and `variable_history` now read a PostgreSQL SQL Logger.
+
+- **PostgreSQL history works.** Before, the two tools read only the SQLite database, and 3.8.2 made a PostgreSQL logger give an error. Now they read the PostgreSQL database itself, with the same answers as for SQLite: rows, a summary, and for a variable the value before the window and how long each value held.
+- **No extra package.** The tools use the PostgreSQL driver the SQL Logger plugin already carries, so Claude Bridge adds nothing to your Mac. The driver is the one the logger writes with, so a server the logger can log to is one the tools can read. It needs the SQL Logger plugin installed, which it must be for the history to exist.
+- **The login comes from the SQL Logger's own settings.** If those are missing, or the server refuses them, Claude Bridge tries its own: the `CLAUDEBRIDGE_PG_` keys in `IndigoSecrets.py`, then four new **History database** fields in the plugin's settings. A reply says which one it used. The password is never shown, in a reply or in an error.
+- **Times are right whatever zone the server runs in.** The logger's PostgreSQL table stores each time in the server's own zone with no zone label, where SQLite stores UTC. The tools convert in the database, then to your local time, and the tests check three different server zones.
+- **Read-only, and bounded.** The connection refuses any write, a statement that runs past 15 seconds is cancelled, and a summary is cancelled after 5.
+- **Tested on a real PostgreSQL 16**, not only a stand-in. `tests/test_history_postgres_live.py` repeats that test on any server you point it at.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.8.2 (2026-10-19)
 `device_history` and `variable_history` no longer give a wrong answer when the SQL Logger uses PostgreSQL.
 

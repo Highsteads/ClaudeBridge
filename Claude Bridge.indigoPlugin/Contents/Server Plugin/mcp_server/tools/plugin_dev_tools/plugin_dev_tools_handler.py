@@ -9,7 +9,7 @@
 #              the plugin bundle and Indigo SQL Logger sqlite database.
 # Author:      CliveS & Claude Opus 4.7
 # Date:        25-09-2026
-# Version:     1.2 (3.8.2: refuse a non-SQLite SQL Logger, report db_last_written)
+# Version:     1.3 (3.9.0: read a PostgreSQL SQL Logger; 3.8.2: db_last_written)
 #
 # All filesystem paths are derived at call time:
 #   - installed plugin:  indigo.server.getInstallFolderPath() / Plugins / <name>.indigoPlugin
@@ -38,6 +38,7 @@ except ImportError:
     pass
 
 from ..base_handler import BaseToolHandler, CallerError
+from . import history_postgres as _pgh
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
@@ -195,16 +196,178 @@ def _db_last_written(db_path: str) -> Optional[datetime]:
 
 
 def _history_source_refusal(db_type: Optional[str]) -> Optional[Dict[str, Any]]:
-    """An error reply when the SQL Logger is positively not using SQLite."""
-    if db_type is None or db_type == "sqlite":
+    """An error reply when the SQL Logger uses a database this tool cannot read."""
+    if db_type is None or db_type == "sqlite" or db_type.startswith("postgres"):
         return None
-    shown = "PostgreSQL" if db_type.startswith("postgres") else f"'{db_type}'"
     return {"success": False,
             "sql_logger_type": db_type,
-            "error": (f"The SQL Logger is set to {shown}, and this tool reads only the "
-                      f"SQLite database. Any indigo_history.sqlite left in the Logs folder "
-                      f"is old and no longer written to, so reading it would give wrong "
-                      f"answers. Query {shown} directly for this history.")}
+            "error": (f"The SQL Logger is set to '{db_type}', and this tool reads only the "
+                      f"SQLite and PostgreSQL databases. Any indigo_history.sqlite left in "
+                      f"the Logs folder is old and no longer written to, so reading it would "
+                      f"give wrong answers.")}
+
+
+def _coerce_window(hours: Any, limit: Any) -> Tuple[int, int, bool]:
+    """(hours, limit, hours_capped) from what the caller asked for."""
+    try:
+        limit = max(1, min(int(limit or 500), 5000))
+    except (TypeError, ValueError):
+        limit = 500
+    try:
+        hours = max(1, int(hours or 24))
+    except (TypeError, ValueError):
+        hours = 24
+    capped = hours > _HISTORY_MAX_HOURS
+    return min(hours, _HISTORY_MAX_HOURS), limit, capped
+
+
+def _normalise_columns(columns: Any) -> Optional[List[str]]:
+    if isinstance(columns, str):
+        return [columns]   # one name, not a list of letters
+    return columns
+
+
+def _choose_columns(table: str, columns: Optional[List[str]],
+                    all_cols: List[str]) -> Tuple[Optional[List[str]], Optional[Dict[str, Any]]]:
+    """(columns to return, None), or (None, an error reply). Unknown names are a
+    hard error naming the valid set: silently dropping them used to return walls
+    of bare `ts` rows when a caller passed a state's camelCase name against the
+    lowercase columns."""
+    if not columns:
+        return None, None
+    unknown = [c for c in columns if c not in all_cols]
+    if unknown:
+        return None, {"success": False,
+                      "error": f"Column(s) not in {table}: {', '.join(unknown)}. Valid columns "
+                               f"(note: stored lowercase): "
+                               f"{', '.join(c for c in all_cols if c != 'id')}"}
+    cols = list(columns)
+    if "ts" not in cols:
+        cols = ["ts"] + cols
+    return cols, None
+
+
+def _device_rows_reply(table: str, did: int, hours: int, hours_capped: bool, limit: int,
+                       cols: List[str], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    # `hours` describes the window ASKED FOR; `limit` caps rows from the newest
+    # end. On a chatty device those disagree wildly: hours=24, limit=500 can
+    # return the last ten minutes. Report the span actually covered and flag it.
+    truncated = len(rows) == limit
+    ts_values = [r.get("ts") for r in rows if r.get("ts")]
+    result = {
+        "success":       True,
+        "table":         table,
+        "device_id":     did,
+        "hours":         hours,
+        "hours_capped":  hours_capped,
+        "row_count":     len(rows),
+        "truncated":     truncated,
+        "columns":       cols,
+        "ts_timezone":   "local",
+        "ts_newest":     ts_values[0]  if ts_values else None,
+        "ts_oldest":     ts_values[-1] if ts_values else None,
+        "rows":          rows,
+    }
+    if truncated:
+        result["note"] = (
+            f"Hit the {limit}-row limit, so these are the NEWEST {limit} rows "
+            f"only \u2014 they cover {result['ts_oldest']} to {result['ts_newest']}, "
+            f"not the full {hours}h asked for. Raise limit or narrow hours to "
+            f"see earlier data."
+        )
+    if hours_capped:
+        result["hours_note"] = (
+            f"hours was capped to {_HISTORY_MAX_HOURS} "
+            f"({_HISTORY_MAX_HOURS // 24} days)."
+        )
+    return result
+
+
+def _device_summary_reply(table: str, did: int, hours: int, hours_capped: bool,
+                          truncated: bool, total: int, ts_oldest: Optional[str],
+                          ts_newest: Optional[str], per_day: Dict[str, int],
+                          per_column: Dict[str, Dict[str, Any]],
+                          states: List[str]) -> Dict[str, Any]:
+    busiest = sorted(per_column.items(), key=lambda kv: -kv[1]["rows_with_value"])
+    result = {
+        "success":       True,
+        "summary":       True,
+        "table":         table,
+        "device_id":     did,
+        "hours":         hours,
+        "hours_capped":  hours_capped,
+        "row_count":     total,
+        "truncated":     truncated,
+        "ts_timezone":   "local",
+        "ts_oldest":     ts_oldest,
+        "ts_newest":     ts_newest,
+        "rows_per_day":  dict(sorted(per_day.items())),
+        "columns":       dict(busiest),
+        "never_written": [c for c in states if c not in per_column],
+        "note":          ("Each SQL Logger row is one state update, so rows_with_value "
+                          "counts how often a state was written in the window. "
+                          "Columns are ordered busiest first."),
+    }
+    if truncated:
+        result["truncated_note"] = (
+            f"Summarised about the newest {_SUMMARY_ROW_CAP} rows only, covering "
+            f"{result['ts_oldest']} to {result['ts_newest']}. Narrow hours for an "
+            f"exact count of the whole window.")
+    if hours_capped:
+        result["hours_note"] = (f"hours was capped to {_HISTORY_MAX_HOURS} "
+                                f"({_HISTORY_MAX_HOURS // 24} days).")
+    return result
+
+
+def _variable_rows_reply(result: Dict[str, Any], rows: List[Dict[str, Any]], limit: int,
+                         hours: int, before: Any) -> Dict[str, Any]:
+    truncated = len(rows) == limit
+    result.update({
+        "row_count": len(rows), "truncated": truncated,
+        "ts_newest": rows[0]["ts"] if rows else None,
+        "ts_oldest": rows[-1]["ts"] if rows else None,
+        "rows": rows,
+    })
+    if truncated:
+        result["note"] = (
+            f"Hit the {limit}-row limit, so these are the NEWEST {limit} "
+            f"changes only, from {result['ts_oldest']}; raise limit or "
+            f"narrow hours for earlier ones.")
+    elif not rows:
+        result["note"] = (f"No change in the last {hours} hours"
+                          + (f"; the value has been {before[1]!r} since "
+                             f"{result['value_before']['ts']}"
+                             if before else "") + ".")
+    return result
+
+
+def _utc_dt_to_local(value: Any) -> Optional[str]:
+    return _utc_text_to_local(value.isoformat(sep=" ")) if isinstance(value, datetime) else None
+
+
+def _pg_candidates() -> List[Tuple[str, Dict[str, Any]]]:
+    """Where to find the PostgreSQL login, best first: the SQL Logger's own
+    settings, then Claude Bridge's (IndigoSecrets.py, then Configure)."""
+    base = _indigo_base()
+    found = []
+    own = _pgh.logger_settings(os.path.join(base, "Preferences", "Plugins", _SQL_LOGGER_PREFS))
+    if own:
+        found.append(("SQL Logger settings", own))
+    secrets = _pgh.read_secrets(os.path.join(os.path.dirname(base), "IndigoSecrets.py"))
+    prefs = getattr(getattr(globals().get("indigo"), "activePlugin", None), "pluginPrefs", None)
+    found.extend(_pgh.claude_bridge_settings(secrets, prefs))
+    return found
+
+
+def _pg_connect() -> "_pgh.PostgresHistory":
+    return _pgh.PostgresHistory.connect(_pg_candidates(), _indigo_base())
+
+
+def _note_pg_source(result: Dict[str, Any], pg: "_pgh.PostgresHistory") -> Dict[str, Any]:
+    if isinstance(result, dict) and result.get("success"):
+        result["source"] = "postgresql"
+        result["credentials_from"] = pg.source
+    return result
 
 
 def _note_db_freshness(result: Dict[str, Any], db_path: str) -> Dict[str, Any]:
@@ -1134,44 +1297,21 @@ class PluginDevToolsHandler(BaseToolHandler):
             cur.execute("SELECT datetime(?, 'localtime')", (ts,))
             return cur.fetchone()[0]
 
-        busiest = sorted(per_column.items(), key=lambda kv: -kv[1]["rows_with_value"])
-        total = agg[0] if agg else 0
-        result = {
-            "success":       True,
-            "summary":       True,
-            "table":         table,
-            "device_id":     did,
-            "hours":         hours,
-            "hours_capped":  hours_capped,
-            "row_count":     total,
-            "truncated":     truncated,
-            "ts_timezone":   "local",
-            "ts_oldest":     _local(agg[1] if agg else None),
-            "ts_newest":     _local(agg[2] if agg else None),
-            "rows_per_day":  dict(sorted(per_day.items())),
-            "columns":       dict(busiest),
-            "never_written": [c for c in states if c not in per_column],
-            "note":          ("Each SQL Logger row is one state update, so rows_with_value "
-                              "counts how often a state was written in the window. "
-                              "Columns are ordered busiest first."),
-        }
-        if truncated:
-            result["truncated_note"] = (
-                f"Summarised about the newest {_SUMMARY_ROW_CAP} rows only, covering "
-                f"{result['ts_oldest']} to {result['ts_newest']}. Narrow hours for an "
-                f"exact count of the whole window.")
-        if hours_capped:
-            result["hours_note"] = (f"hours was capped to {_HISTORY_MAX_HOURS} "
-                                    f"({_HISTORY_MAX_HOURS // 24} days).")
-        return result
+        return _device_summary_reply(
+            table, did, hours, hours_capped, truncated, agg[0] if agg else 0,
+            _local(agg[1] if agg else None), _local(agg[2] if agg else None),
+            per_day, per_column, states)
 
     def device_history(self, device_id, hours: int = 24,
                        limit: int = 500,
                        columns: Optional[List[str]] = None,
                        summary: bool = False) -> Dict[str, Any]:
-        """Device history from the SQLite SQL Logger. Refuses when the logger
-        is set to another database, and says when the file was last written."""
-        refusal = _history_source_refusal(_sql_logger_type())
+        """Device history from the SQL Logger: PostgreSQL when that is what the
+        logger uses, else SQLite (with the date the file was last written)."""
+        db_type = _sql_logger_type()
+        if db_type and db_type.startswith("postgres"):
+            return self._device_history_pg(device_id, hours, limit, columns, summary)
+        refusal = _history_source_refusal(db_type)
         if refusal:
             return refusal
         result = self._device_history_impl(device_id, hours, limit, columns, summary)
@@ -1208,16 +1348,7 @@ class PluginDevToolsHandler(BaseToolHandler):
             except (TypeError, ValueError):
                 return {"success": False, "error": f"Bad device_id {device_id!r}"}
 
-            try:
-                limit = max(1, min(int(limit or 500), 5000))
-            except (TypeError, ValueError):
-                limit = 500
-            try:
-                hours = max(1, int(hours or 24))
-            except (TypeError, ValueError):
-                hours = 24
-            hours_capped = hours > _HISTORY_MAX_HOURS
-            hours = min(hours, _HISTORY_MAX_HOURS)
+            hours, limit, hours_capped = _coerce_window(hours, limit)
 
             # Compute the window cutoff once (used by both column branches below).
             cutoff = (datetime.now(timezone.utc).replace(tzinfo=None)
@@ -1256,19 +1387,10 @@ class PluginDevToolsHandler(BaseToolHandler):
                 # naming the valid set — silently dropping them used to
                 # return walls of bare `ts` rows when a caller passed the
                 # state's camelCase name against the lowercase columns.
-                if isinstance(columns, str):
-                    columns = [columns]   # one name, not a list of letters
-                if columns:
-                    unknown = [c for c in columns if c not in all_cols]
-                    if unknown:
-                        return {"success": False,
-                                "error": f"Column(s) not in {table}: "
-                                         f"{', '.join(unknown)}. Valid columns "
-                                         f"(note: stored lowercase): "
-                                         f"{', '.join(c for c in all_cols if c != 'id')}"}
-                    cols = [c for c in columns]
-                    if "ts" not in cols:
-                        cols = ["ts"] + cols
+                columns = _normalise_columns(columns)
+                cols, bad = _choose_columns(table, columns, all_cols)
+                if bad:
+                    return bad
 
                 # The ts column has NO index, so any ts-filtered query
                 # full-scans the table (the DB is WAL since 09-Sep-2026; before
@@ -1326,45 +1448,153 @@ class PluginDevToolsHandler(BaseToolHandler):
                     )
                     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
-                # `hours` describes the window ASKED FOR; `limit` caps rows from
-                # the newest end. On a chatty device those disagree wildly —
-                # hours=24, limit=500 can return the last ten minutes — and the
-                # old reply advertised "hours": 24 with nothing to say otherwise,
-                # so "what happened 20 hours ago" got a confidently wrong answer.
-                # Report the span actually covered and flag the truncation.
-                truncated = len(rows) == limit
-                ts_values = [r.get("ts") for r in rows if r.get("ts")]
-                result = {
-                    "success":       True,
-                    "table":         table,
-                    "device_id":     did,
-                    "hours":         hours,
-                    "hours_capped":  hours_capped,
-                    "row_count":     len(rows),
-                    "truncated":     truncated,
-                    "columns":       cols,
-                    "ts_timezone":   "local",
-                    "ts_newest":     ts_values[0]  if ts_values else None,
-                    "ts_oldest":     ts_values[-1] if ts_values else None,
-                    "rows":          rows,
-                }
-                if truncated:
-                    result["note"] = (
-                        f"Hit the {limit}-row limit, so these are the NEWEST {limit} rows "
-                        f"only — they cover {result['ts_oldest']} to {result['ts_newest']}, "
-                        f"not the full {hours}h asked for. Raise limit or narrow hours to "
-                        f"see earlier data."
-                    )
-                if hours_capped:
-                    result["hours_note"] = (
-                        f"hours was capped to {_HISTORY_MAX_HOURS} "
-                        f"({_HISTORY_MAX_HOURS // 24} days)."
-                    )
-                return result
+                return _device_rows_reply(table, did, hours, hours_capped, limit, cols, rows)
             finally:
                 conn.close()
         except Exception as exc:
             return self.handle_exception(exc, "device_history")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # The same two tools against PostgreSQL (3.9.0)
+    # ════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _pg_down(exc: Exception) -> Dict[str, Any]:
+        return {"success": False, "sql_logger_type": "postgresql", "error": str(exc)}
+
+    @staticmethod
+    def _pg_over_budget() -> Dict[str, Any]:
+        return {"success": False,
+                "error": (f"The summary took longer than {_SUMMARY_TIME_BUDGET:.0f} s and was "
+                          f"stopped, because the web server waits for it. Ask for fewer hours; "
+                          f"a second try is often faster.")}
+
+    def _device_history_pg(self, device_id, hours, limit, columns, summary) -> Dict[str, Any]:
+        self.log_incoming_request("device_history",
+                                  {"device_id": device_id, "hours": hours, "limit": limit})
+        try:
+            try:
+                did = int(device_id)
+            except (TypeError, ValueError):
+                return {"success": False, "error": f"Bad device_id {device_id!r}"}
+            hours, limit, hours_capped = _coerce_window(hours, limit)
+            try:
+                pg = _pg_connect()
+            except _pgh.HistoryDbUnavailable as exc:
+                return self._pg_down(exc)
+            try:
+                table = f"device_history_{did}"
+                if not pg.has_table(table):
+                    return {"success": False,
+                            "error": f"No SQL Logger table '{table}' \u2014 device may "
+                                     f"not be logged, or wrong device_id"}
+                typed = pg.columns(table)
+                all_cols = [name for name, _ in typed]
+                if not all_cols:
+                    return {"success": False, "error": f"Could not read columns of {table}"}
+                columns = _normalise_columns(columns)
+                cols, bad = _choose_columns(table, columns, all_cols)
+                if bad:
+                    return bad
+                floor_id = pg.floor_id(table, hours)
+
+                if summary:
+                    return _note_pg_source(self._pg_device_summary(
+                        pg, table, did, typed, cols if columns else None, floor_id,
+                        hours, hours_capped), pg)
+
+                wide = [c for c in all_cols if c != "id"]
+                names = cols if columns else wide
+                got = pg.rows(table, names, floor_id, limit)
+                dicts = [{n: (_utc_dt_to_local(v) if n == "ts" else v)
+                          for n, v in zip(names, r)} for r in got]
+                if not columns:
+                    cols = [c for c in wide
+                            if c == "ts" or any(d.get(c) is not None for d in dicts)]
+                    cols = ["ts"] + [c for c in cols if c != "ts"]
+                    dicts = [{c: d.get(c) for c in cols} for d in dicts]
+                return _note_pg_source(
+                    _device_rows_reply(table, did, hours, hours_capped, limit, cols, dicts), pg)
+            except _pgh.BudgetExceeded:
+                return self._pg_over_budget()
+            finally:
+                pg.close()
+        except Exception as exc:
+            return self.handle_exception(exc, "device_history")
+
+    def _pg_device_summary(self, pg, table, did, typed, cols, floor_id, hours, hours_capped):
+        kinds = dict(typed)
+        states = [c for c in (cols or [n for n, _ in typed if n != "id"]) if c != "ts"]
+        data = pg.summary(table, [(c, kinds.get(c, "text")) for c in states], floor_id,
+                          _SUMMARY_ROW_CAP, _SUMMARY_TIME_BUDGET)
+        agg = data["agg"] or ()
+        per_day: Dict[str, int] = {}
+        for hour, n in data["per_hour"]:
+            day = hour.replace(tzinfo=timezone.utc).astimezone().date().isoformat()
+            per_day[day] = per_day.get(day, 0) + n
+        per_column = {}
+        for i, c in enumerate(states):
+            written, low, high = agg[3 + 3 * i: 6 + 3 * i]
+            if written:
+                per_column[c] = {"rows_with_value": written, "min": low, "max": high}
+        return _device_summary_reply(
+            table, did, hours, hours_capped, data["truncated"], agg[0] if agg else 0,
+            _utc_dt_to_local(agg[1]) if agg else None, _utc_dt_to_local(agg[2]) if agg else None,
+            per_day, per_column, states)
+
+    def _variable_history_pg(self, variable_id, hours, limit, summary, name) -> Dict[str, Any]:
+        self.log_incoming_request("variable_history",
+                                  {"variable_id": variable_id, "hours": hours, "limit": limit})
+        try:
+            try:
+                vid = int(variable_id)
+            except (TypeError, ValueError):
+                return {"success": False, "error": f"Bad variable_id {variable_id!r}"}
+            hours, limit, hours_capped = _coerce_window(hours, limit)
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            start_utc = now_utc - timedelta(hours=hours)
+            try:
+                pg = _pg_connect()
+            except _pgh.HistoryDbUnavailable as exc:
+                return self._pg_down(exc)
+            try:
+                table = f"variable_history_{vid}"
+                if not pg.has_table(table):
+                    return {"success": False,
+                            "error": f"No SQL Logger table '{table}': the SQL Logger has "
+                                     f"never logged this variable, or the id is wrong"}
+                floor_id = pg.floor_id(table, hours)
+                found = pg.variable_before(table, floor_id)
+                before = (found[0].isoformat(sep=" "), found[1]) if found else None
+                result: Dict[str, Any] = {
+                    "success": True, "table": table, "variable_id": vid,
+                    "hours": hours, "hours_capped": hours_capped, "ts_timezone": "local",
+                    "value_before": ({"ts": _utc_text_to_local(before[0]), "value": before[1]}
+                                     if before else None),
+                }
+                if name:
+                    result["name"] = name
+                if summary:
+                    got = pg.variable_rows(table, floor_id, _SUMMARY_ROW_CAP + 1, newest_first=False)
+                    capped = len(got) > _SUMMARY_ROW_CAP
+                    got = got[-_SUMMARY_ROW_CAP:] if capped else got
+                    rows = [(ts.isoformat(sep=" "), value) for ts, value in got]
+                    result.update(_variable_summary(rows, before, start_utc, now_utc))
+                    if capped:
+                        result["note"] = (f"More than {_SUMMARY_ROW_CAP:,} changes in the window; "
+                                          f"the newest {_SUMMARY_ROW_CAP:,} were counted.")
+                else:
+                    got = pg.variable_rows(table, floor_id, limit, newest_first=True)
+                    rows = [{"ts": _utc_dt_to_local(ts), "value": value} for ts, value in got]
+                    _variable_rows_reply(result, rows, limit, hours, before)
+                if hours_capped:
+                    result["hours_note"] = (f"hours was capped to {_HISTORY_MAX_HOURS} "
+                                            f"({_HISTORY_MAX_HOURS // 24} days).")
+                return _note_pg_source(result, pg)
+            finally:
+                pg.close()
+        except Exception as exc:
+            return self.handle_exception(exc, "variable_history")
 
     # ════════════════════════════════════════════════════════════════════════
     # variable_history — the SQL Logger's record of one variable (3.5.0)
@@ -1372,9 +1602,12 @@ class PluginDevToolsHandler(BaseToolHandler):
 
     def variable_history(self, variable_id, hours: int = 24, limit: int = 500,
                          summary: bool = False, name: Optional[str] = None) -> Dict[str, Any]:
-        """Variable history from the SQLite SQL Logger. Refuses when the logger
-        is set to another database, and says when the file was last written."""
-        refusal = _history_source_refusal(_sql_logger_type())
+        """Variable history from the SQL Logger: PostgreSQL when that is what the
+        logger uses, else SQLite (with the date the file was last written)."""
+        db_type = _sql_logger_type()
+        if db_type and db_type.startswith("postgres"):
+            return self._variable_history_pg(variable_id, hours, limit, summary, name)
+        refusal = _history_source_refusal(db_type)
         if refusal:
             return refusal
         result = self._variable_history_impl(variable_id, hours, limit, summary, name)
@@ -1404,16 +1637,7 @@ class PluginDevToolsHandler(BaseToolHandler):
                 vid = int(variable_id)
             except (TypeError, ValueError):
                 return {"success": False, "error": f"Bad variable_id {variable_id!r}"}
-            try:
-                limit = max(1, min(int(limit or 500), 5000))
-            except (TypeError, ValueError):
-                limit = 500
-            try:
-                hours = max(1, int(hours or 24))
-            except (TypeError, ValueError):
-                hours = 24
-            hours_capped = hours > _HISTORY_MAX_HOURS
-            hours = min(hours, _HISTORY_MAX_HOURS)
+            hours, limit, hours_capped = _coerce_window(hours, limit)
             now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
             start_utc = now_utc - timedelta(hours=hours)
             cutoff = start_utc.isoformat(sep=" ")
@@ -1465,23 +1689,7 @@ class PluginDevToolsHandler(BaseToolHandler):
                         f"SELECT datetime(ts, 'localtime'), value FROM {table} "
                         f"WHERE id >= ? ORDER BY id DESC LIMIT ?", (floor_id, limit))
                     rows = [{"ts": r[0], "value": r[1]} for r in cur.fetchall()]
-                    truncated = len(rows) == limit
-                    result.update({
-                        "row_count": len(rows), "truncated": truncated,
-                        "ts_newest": rows[0]["ts"] if rows else None,
-                        "ts_oldest": rows[-1]["ts"] if rows else None,
-                        "rows": rows,
-                    })
-                    if truncated:
-                        result["note"] = (
-                            f"Hit the {limit}-row limit, so these are the NEWEST {limit} "
-                            f"changes only, from {result['ts_oldest']}; raise limit or "
-                            f"narrow hours for earlier ones.")
-                    elif not rows:
-                        result["note"] = (f"No change in the last {hours} hours"
-                                          + (f"; the value has been {before[1]!r} since "
-                                             f"{result['value_before']['ts']}"
-                                             if before else "") + ".")
+                    _variable_rows_reply(result, rows, limit, hours, before)
                 if hours_capped:
                     result["hours_note"] = (f"hours was capped to {_HISTORY_MAX_HOURS} "
                                             f"({_HISTORY_MAX_HOURS // 24} days).")
