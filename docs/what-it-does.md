@@ -73,6 +73,8 @@ Claude Bridge gives Claude **71 tools**, enough to read and change almost anythi
 
 With **admin**, Claude can set a Z-Wave device's configuration parameters from the numbers in its manual, heal the network, and start adding or removing a device. Removing needs the same two yeses as a delete, because a removed device has to be paired again.
 
+When Claude waits for the device to answer a setting, the reply says whether the device acknowledged it. If Indigo ever reports the setting as queued for a sleeping device's next wake, the reply says that instead. While Z-Wave is turned off in Indigo's **Interfaces** menu, Indigo refuses Z-Wave commands, and Claude is told so.
+
 ## Running Python
 
 With **admin**, Claude can run any Python inside Indigo, for the rare job no tool covers. That is full control of your Indigo server, so give an admin key only to a client you would trust with the Mac itself.

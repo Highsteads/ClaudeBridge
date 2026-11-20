@@ -8,8 +8,8 @@
 #              server tools (speak/sunrise/sunset/getDeprecatedElems/etc),
 #              control pages and a cross-plugin update checker.
 # Author:      CliveS & Claude Opus 4.7
-# Date:        27-05-2026
-# Version:     1.0
+# Date:        20-11-2026
+# Version:     1.1 (3.9.2: Z-Wave replies read cmdSuccess; turned-off refusals)
 #
 # Each method returns a dict shaped {"success": bool, ...}. The dispatch layer
 # in mcp_handler.py wraps these with safe_json_dumps. Every method follows the
@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-from ..base_handler import BaseToolHandler
+from ..base_handler import BaseToolHandler, interface_refusal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:   # type hint only — importing it here would be circular
@@ -51,6 +51,83 @@ def _coerce_id(value) -> int:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     raise ValueError(f"Expected numeric ID, got {value!r}")
+
+
+# ── Z-Wave and ping replies ─────────────────────────────────────────────────
+#
+# What Indigo 2025.2 answers, measured against a real Z-Wave controller on
+# 19-11-2026:
+#   * sendConfigParm and sendRaw with waitUntilAck=True:
+#       {"cmdSuccess": True, "endpoint": 1 or None, "nodeId": <node>,
+#        "queuedForNextWake": False}
+#   * the same calls without waiting: None
+#   * indigo.device.ping: {"Success": True, "TimeDelta": 16}
+# The waited sendConfigParm was measured in its nodeId= form. This tool calls
+# it with device=, and that form's reply is taken to be the same by inference.
+# Until 3.9.2 the config tool read only Success, which that reply does not
+# carry, so a waited set reported "no acknowledgement flag".
+# Success, success and TimeDelta are still read: ping answers them, and so may
+# another server or an older Indigo. Not measured: a failed waited send, and a
+# send to a sleeping device. queuedForNextWake was False in every reply seen,
+# so what True means is read from its name alone.
+
+def _reply_dict(reply) -> Dict[str, Any]:
+    """A reply as a plain dict; None (an unwaited send) becomes {}.
+
+    The reply's type was not recorded; it may be an indigo.Dict, which is not
+    a dict subclass. Read it through keys(), which an indigo.Dict has, before
+    trying to iterate it."""
+    if reply is None:
+        return {}
+    if isinstance(reply, dict):
+        return dict(reply)
+    try:
+        return {k: reply[k] for k in reply.keys()}
+    except Exception:
+        pass
+    try:
+        return {k: reply[k] for k in reply}
+    except Exception:
+        return {"raw": str(reply)}
+
+
+def _reply_flag(value) -> Optional[bool]:
+    """A reply's flag as True, False or None (absent or unreadable)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("true", "yes", "1"):
+        return True
+    if text in ("false", "no", "0"):
+        return False
+    return None
+
+
+def _first_present(detail: Dict[str, Any], *keys):
+    for key in keys:
+        if detail.get(key) is not None:
+            return detail[key]
+    return None
+
+
+def read_zwave_reply(reply) -> Dict[str, Any]:
+    """What a Z-Wave sender or ping answered, in one shape.
+
+    acknowledged: Indigo's cmdSuccess, else Success or success; None if the
+    reply carries none of them. queued_for_next_wake: queuedForNextWake, or
+    None. time_delta_ms: TimeDelta (ping), or None. detail: the reply itself."""
+    detail = _reply_dict(reply)
+    return {
+        "acknowledged":         _reply_flag(_first_present(detail, "cmdSuccess", "Success",
+                                                           "success")),
+        "queued_for_next_wake": _reply_flag(detail.get("queuedForNextWake")),
+        "time_delta_ms":        _first_present(detail, "TimeDelta", "timeDelta"),
+        "detail":               detail,
+    }
 
 
 
@@ -99,6 +176,21 @@ def _deps_to_plain(deps) -> Dict[str, Any]:
 
 class ExtendedToolsHandler(BaseToolHandler):
     """All the IOM wrappers added in v2.5.0."""
+
+    # With Interfaces > Z-Wave turned off, Indigo 2025.2 refused these calls
+    # with InterfaceError "interface Z-Wave is not enabled" and sent nothing
+    # (measured 19-11-2026). stopNetworkOptimize and exitInclusionExclusionMode
+    # were measured as this tool calls them. sendConfigParm was measured in its
+    # nodeId= form and this tool uses device=; sendRaw's device= form raised the
+    # same, so the device= config set is taken to as well (inference). Not
+    # measured, so not listed: startNetworkOptimize, enterInclusionMode,
+    # enterExclusionMode and indigo.device.ping. They still get the refusal,
+    # without the words "Nothing was sent".
+    SENT_NOTHING_MEASURED = frozenset({
+        "zwave_send_config_parameter",
+        "zwave_stop_network_optimize",
+        "zwave_exit_inclusion_exclusion_mode",
+    })
 
     def __init__(
         self,
@@ -548,7 +640,10 @@ class ExtendedToolsHandler(BaseToolHandler):
         wait_for_ack defaults to False: waiting holds the web server's request
         thread until the radio answers, which on a sleeping or dead node is a
         long time. With it on, the reply reports the acknowledgement Indigo
-        returned rather than assuming one."""
+        returned (its cmdSuccess) rather than assuming one, and says queued if
+        Indigo reports the set as held for a sleeping device's next wake
+        (queuedForNextWake; not yet seen True). Without it Indigo answers None,
+        and the reply claims nothing."""
         self.log_incoming_request("zwave_send_config_parameter",
                                   {"device_id": device_id, "param_index": param_index,
                                    "param_size": param_size, "param_value": param_value})
@@ -573,28 +668,46 @@ class ExtendedToolsHandler(BaseToolHandler):
             dev = indigo.devices[did]
             reply = indigo.zwave.sendConfigParm(device=dev, paramIndex=pidx, paramSize=psize,
                                                 paramValue=pval, waitUntilAck=wait)
-            acked = None
-            if wait:
-                detail = self._ping_payload(reply) if reply is not None else {}
-                flag = detail.get("Success", detail.get("success"))
-                acked = bool(flag) if flag is not None else None
+            read = read_zwave_reply(reply) if wait else None
+            acked = read["acknowledged"] if read else None
+            queued = read["queued_for_next_wake"] if read else None
             if not wait:
+                status = "sent"
                 msg = (f"Sent Z-Wave config param {pidx}={pval} ({psize}-byte) to "
                        f"'{dev.name}' without waiting for an acknowledgement")
+            elif queued:
+                # Unmeasured: queuedForNextWake has only been seen False. This
+                # branch is a chosen reading of the key's name: a queued set has
+                # not reached the device, so it is not acknowledged, whatever
+                # cmdSuccess says beside it, and not a failure either. Revisit
+                # it if a real reply ever carries True. Indigo's reply goes back
+                # in detail, so the caller can see both flags.
+                status, acked = "queued", None
+                msg = (f"Z-Wave config param {pidx}={pval} ({psize}-byte) for '{dev.name}': "
+                       f"Indigo reports it queued for the device's next wake "
+                       f"(queuedForNextWake). That reply has not been seen from a real "
+                       f"device, so read the parameter back once the device has woken")
             elif acked:
+                status = "acknowledged"
                 msg = (f"Z-Wave config param {pidx}={pval} ({psize}-byte) acknowledged "
                        f"by '{dev.name}'")
             elif acked is False:
+                status = "not_acknowledged"
                 msg = (f"Z-Wave config param {pidx}={pval} was NOT acknowledged by "
                        f"'{dev.name}' — the device may be asleep or out of range")
             else:
+                status = "no_flag"
                 msg = (f"Sent Z-Wave config param {pidx}={pval} to '{dev.name}'; Indigo "
                        f"returned no acknowledgement flag")
             ok = acked is not False
             self.log_tool_outcome("zwave_send_config_parameter", ok, msg)
-            return {"success": ok, "device_id": did, "param_index": pidx,
-                    "param_size": psize, "param_value": pval, "waited_for_ack": wait,
-                    "acknowledged": acked, "message": msg}
+            result = {"success": ok, "device_id": did, "param_index": pidx,
+                      "param_size": psize, "param_value": pval, "waited_for_ack": wait,
+                      "status": status, "acknowledged": acked,
+                      "queued_for_next_wake": queued, "message": msg}
+            if read:
+                result["detail"] = read["detail"]
+            return result
         except Exception as exc:
             return self.handle_exception(exc, "zwave_send_config_parameter")
 
@@ -1123,18 +1236,17 @@ class ExtendedToolsHandler(BaseToolHandler):
 
     @staticmethod
     def _ping_payload(result) -> Dict[str, Any]:
-        # ping returns an indigo.Dict-like kwargs object; normalise it.
-        try:
-            return {k: result[k] for k in result}
-        except Exception:
-            return {"raw": str(result)}
+        # ping answers {"Success": True, "TimeDelta": 16} (measured 19-11-2026),
+        # perhaps as an indigo.Dict; normalise it.
+        return _reply_dict(result)
 
     @staticmethod
     def _ping_message(name: str, payload: Dict[str, Any]) -> Tuple[bool, str]:
-        ok = bool(payload.get("Success", payload.get("success", False)))
+        read = read_zwave_reply(payload)
+        ok = bool(read["acknowledged"])
+        delta = read["time_delta_ms"]
         msg = (f"Ping '{name}': {'reachable' if ok else 'NO RESPONSE'}"
-               + (f" ({payload.get('TimeDelta')} ms)"
-                  if payload.get("TimeDelta") is not None else ""))
+               + (f" ({delta} ms)" if delta is not None else ""))
         return ok, msg
 
     def ping_device(self, device_id) -> Dict[str, Any]:
@@ -1164,7 +1276,9 @@ class ExtendedToolsHandler(BaseToolHandler):
                         late = box["late"]
                     if late:
                         if "error" in box:
-                            self.logger.warning(f"Ping '{name}' failed: {box['error']}")
+                            refusal = interface_refusal(box["error"])
+                            said = refusal["error"] if refusal else box["error"]
+                            self.logger.warning(f"Ping '{name}' failed: {said}")
                         else:
                             _, late_msg = self._ping_message(
                                 name, self._ping_payload(box.get("result")))

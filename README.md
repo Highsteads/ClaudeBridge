@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.9.1
+**Version:** 3.9.2
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -52,6 +52,14 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.9.2 (2026-11-20)
+`zwave` now reads what Indigo really answers, and says plainly when Z-Wave is turned off.
+
+- **A waited configuration set reports its acknowledgement.** With `wait_for_ack` on, `zwave(action="set_config_parameter")` looked for a `Success` flag, but Indigo answers a waited set with `cmdSuccess`, `endpoint`, `nodeId` and `queuedForNextWake` (measured against a real Z-Wave stick), so the tool reported "Indigo returned no acknowledgement flag". It now reads `cmdSuccess` and passes Indigo's own reply back in `detail`. If Indigo reports a set as queued for a sleeping device's next wake (`queuedForNextWake`, not yet seen on a real device), the tool says `queued`. A `Success` reply is still read, and that is what Indigo answers for a ping.
+- **Z-Wave turned off is a refusal, not a red Error.** With Interfaces > Z-Wave turned off, Indigo refused each call we measured (a configuration set, a raw send, and the calls behind `stop_optimize` and `exit_inclusion_exclusion`) with an `InterfaceError` "interface Z-Wave is not enabled", and sent nothing. Claude Bridge logged that as an Error and passed back Indigo's bare words. Now any tool that meets exactly that error says the interface is turned off and where to turn it back on, carries `refused`, and logs a warning. Only `set_config_parameter`, `stop_optimize` and `exit_inclusion_exclusion` also say nothing was sent, as the others were not measured. Any other `InterfaceError`, a database one included, is still an Error.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.9.1 (2026-10-19)
 `device_history` and `variable_history` now read the SQLite file you chose.
 
@@ -68,14 +76,6 @@ Still 71 tools, 30 of them read-only.
 - **Times are right whatever zone the server runs in.** The logger's PostgreSQL table stores each time in the server's own zone with no zone label, where SQLite stores UTC. The tools convert in the database, then to your local time, and the tests check three different server zones.
 - **Read-only, and bounded.** The connection refuses any write, a statement that runs past 15 seconds is cancelled, and a summary is cancelled after 5.
 - **Tested on a real PostgreSQL 16**, not only a stand-in. `tests/test_history_postgres_live.py` repeats that test on any server you point it at.
-
-Still 71 tools, 30 of them read-only.
-
-### 3.8.2 (2026-10-19)
-`device_history` and `variable_history` no longer give a wrong answer when the SQL Logger uses PostgreSQL.
-
-- **A PostgreSQL SQL Logger now gets an error, not an empty answer.** The two tools read only the SQLite database. After a switch to PostgreSQL the old `indigo_history.sqlite` stays in the Logs folder, and the tools read that: they said "success" with no rows, so Claude took a device that had been changing for days to be still. The plugin now reads the SQL Logger's database type first, and when it is not SQLite it says so and reads nothing. The PostgreSQL password in those settings is never read or shown.
-- **Every answer now says when the history file was last written** (`db_last_written`), and warns (`db_stale`) when that was more than an hour ago, so an empty window cannot pass for "nothing changed".
 
 Still 71 tools, 30 of them read-only.
 

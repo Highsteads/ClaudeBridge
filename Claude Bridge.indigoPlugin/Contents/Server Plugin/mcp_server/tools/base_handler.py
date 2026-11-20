@@ -3,6 +3,8 @@ Base handler class for MCP server tools with standardized logging and common fun
 """
 
 import logging
+import re
+import sqlite3
 from typing import Optional
 
 
@@ -12,9 +14,75 @@ class CallerError(ValueError):
     a WARNING, not an ERROR: nothing is wrong with the plugin."""
 
 
+# The whole message Indigo 2025.2 gave, and nothing wider (measured 19-11-2026).
+_NOT_ENABLED = re.compile(r"interface (.+?) is not enabled\.?", re.I)
+
+# DB-API 2.0 drivers name a class InterfaceError too: sqlite3.InterfaceError is
+# one, and the SQL Logger's PostgreSQL driver has its own. A class from one of
+# these modules is a database fault, never Indigo refusing a command.
+_DB_MODULES = frozenset({"sqlite3", "_sqlite3", "postgresql", "psycopg", "psycopg2",
+                         "pg8000", "asyncpg", "pymysql", "MySQLdb", "mysql"})
+
+
+def _from_a_database(e: Exception) -> bool:
+    if isinstance(e, sqlite3.Error):
+        return True
+    return any(set((cls.__module__ or "").split(".")) & _DB_MODULES
+               for cls in type(e).__mro__)
+
+
+def interface_refusal(e: Exception, sent_nothing: bool = False) -> Optional[dict]:
+    """Plain words for Indigo refusing a command because an interface is
+    turned off, or None for anything else.
+
+    Measured on Indigo 2025.2 (19-11-2026): with Interfaces > Z-Wave turned
+    off, sendRaw (device= form), sendConfigParm (nodeId= form),
+    exitInclusionExclusionMode and stopNetworkOptimize each raised
+    InterfaceError "interface Z-Wave is not enabled" within a millisecond, and
+    sent and logged nothing. That is the house's state, not a fault in the
+    plugin, so it is a refusal (a WARNING), never a red Error.
+
+    Only that measured case is a refusal: the class must be named
+    InterfaceError somewhere in its MRO (the record names the class only, and
+    Indigo offers it as indigo.PluginBase.InterfaceError, which this module
+    does not import), must not come from a database driver, and its message
+    must be "interface <name> is not enabled" and nothing else. Every other
+    InterfaceError stays an Error.
+
+    sent_nothing: the caller's command is one of those measured to send
+    nothing; only then does the reply say "Nothing was sent". For any other
+    command (a ping, starting a heal, entering inclusion or exclusion) Indigo
+    refusing it is fact, and whether it sent nothing is not measured."""
+    if not any(cls.__name__ == "InterfaceError" for cls in type(e).__mro__):
+        return None
+    if _from_a_database(e):
+        return None
+    said = str(e).strip()
+    match = _NOT_ENABLED.fullmatch(said)
+    if not match:
+        return None
+    name = match.group(1).strip()
+    what = (f"Nothing was sent: {name} is turned off in Indigo." if sent_nothing
+            else f"{name} is turned off in Indigo.")
+    return {
+        "success": False,
+        "refused": "interface_not_enabled",
+        "interface": name,
+        "indigo_error": f"InterfaceError: {said}",
+        "error": (f"Indigo refused it ({said}). {what} Interfaces > {name} > Enable in "
+                  f"the Indigo client turns it back on, but leave it off if it was turned "
+                  f"off on purpose, for example while a controller backup runs."),
+    }
+
+
 class BaseToolHandler:
     """Base class for all MCP tool handlers with standardized logging."""
-    
+
+    # handle_exception contexts whose Indigo call was measured to send nothing
+    # when its interface is turned off (see interface_refusal). Empty here; a
+    # handler names its own measured methods.
+    SENT_NOTHING_MEASURED: frozenset = frozenset()
+
     def __init__(
         self,
         tool_name: str,
@@ -87,6 +155,12 @@ class BaseToolHandler:
         Returns:
             Dictionary with error information
         """
+        refusal = interface_refusal(e, sent_nothing=context in self.SENT_NOTHING_MEASURED)
+        if refusal is not None:
+            where = f"{self.tool_name} ({context})" if context else self.tool_name
+            self.logger.warning(f"[{where}]: {refusal['error']}")
+            return {**refusal, "tool": self.tool_name, "context": context}
+
         error_message = f"Error in {self.tool_name}"
         if context:
             error_message += f" ({context})"

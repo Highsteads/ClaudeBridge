@@ -10,6 +10,14 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.9.2 (2026-11-20)
+`zwave` now reads what Indigo really answers, and says plainly when Z-Wave is turned off.
+
+- **A waited configuration set reports its acknowledgement.** With `wait_for_ack` on, `zwave(action="set_config_parameter")` looked for a `Success` flag, but Indigo answers a waited set with `cmdSuccess`, `endpoint`, `nodeId` and `queuedForNextWake` (measured against a real Z-Wave stick), so the tool reported "Indigo returned no acknowledgement flag". It now reads `cmdSuccess` and passes Indigo's own reply back in `detail`. If Indigo reports a set as queued for a sleeping device's next wake (`queuedForNextWake`, not yet seen on a real device), the tool says `queued`. A `Success` reply is still read, and that is what Indigo answers for a ping.
+- **Z-Wave turned off is a refusal, not a red Error.** With Interfaces > Z-Wave turned off, Indigo refused each call we measured (a configuration set, a raw send, and the calls behind `stop_optimize` and `exit_inclusion_exclusion`) with an `InterfaceError` "interface Z-Wave is not enabled", and sent nothing. Claude Bridge logged that as an Error and passed back Indigo's bare words. Now any tool that meets exactly that error says the interface is turned off and where to turn it back on, carries `refused`, and logs a warning. Only `set_config_parameter`, `stop_optimize` and `exit_inclusion_exclusion` also say nothing was sent, as the others were not measured. Any other `InterfaceError`, a database one included, is still an Error.
+
+Still 71 tools, 30 of them read-only.
+
 ### 3.9.1 (2026-10-19)
 `device_history` and `variable_history` now read the SQLite file you chose.
 
