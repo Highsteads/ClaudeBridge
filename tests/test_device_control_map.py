@@ -25,6 +25,7 @@ from test_indidb_adapter import (AG_INNER, AG_OUTER, DEV_LAMP, DEV_SENSOR, SCHED
 LOG = logging.getLogger("test-device-control-map")
 
 SCHED_LINKED = 919191919
+TRIG_OFF = 939393939
 LINKED_SCRIPT = "Lamp_Evening.py"
 
 
@@ -60,7 +61,35 @@ def _db_with_linked_schedule():
                 </ActionGroup>
             </TDTrigger>
         </TDTriggerList>"""
-    return SYNTHETIC_DB.replace("</TDTriggerList>", extra, 1)
+    off_trigger = f"""
+            <Trigger type="dict">
+                <ID type="integer">{TRIG_OFF}</ID>
+                <Name type="string">Lamp Off When Sensor Clears</Name>
+                <Class type="integer">598</Class>
+                <Enabled type="bool">true</Enabled>
+                <Stealth type="bool">true</Stealth>
+                <PluginID type="string">com.example.activity</PluginID>
+                <TypeLabelPlugin type="string">Group Changed</TypeLabelPlugin>
+                <MetaProps type="dict">
+                    <com.example.activity type="dict">
+                        <groupDevice type="string">{DEV_SENSOR}</groupDevice>
+                        <fireOn type="string">deactivated</fireOn>
+                    </com.example.activity>
+                </MetaProps>
+                <Condition type="dict"><Type type="integer">0</Type></Condition>
+                <ActionGroup type="dict">
+                    <ActionSteps type="vector">
+                        <Action type="dict">
+                            <Class type="integer">1</Class>
+                            <DeviceID type="integer">{DEV_LAMP}</DeviceID>
+                            <DeviceAction type="integer">5</DeviceAction>
+                        </Action>
+                    </ActionSteps>
+                </ActionGroup>
+            </Trigger>
+        </TriggerList>"""
+    db = SYNTHETIC_DB.replace("</TDTriggerList>", extra, 1)
+    return db.replace("</TriggerList>", off_trigger, 1)
 
 
 class FakeDev:
@@ -417,9 +446,10 @@ def test_a_script_line_explains_a_change_whose_automation_is_hidden(rig):
     assert out["change_count"] == 1                 # the script line is evidence, not a change
     cause = out["events"][0]["likely_cause"]
     assert cause["entity_type"] == "script"
-    assert cause["run_by_one_of"] == ["Evening Lamp Script"]
-    assert out["hidden_from_event_log"] == [
-        {"entity_type": "schedule", "id": SCHED_LINKED, "name": "Evening Lamp Script"}]
+    assert set(cause["run_by_one_of"]) == {"Evening Lamp Script",
+                                           "Lamp Off When Sensor Clears"}
+    assert {h["name"] for h in out["hidden_from_event_log"]} == {
+        "Evening Lamp Script", "Lamp Off When Sensor Clears"}
     assert any("stay out of the event log" in n for n in out["notes"])
 
 
@@ -461,5 +491,84 @@ def test_a_device_its_plugin_never_logs_falls_back_to_history(rig):
 def test_history_is_not_read_when_the_log_has_the_changes(rig):
     cmap, logs = rig
     _evening_week(logs)
-    cmap.history_reader = lambda *a: pytest.fail("history read although the log had changes")
+    def reader(did, hours, columns):
+        if did == DEV_LAMP:
+            pytest.fail("the lamp's own history was read although the log had its changes")
+        return {"success": False, "error": "no table"}
+    cmap.history_reader = reader
     assert cmap.explain_device_changes(DEV_LAMP)["change_source"] == "event log"
+
+
+def _sensor_history(times):
+    fmt = "%Y-%m-%d %H:%M:%S"
+
+    def reader(did, hours, columns):
+        if did != DEV_SENSOR:
+            return {"success": False, "error": "no table"}
+        rows = [{"ts": ts.strftime(fmt), "onoffstate": None} for ts in times]   # empty rows
+        rows += [{"ts": ts.strftime(fmt), "onoffstate": 1} for ts in times]
+        return {"success": True, "rows": rows}
+    return reader
+
+
+def test_a_change_with_no_log_line_is_traced_through_what_its_trigger_watches(rig):
+    cmap, logs = rig
+    at = datetime.datetime.now().replace(microsecond=0) - datetime.timedelta(hours=2)
+    cmap.history_reader = _sensor_history([at])
+    _write(logs, [(at, _line(at, "Z-Wave", 'sent "Test Lamp" set brightness to 30'))])
+    cause = cmap.explain_device_changes(DEV_LAMP, days=1)["events"][0]["likely_cause"]
+    assert cause["id"] == TRIG_MOTION, cause
+    assert cause["confidence"] == "heuristic"
+    assert "Test Motion Sensor changed 0.0 seconds before" in cause["evidence"][0]
+
+
+def test_the_trigger_for_the_matching_direction_wins(rig):
+    cmap, logs = rig
+    at = datetime.datetime.now().replace(microsecond=0) - datetime.timedelta(hours=2)
+    cmap.history_reader = _sensor_history([at])
+    _write(logs, [(at, _line(at, "Z-Wave", 'sent "Test Lamp" off'))])
+    cause = cmap.explain_device_changes(DEV_LAMP, days=1)["events"][0]["likely_cause"]
+    assert cause["id"] == TRIG_OFF, cause
+    assert any("stay out of the event log" in e for e in cause["evidence"])
+    assert "or_possibly" not in cause
+
+
+def test_a_watched_device_that_did_not_change_names_no_cause(rig):
+    cmap, logs = rig
+    at = datetime.datetime.now().replace(microsecond=0) - datetime.timedelta(hours=2)
+    cmap.history_reader = _sensor_history([at - datetime.timedelta(minutes=10)])
+    _write(logs, [(at, _line(at, "Z-Wave", 'sent "Test Lamp" on'))])
+    assert cmap.explain_device_changes(DEV_LAMP, days=1)["events"][0]["likely_cause"] is None
+
+
+@pytest.mark.parametrize("what, direction", [
+    ("sent on", "on"), ("sent off", "off"), ("sent set brightness to 30", "on"),
+    ("turned off", "off"), ("status update", None)])
+def test_change_direction(what, direction):
+    assert dcm.change_direction(what) == direction
+
+
+@pytest.mark.parametrize("text, direction", [
+    ("Kitchen Light On If Any Occupancy  Sensor ON", "on"),
+    ("Turn Off Kitchen Light When No Motion", "off"),
+    ("runs Kitchen_Lights_Off.py, which mentions the device", "off"),
+    ("Hall Lamp Toggle", None)])
+def test_word_direction(text, direction):
+    assert dcm.word_direction(text) == direction
+
+
+def test_ids_in_finds_ids_in_plugin_settings():
+    props = {"com.x": {"groupDevice": "1389343786", "fireOn": "activated", "n": 5,
+                       "list": [444555666, "1,2"]}}
+    assert sorted(dcm.ids_in(props)) == [444555666, 1389343786]
+
+
+def test_a_history_row_with_no_value_is_not_a_change(rig):
+    cmap, logs = rig
+    at = datetime.datetime.now().replace(microsecond=0) - datetime.timedelta(hours=2)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    cmap.history_reader = lambda did, hours, columns: {"success": True, "rows": [
+        {"ts": at.strftime(fmt), "onoffstate": None, "battery": None},
+        {"ts": (at - datetime.timedelta(minutes=10)).strftime(fmt), "onoffstate": 1}]}
+    _write(logs, [(at, _line(at, "Z-Wave", 'sent "Test Lamp" on'))])
+    assert cmap.explain_device_changes(DEV_LAMP, days=1)["events"][0]["likely_cause"] is None

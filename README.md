@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.10.0
+**Version:** 3.10.1
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -53,6 +53,14 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.10.1 (2026-11-21)
+`explain_device_changes` now finds the trigger behind a change that left no line in the event log.
+
+- **It looks at what the triggers watch.** When nothing logged near a change links to the device, it checks the SQL Logger history of each device that a trigger able to change it fires on: a device-state trigger's device, or a device named in a plugin event's settings, such as an activity group. If that device changed in the moments before, the trigger is named as the likely cause, with the time gap as evidence and marked heuristic. Where two triggers fire on the same device, the one whose name or action fits the change ("on" for a switch-on, "off" for a switch-off) wins, and an equal match is listed beside it.
+- **Measured on a real kitchen light** whose triggers are hidden from the event log and whose switch-on script logs nothing: a 3:36am switch-on that had no evidence at all now names the presence trigger, which fired 0.2 seconds before. Over a week, 44 of the newest 50 changes are now explained, up from 26.
+
+Still 73 tools, 32 of them read-only.
+
 ### 3.10.0 (2026-11-21)
 Two new tools answer "what turns this on?" and "what did turn it on, and when?" in one call each.
 
@@ -68,13 +76,6 @@ Now 73 tools, 32 of them read-only.
 
 - **A waited configuration set reports its acknowledgement.** With `wait_for_ack` on, `zwave(action="set_config_parameter")` looked for a `Success` flag, but Indigo answers a waited set with `cmdSuccess`, `endpoint`, `nodeId` and `queuedForNextWake` (measured against a real Z-Wave stick), so the tool reported "Indigo returned no acknowledgement flag". It now reads `cmdSuccess` and passes Indigo's own reply back in `detail`. If Indigo reports a set as queued for a sleeping device's next wake (`queuedForNextWake`, not yet seen on a real device), the tool says `queued`. A `Success` reply is still read, and that is what Indigo answers for a ping.
 - **Z-Wave turned off is a refusal, not a red Error.** With Interfaces > Z-Wave turned off, Indigo refused each call we measured (a configuration set, a raw send, and the calls behind `stop_optimize` and `exit_inclusion_exclusion`) with an `InterfaceError` "interface Z-Wave is not enabled", and sent nothing. Claude Bridge logged that as an Error and passed back Indigo's bare words. Now any tool that meets exactly that error says the interface is turned off and where to turn it back on, carries `refused`, and logs a warning. Only `set_config_parameter`, `stop_optimize` and `exit_inclusion_exclusion` also say nothing was sent, as the others were not measured. Any other `InterfaceError`, a database one included, is still an Error.
-
-Still 71 tools, 30 of them read-only.
-
-### 3.9.1 (2026-10-19)
-`device_history` and `variable_history` now read the SQLite file you chose.
-
-- **A custom SQLite file is followed.** If you set the SQL Logger's **SQLite file** to another name, or to a full path, the tools still read `Logs/indigo_history.sqlite`. They now work out the file the way the logger does: a name is a file in the Logs folder, and a path that starts with `/` is used as it stands. Thanks to Jon for spotting it.
 
 Still 71 tools, 30 of them read-only.
 

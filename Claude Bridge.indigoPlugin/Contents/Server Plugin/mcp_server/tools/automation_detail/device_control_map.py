@@ -312,6 +312,53 @@ def history_changes(rows: Iterable[Dict[str, Any]]) -> List[Tuple[datetime.datet
     return changes
 
 
+MAX_WATCHED_SOURCES = 12
+
+
+def ids_in(value: Any) -> List[int]:
+    """Every id-shaped value (6 to 12 digits) in a nested settings value."""
+    found: List[int] = []
+    value = _plain_value(value)
+    if isinstance(value, bool):
+        return found
+    if isinstance(value, int):
+        if 100000 <= value <= 999999999999:
+            found.append(value)
+    elif isinstance(value, str):
+        found.extend(int(t) for t in re.split(r"[\s,;]+", value.strip())
+                     if t.isdigit() and 6 <= len(t) <= 12)
+    elif isinstance(value, dict):
+        for v in value.values():
+            found.extend(ids_in(v))
+    elif isinstance(value, list):
+        for v in value:
+            found.extend(ids_in(v))
+    return found
+
+
+def change_direction(what: str) -> Optional[str]:
+    """'on' or 'off' for a change's own words, or None when it says neither."""
+    text = (what or "").lower()
+    if re.search(r"\boff\b", text):
+        return "off"
+    if re.search(r"\bon\b|brightness|\bopen", text):
+        return "on"
+    return None
+
+
+def word_direction(text: str) -> Optional[str]:
+    """'on' or 'off' from the words of a trigger's name, action and script,
+    or None when they say both equally or neither."""
+    lower = (text or "").lower().replace("_", " ")     # Kitchen_Lights_On.py
+    on = len(re.findall(r"\bon\b", lower))
+    off = len(re.findall(r"\boff\b", lower))
+    if on > off:
+        return "on"
+    if off > on:
+        return "off"
+    return None
+
+
 def _join(items: List[str]) -> str:
     if not items:
         return ""
@@ -825,17 +872,126 @@ class DeviceControlMap(BaseToolHandler):
                     f"changes from {reply.get('ts_oldest')} on were found.")
         return changes, note
 
-    def _hidden_controllers(self, device_id: int) -> List[Dict[str, Any]]:
-        """Automations that can change the device and are set to stay out of
-        the event log (the record's Stealth flag), so a log reader cannot see
-        them run. Linked scripts included; plugins and pages are not needed."""
+    def _controllers(self, device_id: int) -> List[Dict[str, Any]]:
+        """who_controls' automation list (linked scripts included), or []."""
         try:
             mapped = self.who_controls(device_id, include_scripts=True,
                                        include_plugins=False, include_control_pages=False)
         except Exception:
             return []
+        return mapped.get("controls", []) if isinstance(mapped, dict) else []
+
+    def _watched_sources(self, controls: List[Dict[str, Any]],
+                         device_id: int) -> List[Dict[str, Any]]:
+        """For each trigger that can change the device, the devices it fires
+        on: a device-state trigger's device, or the devices named in a plugin
+        event's settings (a Device Activity Monitor group, for example)."""
+        out, seen = [], set()
+        for c in controls:
+            if c["entity_type"] != "trigger":
+                continue
+            record = self._record("trigger", c["id"])
+            if not isinstance(record, dict):
+                continue
+            ids: List[int] = []
+            if record.get("Class") == 501 and isinstance(record.get("DeviceID"), int):
+                ids.append(record["DeviceID"])
+            elif record.get("Class") == 598:
+                ids.extend(i for i in ids_in(record.get("MetaProps"))
+                           if self.detail._lookup_name("device", i) is not None)
+            for wid in ids:
+                if wid == device_id or (c["id"], wid) in seen:
+                    continue
+                seen.add((c["id"], wid))
+                out.append({"trigger_id": c["id"], "trigger": c["name"],
+                            "device_id": wid,
+                            "device": self.detail._display_name("device", wid),
+                            "hidden": bool(record.get("Stealth")),
+                            "direction": word_direction(
+                                f"{c['name']} {c.get('action', '')} {c.get('script', '')}")})
+                if len(out) >= MAX_WATCHED_SOURCES:
+                    return out
+        return out
+
+    def _watched_times(self, watched_id: int, days: int,
+                       cache: Dict[int, List[datetime.datetime]]) -> List[datetime.datetime]:
+        """When a watched device changed, from SQL Logger history: every row
+        holding any value other than the time. Cached per call."""
+        if watched_id in cache:
+            return cache[watched_id]
+        times: List[datetime.datetime] = []
+        try:
+            reply = self.history_reader(watched_id, days * 24, None)
+        except Exception:
+            reply = None
+        if isinstance(reply, dict) and reply.get("success"):
+            for row in reply.get("rows") or []:
+                if not any(v not in (None, "") for k, v in row.items() if k != "ts"):
+                    continue
+                try:
+                    times.append(datetime.datetime.strptime(str(row["ts"])[:19],
+                                                            "%Y-%m-%d %H:%M:%S"))
+                except (KeyError, TypeError, ValueError):
+                    continue
+        times.sort()
+        cache[watched_id] = times
+        return times
+
+    def _watch_match(self, ts, what, watchers, days, lookback_seconds, cache):
+        """The trigger(s) whose watched device changed just before (or with)
+        this change. Returns None, or a cause dict naming the best match and
+        any equally good ones."""
+        if not watchers or self.history_reader is None:
+            return None
+        direction = change_direction(what)
+        found = []
+        for w in watchers:
+            times = self._watched_times(w["device_id"], days, cache)
+            lo = bisect.bisect_left(times, ts - datetime.timedelta(seconds=lookback_seconds))
+            hi = bisect.bisect_right(times, ts + datetime.timedelta(seconds=2))
+            if hi <= lo:
+                continue
+            delta = min(((ts - t).total_seconds() for t in times[lo:hi]), key=abs)
+            if direction and w["direction"]:
+                fit = 0 if w["direction"] == direction else 2
+            else:
+                fit = 1
+            found.append((fit, abs(delta), delta, w))
+        if not found:
+            return None
+        found.sort(key=lambda f: (f[0], f[1]))
+        if found[0][0] == 2 and any(f[0] < 2 for f in found):
+            found = [f for f in found if f[0] < 2]
+        best_fit, best_abs, delta, w = found[0]
+        if best_fit == 2:
+            return None          # only triggers for the opposite change fired
+        ties = [f[3]["trigger"] for f in found
+                if f[0] == best_fit and abs(f[1] - best_abs) < 1 and f[3] is not w]
+        evidence = [f"{w['device']} changed {abs(round(delta, 1))} seconds "
+                    f"{'before' if delta >= 0 else 'after'} it (SQL Logger history), "
+                    f"and this trigger fires on {w['device']}"]
+        if w["hidden"]:
+            evidence.append("the trigger is set to stay out of the event log, so its run "
+                            "left no line of its own")
+        if best_fit == 0:
+            evidence.append(f"its name or action is for switching {direction}")
+        cause = {"entity_type": "trigger", "id": w["trigger_id"], "name": w["trigger"],
+                 "seconds_before_event": round(delta, 1), "evidence": evidence,
+                 "confidence": "heuristic"}
+        if ties:
+            cause["or_possibly"] = sorted(set(ties))
+        return cause
+
+    def _hidden_controllers(self, device_id: int,
+                            controls: Optional[List[Dict[str, Any]]] = None
+                            ) -> List[Dict[str, Any]]:
+        """Automations that can change the device and are set to stay out of
+        the event log (the record's Stealth flag), so a log reader cannot see
+        them run. Linked scripts included; plugins and pages are not needed."""
+        if controls is None:
+            controls = self._controllers(device_id)
         hidden, seen = [], set()
-        for c in mapped.get("controls", []) if isinstance(mapped, dict) else []:
+        for c in controls:
             record = self._record(c["entity_type"], c["id"])
             if not (isinstance(record, dict) and record.get("Stealth")):
                 continue
@@ -905,7 +1061,10 @@ class DeviceControlMap(BaseToolHandler):
             # lighting triggers are, so their runs log nothing at all.
             script_lines = [(ts, e) for ts, e in stamped if _is_script_line(e)]
             script_times = [ts for ts, _ in script_lines]
-            hidden = self._hidden_controllers(device_id)
+            controls = self._controllers(device_id)
+            hidden = self._hidden_controllers(device_id, controls)
+            watchers = self._watched_sources(controls, device_id)
+            watch_cache: Dict[int, List[datetime.datetime]] = {}
 
             changes: List[Tuple[datetime.datetime, Dict[str, Any]]] = []
             last_ts = None
@@ -952,6 +1111,13 @@ class DeviceControlMap(BaseToolHandler):
                                           ts - datetime.timedelta(seconds=lookback_seconds))
                 s_hi = bisect.bisect_right(script_times, ts + datetime.timedelta(seconds=2))
                 script_hit = script_lines[s_hi - 1] if s_hi > s_lo else None
+                # No logged automation: did something a controlling trigger
+                # fires on change at that moment? Measured case: a kitchen
+                # light switched on by a hidden trigger whose presence sensors
+                # changed in the same second, with no log line at all.
+                watch_hit = (None if likely else
+                             self._watch_match(ts, item["what"], watchers, days,
+                                               lookback_seconds, watch_cache))
                 event = {
                     "time": item["entry"].get("TimeStamp"),
                     "day": _WEEKDAYS[ts.weekday()],
@@ -965,6 +1131,13 @@ class DeviceControlMap(BaseToolHandler):
                                              if k in top}
                     key = (top["entity_type"], top.get("id", top["name"]))
                     label = f"{top['entity_type'].replace('_', ' ')} {top['name']}"
+                elif watch_hit is not None:
+                    if script_hit is not None:
+                        watch_hit["evidence"].append(
+                            "a script logged: " + str(script_hit[1].get("Message", ""))[:200])
+                    event["likely_cause"] = watch_hit
+                    key = ("trigger", watch_hit["id"])
+                    label = f"trigger {watch_hit['name']}"
                 elif script_hit is not None:
                     s_ts, s_entry = script_hit
                     event["likely_cause"] = {

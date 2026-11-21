@@ -10,6 +10,14 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.10.1 (2026-11-21)
+`explain_device_changes` now finds the trigger behind a change that left no line in the event log.
+
+- **It looks at what the triggers watch.** When nothing logged near a change links to the device, it checks the SQL Logger history of each device that a trigger able to change it fires on: a device-state trigger's device, or a device named in a plugin event's settings, such as an activity group. If that device changed in the moments before, the trigger is named as the likely cause, with the time gap as evidence and marked heuristic. Where two triggers fire on the same device, the one whose name or action fits the change ("on" for a switch-on, "off" for a switch-off) wins, and an equal match is listed beside it.
+- **Measured on a real kitchen light** whose triggers are hidden from the event log and whose switch-on script logs nothing: a 3:36am switch-on that had no evidence at all now names the presence trigger, which fired 0.2 seconds before. Over a week, 44 of the newest 50 changes are now explained, up from 26.
+
+Still 73 tools, 32 of them read-only.
+
 ### 3.10.0 (2026-11-21)
 Two new tools answer "what turns this on?" and "what did turn it on, and when?" in one call each.
 
