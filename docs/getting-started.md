@@ -51,7 +51,7 @@ The key in `secrets.json` wins if both are there.
 
 ## 4. Check it works
 
-Quit Claude Code and start it again — it reads its list of tools only when it starts. Then type `/mcp` in Claude Code. **indigo-mcp** should be listed as connected, and you should see 71 tools when you select it.
+Quit Claude Code and start it again — it reads its list of tools only when it starts. Then type `/mcp` in Claude Code. **indigo-mcp** should be listed as connected, and you should see 73 tools when you select it.
 
 Now ask it things you already know the answer to, so you learn what it can see:
 

@@ -4,12 +4,12 @@
 # Description: Trigger, schedule and action-group tools — listing, reading the
 #              full definition, firing, enabling, editing and deleting.
 # Author:      CliveS & Claude Opus 5.5
-# Date:        25-09-2026
-# Version:     1.1 (3.5.0: the three automation lists page)
+# Date:        21-11-2026
+# Version:     1.2 (3.10.0: who_controls and explain_device_changes)
 
 from ..common.paging import paged_reply, paging_args
 from ..registry import tool
-from ._schema import (AUTOMATION_ID, AUTOMATION_KIND, AUTOMATION_KINDS, bad_choice, boolean,
+from ._schema import (AUTOMATION_ID, AUTOMATION_KIND, AUTOMATION_KINDS, DEVICE, bad_choice, boolean,
                       coerce_bool, enum, id_or_name, integer, number, refuse, string)
 from ..tools.schedule_control.schedule_control_handler import (_resolve_action_group,
                                                                 _resolve_schedule,
@@ -193,6 +193,90 @@ def investigate_event(ctx, device_id=None, search_text=None, around_time=None, o
         device_id=device_id, search_text=search_text, around_time=around_time,
         occurrence=occurrence, lookback_seconds=lookback_seconds,
         lookahead_seconds=lookahead_seconds, search_days=search_days)
+
+
+@tool("who_controls", scope="read", redact_output=True,
+      description=("Everything that can change one device, in one reply: each schedule, "
+                   "trigger and action group that acts on it (directly, through action-group "
+                   "chains, or from an embedded or linked script), with WHEN it fires (a "
+                   "schedule's time and next run, a trigger's event), its conditions, whether "
+                   "it is enabled and what it does to the device (turn on, set brightness "
+                   "to 60% after 120 seconds...). Also control page buttons that act on it, "
+                   "script files that mention it and which automations run them, other "
+                   "devices and plugin settings files that hold its id, and what merely "
+                   "watches or checks it. Text matches are marked heuristic. Use it to answer "
+                   "'what turns this on?' or 'what could switch this at 8pm?'; use "
+                   "explain_device_changes for what actually did."),
+      properties={
+          "device": DEVICE,
+          "include_scripts": boolean("Search the script folders and follow linked scripts "
+                                     "(default true)"),
+          "include_plugins": boolean("Search other devices' settings and plugin settings "
+                                     "files for the id (default true)"),
+          "include_control_pages": boolean("Search control page buttons (default true)"),
+      },
+      required=["device"])
+def who_controls(ctx, device, include_scripts=True, include_plugins=True,
+                 include_control_pages=True):
+    device_id, match, refusal = resolve_device(ctx, device)
+    if refusal:
+        return refusal
+    result = ctx.device_control_map.who_controls(
+        device_id,
+        include_scripts=coerce_bool(include_scripts, default=True),
+        include_plugins=coerce_bool(include_plugins, default=True),
+        include_control_pages=coerce_bool(include_control_pages, default=True))
+    if isinstance(result, dict) and match:
+        result.update(match)
+    return result
+
+
+@tool("explain_device_changes", scope="read", redact_output=True,
+      description=("What changed one device, every time, over the last days: each logged "
+                   "change with its day, what happened and the most likely cause (the "
+                   "trigger, schedule or action group that ran just before and acts on it), "
+                   "plus a summary by cause with the times it happened. Changes with no "
+                   "automation near them are counted as manual or outside Indigo. Narrow it "
+                   "with between ('19:30-20:30', may cross midnight) and contains ('on', "
+                   "'off', 'brightness'). Use it for 'what turned this on at 8pm last week?' "
+                   "or 'why does this keep coming on?'; investigate_event looks at one change "
+                   "in more depth."),
+      properties={
+          "device": DEVICE,
+          "days": number("How many days back to look (default 7, most 14)"),
+          "between": string("Only changes in this time of day, e.g. '19:30-20:30'"),
+          "contains": string("Only changes whose log text contains this, e.g. 'on'"),
+          "limit": number("Most changes to list, newest first (default 50, most 200)"),
+          "lookback_seconds": number("How long before a change to look for its cause "
+                                     "(default 60, most 3600); raise it for long delays"),
+      },
+      required=["device"])
+def explain_device_changes(ctx, device, days=None, between=None, contains=None, limit=None,
+                           lookback_seconds=None):
+    device_id, match, refusal = resolve_device(ctx, device)
+    if refusal:
+        return refusal
+    for name, value in (("days", days), ("limit", limit),
+                        ("lookback_seconds", lookback_seconds)):
+        if value is not None and (isinstance(value, bool) or not _is_number(value)):
+            return refuse(f"explain_device_changes: {name} must be a number, got {value!r}")
+    result = ctx.device_control_map.explain_device_changes(
+        device_id,
+        days=7 if days is None else days,
+        between=between, contains=contains,
+        limit=50 if limit is None else limit,
+        lookback_seconds=60 if lookback_seconds is None else lookback_seconds)
+    if isinstance(result, dict) and match:
+        result.update(match)
+    return result
+
+
+def _is_number(value):
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 # ── Running ──────────────────────────────────────────────────────────────────

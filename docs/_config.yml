@@ -5,7 +5,7 @@
 title: Claude Bridge for Indigo
 description: >-
   A plain-English guide to the Claude Bridge plugin for Indigo, which lets
-  Claude see and control your house through 71 tools.
+  Claude see and control your house through 73 tools.
 url: https://highsteads.github.io
 baseurl: /ClaudeBridge
 remote_theme: just-the-docs/just-the-docs@v0.12.0

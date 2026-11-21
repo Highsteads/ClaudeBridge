@@ -14,7 +14,7 @@ None of this is needed to use the plugin. It is here for anyone who wants to kno
 │  Claude Code        │         │  go-between script   │         │  Indigo web  │
 │  (you, chatting)    │ ───────►│  (installed for you) │ ───────►│  server +    │
 │                     │         │  adds your access    │         │  this plugin │
-│                     │         │  key automatically   │         │  (71 tools)  │
+│                     │         │  key automatically   │         │  (73 tools)  │
 └─────────────────────┘         └──────────────────────┘         └──────────────┘
 ```
 

@@ -84,7 +84,7 @@ Claude Bridge.indigoPlugin/
             ├── mcp_handler.py              # MCP protocol and dispatch
             ├── protocol_era.py             # the rules of MCP 2026-07-28 beside 2025-06-18
             ├── registry.py                 # the @tool decorator; all tool metadata
-            ├── toolsets/                   # every built-in tool (71 tools), by domain
+            ├── toolsets/                   # every built-in tool (73 tools), by domain
             ├── tools/                      # handler classes the tools call
             ├── client_setup.py             # sets Claude Code up at plugin start
             ├── orphan_prefs.py             # drops settings of removed Configure fields

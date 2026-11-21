@@ -19,7 +19,7 @@ Everything goes through Indigo's own web server, behind the access key Indigo al
 - **Finds what depends on what** — every trigger, schedule and action group that uses a device or variable — before you change or delete it.
 - **Checks the health of the whole system** — devices in error, low batteries, devices that have gone quiet, plugins with updates waiting.
 - **Keeps a record of every change** it makes, which you can print from the Plugins menu at any time.
-- **Keeps each client to what you allow** — every one of its **71 tools** is marked read, write or admin, and you can give a phone a read-only key.
+- **Keeps each client to what you allow** — every one of its **73 tools** is marked read, write or admin, and you can give a phone a read-only key.
 
 ## Where to go next
 

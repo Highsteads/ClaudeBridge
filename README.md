@@ -2,7 +2,7 @@
 
 **Ask Claude about your Indigo house in plain English, and have it check, switch and fix things for you.**
 
-**Version:** 3.9.2
+**Version:** 3.10.0
 | **Author:** CliveS & Claude | **Needs:** Indigo 2023.2 or later, Claude Code and a paid Claude account
 
 **[Read the full guide](https://highsteads.github.io/ClaudeBridge/)** — setting up, what everything means, and what to do when something goes wrong.
@@ -11,12 +11,13 @@
 
 ## What it does
 
-This plugin lets [Claude](https://www.anthropic.com/claude), Anthropic's AI assistant, see and control your [Indigo](https://www.indigodomo.com) system from an ordinary conversation. You ask "which lights are on?", "turn the fan on for ten minutes" or "why didn't the bathroom light go off last night?", and Claude looks at the real state of your house, does what you asked, and reads the result back to check it worked. It gives Claude **71 tools** to do that with.
+This plugin lets [Claude](https://www.anthropic.com/claude), Anthropic's AI assistant, see and control your [Indigo](https://www.indigodomo.com) system from an ordinary conversation. You ask "which lights are on?", "turn the fan on for ten minutes" or "why didn't the bathroom light go off last night?", and Claude looks at the real state of your house, does what you asked, and reads the result back to check it worked. It gives Claude **73 tools** to do that with.
 
 - **Answers questions about your house** from the live state of every device, variable, trigger, schedule and action group, and from the event log, including entries older than the Indigo window shows.
 - **Controls your devices** — on, off, brightness, colour, thermostats, fans, sprinklers and locks — by name, and can switch something on for a set time and off again.
 - **Writes and fixes scripts and plugins with you**, saving a backup of a script before every change, then running it and reading the event log to see whether it worked.
 - **Finds what depends on what**, so you know which triggers, schedules and action groups use a device or variable before you change or delete it.
+- **Tells you what switches a device and when**, and, for each time it changed in the last fortnight, what most likely did it.
 - **Checks the health of the system** — devices in error, low batteries, devices that have gone quiet, plugins with an update waiting.
 - **Keeps a record of every change** made through it, which you can print from the Plugins menu.
 - **Keeps each client to what you allow.** Every tool is marked read, write or admin, deleting needs a setting you switch on, and you can give a phone a read-only key.
@@ -52,6 +53,16 @@ The [full guide](https://highsteads.github.io/ClaudeBridge/) goes through each s
 The three most recent releases, word for word. Every release before these is in
 **[the version history](https://highsteads.github.io/ClaudeBridge/changelog.html)**.
 
+### 3.10.0 (2026-11-21)
+Two new tools answer "what turns this on?" and "what did turn it on, and when?" in one call each.
+
+- **`who_controls` lists everything that can change a device.** Every schedule, trigger and action group that acts on it, directly or through action groups that run other action groups, each with when it fires (a schedule's time and next run, a trigger's event), its conditions, whether it is enabled, and what it does to the device, such as "turn off after 120 seconds". It also looks where no lookup did before: control page buttons that act on the device, script files that mention it together with the schedules that run them as linked scripts, other devices whose settings hold its id (a group or a watchdog, say), and plugin settings files that hold it. What only watches the device, or checks it in a condition, is listed apart. Anything found by matching the id or name as text is marked heuristic.
+- **`explain_device_changes` gives each change its likely cause.** It reads up to a fortnight of the event log for one device, lists each change with its day and what happened, names the trigger, schedule or action group most likely behind it, and sums them up by cause with the times. Only an automation linked to the device is named as a cause, never one that merely ran nearby. Where the automation is set to stay out of the event log, a script's own line naming the device counts as the evidence, and the reply names the hidden automations that could have run it. A change with neither is counted as manual or outside Indigo. `between` ("19:30-20:30", which may cross midnight) and `contains` ("on", "off") narrow it down, and the paired "sent" and "received" lines of one change count once.
+- **Devices whose plugin never logs them by name still work.** When the event log has no change lines for a device, `explain_device_changes` reads its on/off and brightness from the SQL Logger history instead, and says so.
+- **What neither can see is said in the reply**: a plugin that keeps the id in its own code, HomeKit, Alexa, Apple Shortcuts, apps and the switch on the wall.
+
+Now 73 tools, 32 of them read-only.
+
 ### 3.9.2 (2026-11-20)
 `zwave` now reads what Indigo really answers, and says plainly when Z-Wave is turned off.
 
@@ -64,18 +75,6 @@ Still 71 tools, 30 of them read-only.
 `device_history` and `variable_history` now read the SQLite file you chose.
 
 - **A custom SQLite file is followed.** If you set the SQL Logger's **SQLite file** to another name, or to a full path, the tools still read `Logs/indigo_history.sqlite`. They now work out the file the way the logger does: a name is a file in the Logs folder, and a path that starts with `/` is used as it stands. Thanks to Jon for spotting it.
-
-Still 71 tools, 30 of them read-only.
-
-### 3.9.0 (2026-10-19)
-`device_history` and `variable_history` now read a PostgreSQL SQL Logger.
-
-- **PostgreSQL history works.** Before, the two tools read only the SQLite database, and 3.8.2 made a PostgreSQL logger give an error. Now they read the PostgreSQL database itself, with the same answers as for SQLite: rows, a summary, and for a variable the value before the window and how long each value held.
-- **No extra package.** The tools use the PostgreSQL driver the SQL Logger plugin already carries, so Claude Bridge adds nothing to your Mac. The driver is the one the logger writes with, so a server the logger can log to is one the tools can read. It needs the SQL Logger plugin installed, which it must be for the history to exist.
-- **The login comes from the SQL Logger's own settings.** If those are missing, or the server refuses them, Claude Bridge tries its own: the `CLAUDEBRIDGE_PG_` keys in `IndigoSecrets.py`, then four new **History database** fields in the plugin's settings. A reply says which one it used. The password is never shown, in a reply or in an error.
-- **Times are right whatever zone the server runs in.** The logger's PostgreSQL table stores each time in the server's own zone with no zone label, where SQLite stores UTC. The tools convert in the database, then to your local time, and the tests check three different server zones.
-- **Read-only, and bounded.** The connection refuses any write, a statement that runs past 15 seconds is cancelled, and a summary is cancelled after 5.
-- **Tested on a real PostgreSQL 16**, not only a stand-in. `tests/test_history_postgres_live.py` repeats that test on any server you point it at.
 
 Still 71 tools, 30 of them read-only.
 

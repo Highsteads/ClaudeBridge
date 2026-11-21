@@ -88,6 +88,27 @@ Claude Code:
 That kind of cross-referencing would take me 20-30 minutes, Claude does
 it in a couple of round-trips.
 
+### Example 4 — the mystery switch-on
+
+> **You:** "Something turns the porch light on at 8pm, but only when we're
+> away. What is it?"
+
+Claude Code:
+1. `who_controls` for the porch light → every schedule, trigger and action
+   group that can switch it, each with when it fires, its conditions,
+   whether it is enabled and what it does ("turn on", "set brightness to
+   40% after 120 seconds"), plus control page buttons, script files, and
+   other plugins' settings that hold the light's id
+2. `explain_device_changes` with `between="19:30-20:30"` → every 8pm
+   switch-on in the last fortnight, each with its likely cause and the day
+   it happened, summed up by cause
+3. Points at the schedule whose condition checks an "away" variable, and
+   shows the days it fired match the days you were away
+
+Neither tool can see a plugin that keeps the id in its own code, HomeKit,
+Alexa or the wall switch. Changes with nothing logged near them are counted
+as manual or outside Indigo, so they still show up.
+
 ### What you get out of it
 
 - **Plugin work goes from days to hours.** Claude generates most of the

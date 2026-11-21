@@ -10,6 +10,16 @@ Every release, newest first. The three most recent also appear under **What's ne
 
 The entries name the tools each release changed. The [Tool reference](tools.md) says what each tool does, and [Upgrading to 3.0](upgrading-to-3.md) lists the tool names that 3.0 replaced.
 
+### 3.10.0 (2026-11-21)
+Two new tools answer "what turns this on?" and "what did turn it on, and when?" in one call each.
+
+- **`who_controls` lists everything that can change a device.** Every schedule, trigger and action group that acts on it, directly or through action groups that run other action groups, each with when it fires (a schedule's time and next run, a trigger's event), its conditions, whether it is enabled, and what it does to the device, such as "turn off after 120 seconds". It also looks where no lookup did before: control page buttons that act on the device, script files that mention it together with the schedules that run them as linked scripts, other devices whose settings hold its id (a group or a watchdog, say), and plugin settings files that hold it. What only watches the device, or checks it in a condition, is listed apart. Anything found by matching the id or name as text is marked heuristic.
+- **`explain_device_changes` gives each change its likely cause.** It reads up to a fortnight of the event log for one device, lists each change with its day and what happened, names the trigger, schedule or action group most likely behind it, and sums them up by cause with the times. Only an automation linked to the device is named as a cause, never one that merely ran nearby. Where the automation is set to stay out of the event log, a script's own line naming the device counts as the evidence, and the reply names the hidden automations that could have run it. A change with neither is counted as manual or outside Indigo. `between` ("19:30-20:30", which may cross midnight) and `contains` ("on", "off") narrow it down, and the paired "sent" and "received" lines of one change count once.
+- **Devices whose plugin never logs them by name still work.** When the event log has no change lines for a device, `explain_device_changes` reads its on/off and brightness from the SQL Logger history instead, and says so.
+- **What neither can see is said in the reply**: a plugin that keeps the id in its own code, HomeKit, Alexa, Apple Shortcuts, apps and the switch on the wall.
+
+Now 73 tools, 32 of them read-only.
+
 ### 3.9.2 (2026-11-20)
 `zwave` now reads what Indigo really answers, and says plainly when Z-Wave is turned off.
 

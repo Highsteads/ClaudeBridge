@@ -5,7 +5,7 @@ nav_order: 3
 
 # What it does
 
-Claude Bridge gives Claude **71 tools**, enough to read and change almost anything on your Indigo server. This page goes through them by what they let Claude do. You never need to name a tool — you ask in your own words and Claude picks the right one. Every tool is listed by name in the [Tool reference](tools.md), and the [How it works](how-it-works.md#read-write-and-admin) page explains the read, write and admin permissions mentioned below.
+Claude Bridge gives Claude **73 tools**, enough to read and change almost anything on your Indigo server. This page goes through them by what they let Claude do. You never need to name a tool — you ask in your own words and Claude picks the right one. Every tool is listed by name in the [Tool reference](tools.md), and the [How it works](how-it-works.md#read-write-and-admin) page explains the read, write and admin permissions mentioned below.
 
 ## Devices
 

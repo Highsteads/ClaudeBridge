@@ -42,6 +42,7 @@ from .tools.scripting_shell import ScriptingShellHandler
 from .tools.extended_tools import ExtendedToolsHandler
 from .tools.plugin_dev_tools import PluginDevToolsHandler
 from .tools.automation_detail import AutomationDetailHandler
+from .tools.automation_detail.device_control_map import DeviceControlMap
 from .adapters.indidb import IndiDbStructureStore
 from .external_tools import ExternalToolManager, manifest_fingerprint
 from .security.scope_manager import (register_dynamic_scope, required_scope_for,
@@ -282,6 +283,17 @@ class MCPHandler:
             data_provider=self.data_provider,
             structure_store=self.indidb_store,
             log_query_handler=self.log_query_handler,
+            logger=self.logger,
+        )
+        # who_controls / explain_device_changes. Control-page layouts come
+        # through the extended handler's raw GetControlPage reader.
+        self.device_control_map = DeviceControlMap(
+            detail_handler=self.automation_detail_handler,
+            structure_store=self.indidb_store,
+            page_reader=self.extended_tools_handler._control_page_elements,
+            history_reader=lambda did, hours, columns: (
+                self.plugin_dev_tools_handler.device_history(
+                    did, hours=hours, limit=5000, columns=columns)),
             logger=self.logger,
         )
 
